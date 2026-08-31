@@ -1,0 +1,124 @@
+# Optional inference backends that bypass llm-d entirely -- direct
+# AIServiceBackend, no EPP queue or fair-share. Disabled
+# (.Values.inference.*.enabled=false) until an operator has the engine
+# actually running and reachable at the configured host/port -- see
+# deploy/llamacpp, or an external OpenAI-compatible endpoint. The matching
+# AIGatewayRoute rules live in llmd.yaml, next to the vLLM rule they extend.
+# See docs/adr/0006-pluggable-inference-backends.md.
+#
+# SGLang is deliberately not here: it shares the canonical `qwen-3.8-27b`
+# model name with vLLM and is always reached through llm-d EPP instead (the
+# same AIGatewayRoute rule and AIServiceBackend as vLLM, in llmd.yaml) so
+# that switching the live engine never drops fair-share queueing. See
+# TASK-qos-fair-share.md §7.1 and docs/adr/0008-per-user-fair-share.md
+# "SGLang portability".
+{{- if .Values.inference.llamacpp.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: llamacpp
+  namespace: {{ .Values.namespace }}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: {{ .Values.inference.llamacpp.host }}
+        port: {{ .Values.inference.llamacpp.port }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: llamacpp-openai
+  namespace: {{ .Values.namespace }}
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: llamacpp
+  schema:
+    name: OpenAI
+    prefix: /v1
+{{- end }}
+---
+{{- if .Values.inference.externalApi.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: external-api
+  namespace: {{ .Values.namespace }}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: {{ .Values.inference.externalApi.host }}
+        port: {{ .Values.inference.externalApi.port }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: external-api-openai
+  namespace: {{ .Values.namespace }}
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: external-api
+  schema:
+    name: OpenAI
+    prefix: /v1
+{{- if .Values.runtimeEnvironment.EXTERNAL_API_KEY }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: external-api-key
+  namespace: {{ .Values.namespace }}
+type: Opaque
+stringData:
+  apiKey: {{ .Values.runtimeEnvironment.EXTERNAL_API_KEY | quote }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: external-api-key
+  namespace: {{ .Values.namespace }}
+spec:
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: external-api-key
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: external-api-openai
+{{- end }}
+{{- end }}
+---
+# bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Direct backend
+# like llamacpp/externalApi above, but its AIGatewayRoute is a separate
+# object (templates/embeddings.yaml), not a rule inside `llmd` -- see that
+# file for why.
+{{- if .Values.inference.embeddings.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: embeddings
+  namespace: {{ .Values.namespace }}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: {{ .Values.inference.embeddings.host }}
+        port: {{ .Values.inference.embeddings.port }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: embeddings-openai
+  namespace: {{ .Values.namespace }}
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: embeddings
+  schema:
+    name: OpenAI
+    prefix: /v1
+{{- end }}

@@ -1,0 +1,11 @@
+operator:
+  env:
+    # Preserve the upstream chart default when overriding the env list.
+    - name: OPERATOR_STS_ENABLED
+      value: "on"
+    # v7.1.2 uses client-go 0.35, which enables WatchListClient by default.
+    # Its custom NewPodInformer drops ListOptions, including SendInitialEvents,
+    # so it waits forever for an initial-events bookmark. Use list-then-watch
+    # until the operator's custom informer preserves these options.
+    - name: KUBE_FEATURE_WatchListClient
+      value: "false"

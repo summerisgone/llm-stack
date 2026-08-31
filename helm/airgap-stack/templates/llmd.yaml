@@ -1,0 +1,266 @@
+# Private llm-d inference path. Its Gateway is backed by a ClusterIP Service,
+# so AIGW is unreachable from the Windows host and public proxy.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: ai-gateway-private
+  namespace: {{ .Values.namespace }}
+spec:
+  telemetry:
+    tracing:
+      # The Collector authenticates to Langfuse with LANGFUSE_* credentials
+      # from airgap-runtime; the AI Gateway never receives those credentials.
+      samplingRate: 100
+      provider:
+        type: OpenTelemetry
+        serviceName: ai-gateway-private
+        backendRefs:
+          - name: otel-collector
+            port: 4317
+      tags:
+        # PAT requests are enriched by pat-service after SSO authentication.
+        # Langfuse maps langfuse.user.id to its per-user trace view.
+        "langfuse.user.id": "%REQUEST_HEADER(X-User-Name)%"
+        "langfuse.trace.metadata.user_name": "%REQUEST_HEADER(X-User-Name)%"
+        "langfuse.trace.metadata.user_subject": "%REQUEST_HEADER(X-User-Id)%"
+        "langfuse.trace.metadata.pat_token_id": "%REQUEST_HEADER(X-Pat-Token-Id)%"
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 1
+      envoyService:
+        name: ai-gateway-private
+        type: ClusterIP
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: ai-gateway-tracing
+  namespace: {{ .Values.namespace }}
+spec:
+  extProc:
+    kubernetes:
+      env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector.{{ .Values.namespace }}.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_METRICS_EXPORTER
+          value: none
+        - name: OTEL_SERVICE_NAME
+          value: ai-gateway-genai
+        - name: OTEL_TRACES_SAMPLER
+          value: always_on
+        # Langfuse maps OpenInference input.value, output.value and
+        # llm.model_name to the generation's standard analysis fields.
+        - name: AI_GATEWAY_TRACING_SEMCONV
+          value: openinference
+        - name: OPENINFERENCE_HIDE_INPUTS
+          value: "false"
+        - name: OPENINFERENCE_HIDE_OUTPUTS
+          value: "false"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ai-gateway-private
+  namespace: {{ .Values.namespace }}
+  annotations:
+    aigateway.envoyproxy.io/gateway-config: ai-gateway-tracing
+spec:
+  gatewayClassName: envoy
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: ai-gateway-private
+  listeners:
+    - name: private
+      protocol: HTTP
+      port: 8080
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: llmd-qwen-test-proxy
+  namespace: {{ .Values.namespace }}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: llmd-qwen-test-epp.{{ .Values.namespace }}.svc.cluster.local
+        port: 8081
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: llmd-qwen-test-openai
+  namespace: {{ .Values.namespace }}
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: llmd-qwen-test-proxy
+  schema:
+    name: OpenAI
+    prefix: /v1
+{{- if and .Values.inference.sglang.enabled .Values.runtimeEnvironment.SGLANG_API_KEY }}
+---
+# SGLang is one of the engines llm-d EPP can be dispatching to behind this
+# same AIServiceBackend -- which engine is live is config/llmd/router-nvfp4-
+# values.yaml's modelServers block, not this route. Unlike vLLM, SGLang
+# requires a bearer token upstream, and EPP's dispatch path has no
+# per-endpoint auth hook of its own, so the key is injected here, at the AI
+# Gateway's hop into the EPP proxy; the proxy forwards it unchanged to
+# whichever pod EPP picked (TASK-qos-fair-share.md §7.1). Harmless against
+# vLLM, which never checks Authorization, so this stays keyed on
+# inference.sglang.enabled rather than tracking whichever engine happens to
+# be live -- see docs/adr/0008-per-user-fair-share.md "SGLang portability".
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sglang-api-key
+  namespace: {{ .Values.namespace }}
+type: Opaque
+stringData:
+  apiKey: {{ .Values.runtimeEnvironment.SGLANG_API_KEY | quote }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: sglang-api-key
+  namespace: {{ .Values.namespace }}
+spec:
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: sglang-api-key
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: llmd-qwen-test-openai
+{{- end }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: llmd
+  namespace: {{ .Values.namespace }}
+spec:
+  # Explicit empty list clears the hostname inherited from the previous
+  # host-routed profile during Helm's strategic merge.
+  hostnames: []
+  parentRefs:
+    - name: ai-gateway-private
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      sectionName: private
+  rules:
+    - name: openai
+      timeouts:
+        request: 10m
+      streamIdleTimeout: 10m
+      backendRefs:
+        - name: llmd-qwen-test-openai
+    # Declare the model to the EAG OpenAI model router under its single
+    # canonical name. EAG only advertises models in /v1/models that it sees
+    # in an exact-match rule on the x-ai-eg-model header (the model parsed
+    # from the request body); this rule makes the model dropdown show
+    # `qwen-3.8-27b` while the catch-all rule above still forwards any other
+    # model name. Always through llm-d EPP -- vLLM and SGLang are both
+    # reached this way, selected by config/llmd/router-nvfp4-values.yaml's
+    # modelServers block, never by this route. A direct AIServiceBackend per
+    # engine (the previous shape here) let SGLang traffic skip EPP's queue
+    # and fair-share entirely; see TASK-qos-fair-share.md §7.1 and
+    # docs/adr/0008-per-user-fair-share.md "SGLang portability".
+    - name: openai-qwen38nvfp4
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ .Values.inference.modelName }}
+      timeouts:
+        request: 10m
+      streamIdleTimeout: 10m
+      backendRefs:
+        - name: llmd-qwen-test-openai
+    # Additional backends (llama.cpp, an external OpenAI-compatible
+    # API): same route, one more exact-match rule per model name, each
+    # pointing at the AIServiceBackend defined in inference-backends.yaml.
+    # See docs/adr/0006-pluggable-inference-backends.md.
+    {{- if .Values.inference.llamacpp.enabled }}
+    - name: openai-llamacpp
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ .Values.inference.llamacpp.modelName }}
+      timeouts:
+        request: 10m
+      streamIdleTimeout: 10m
+      backendRefs:
+        - name: llamacpp-openai
+    {{- end }}
+    {{- if .Values.inference.externalApi.enabled }}
+    - name: openai-external-api
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ .Values.inference.externalApi.modelName }}
+      timeouts:
+        request: 10m
+      streamIdleTimeout: 10m
+      backendRefs:
+        - name: external-api-openai
+    {{- end }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: llmd-jwt
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: llmd
+  jwt:
+    providers:
+      - name: keycloak
+        issuer: {{ .Values.oidc.externalIssuer }}
+        remoteJWKS:
+          uri: http://keycloak.{{ .Values.namespace }}.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: llmd-per-user-limit
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: llmd
+  # The AI Gateway ext-proc buffers the whole request body to read the model
+  # name and count tokens, and rejects anything over its own default buffer
+  # size (empirically ~32KiB) with 413 request_payload_too_large before the
+  # request ever reaches SGLang or vLLM. 4Mi covers a full-context request at
+  # either engine's configured --context-length/--max-model-len with room to
+  # spare (155648 tokens is at most ~700KiB of UTF-8 text).
+  requestBuffer:
+    limit: 4Mi
+  rateLimit:
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: X-User-Id
+                  type: Distinct
+          limit:
+            requests: {{ .Values.inference.perUserRateLimitPerMinute }}
+            unit: Minute
+          xRateLimitHeaders: DraftVersion03

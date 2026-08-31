@@ -1,0 +1,12 @@
+[Unit]
+Description=LLM Stack Langfuse NodePort proxy
+Requires=llm-stack-operator-ui-langfuse.socket
+
+[Service]
+# The target IP is the k3d server container's docker-bridge address, which
+# docker reassigns on container recreation/restart (observed drifting from
+# 172.21.0.3 to 172.21.0.2 across a cluster restart, silently breaking a
+# hardcoded target). Resolve it fresh on every service start instead.
+ExecStart=/bin/sh -c 'exec /usr/lib/systemd/systemd-socket-proxyd "$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" k3d-llm-stack-server-0):32031"'
+PrivateTmp=true
+NoNewPrivileges=true

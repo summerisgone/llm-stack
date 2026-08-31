@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openwebui
+  namespace: airgap-ai-stack
+spec:
+  template:
+    spec:
+      containers:
+        - name: openwebui
+          env:
+            - name: OPENID_PROVIDER_URL
+              value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/.well-known/openid-configuration
+            - name: OPENID_REDIRECT_URI
+              value: https://jitosavo.synology.me:60834/oauth/oidc/callback
+            # llm-d's fixed single-model endpoint is reliable for chat but
+            # does not expose a model catalogue to Open WebUI's discovery
+            # client. Declare the deployed models explicitly so the selector
+            # remains available while requests still use the user's OAuth
+            # token (system_oauth) configured by the base deployment.
+            # qwen-3.8-27b is the single canonical model name both engines
+            # serve (helm/airgap-stack/values.yaml inference.modelName) --
+            # add/remove entries here in step with which backends are enabled.
+            - name: OPENAI_API_CONFIGS
+              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]}}'

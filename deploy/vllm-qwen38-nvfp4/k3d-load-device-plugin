@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+set -eu
+
+cluster=${K3D_CLUSTER:-llm-stack}
+image=${DEVICE_PLUGIN_IMAGE:-llm-stack/k8s-device-plugin:0.20.0}
+node="k3d-$cluster-server-0"
+
+docker image inspect "$image" >/dev/null || {
+  printf '%s\n' "Device plugin image is not present: $image" >&2
+  exit 1
+}
+
+# k3d's image import fails for this image in the tools node ("content digest
+# not found"), so import the save tar directly into the node's containerd.
+tar=/tmp/k8s-device-plugin.tar
+docker save "$image" -o "$tar"
+docker cp "$tar" "$node:/tmp/k8s-device-plugin.tar"
+docker exec "$node" ctr -n k8s.io images import /tmp/k8s-device-plugin.tar
+docker exec "$node" rm -f /tmp/k8s-device-plugin.tar
+rm -f "$tar"
+
+docker exec "$node" crictl images | grep -q 'llm-stack/k8s-device-plugin' || {
+  printf '%s\n' "Device plugin image is not visible in the node: $image" >&2
+  exit 1
+}
+printf '%s\n' "Imported $image into k3d cluster $cluster."

@@ -1,0 +1,39 @@
+# MinIO is managed by the installed MinIO Operator. The tenant's `minio`
+# service is used by Langfuse inside the namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-configuration
+  namespace: airgap-ai-stack
+type: Opaque
+stringData:
+  config.env: |
+    export MINIO_ROOT_USER="minio"
+    export MINIO_ROOT_PASSWORD="minio-demo-only"
+---
+apiVersion: minio.min.io/v2
+kind: Tenant
+metadata:
+  name: minio
+  namespace: airgap-ai-stack
+spec:
+  image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  imagePullPolicy: IfNotPresent
+  configuration:
+    name: minio-configuration
+  requestAutoCert: false
+  buckets:
+    - name: langfuse
+      region: us-east-1
+  pools:
+    - name: pool-0
+      servers: 1
+      volumesPerServer: 1
+      volumeClaimTemplate:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 10Gi

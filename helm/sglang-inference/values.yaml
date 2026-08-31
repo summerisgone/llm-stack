@@ -1,0 +1,42 @@
+name: sglang-qwen38
+image: lmsysorg/sglang:v0.5.19@sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9
+replicas: 1
+runtimeClassName: nvidia
+nodeName: k3d-llm-stack-server-0
+# PVC that holds the model weights. Defaults to the shared NVFP4 claim created
+# by gpu-objects-up (k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml).
+modelClaim: vllm-qwen38-nvfp4-model
+# Secret containing the `apiKey` field; created by inference-backends.yaml
+# when SGLANG_API_KEY is set in the airgap-stack release.
+apiKeySecret: sglang-api-key
+
+inference:
+  servedModelName: qwen-3.8-27b
+  port: 30000
+  # GPU-only profile validated on RTX 5090 with three admission slots and no
+  # speculative decoding. See ADR 0010 and the 2026-09-08 tuning results.
+  trustRemoteCode: true
+  contextLength: 180224
+  memFractionStatic: "0.90"
+  kvCacheDtype: auto
+  maxRunningRequests: 3
+  cudaGraphMaxBsDecode: 3
+  maxMambaCacheSize: 12
+  # mambaFullMemoryRatio: omitted - agents_nospec uses the sglang default
+  mambaSsmDtype: bfloat16
+  mambaRadixCacheStrategy: extra_buffer_lazy
+  chunkedPrefillSize: 2048
+  attentionBackend: flashinfer
+  reasoningParser: qwen3
+  toolCallParser: qwen3_coder
+  mmFeatureTransport: cpu
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 8Gi
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "8"
+    memory: 24Gi
+    nvidia.com/gpu: "1"

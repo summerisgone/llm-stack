@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+set -eu
+
+container_name=${VLLM_CONTAINER_NAME:-vllm-qwen38-nvfp4}
+port=${VLLM_PORT:-8000}
+timeout=${VLLM_STARTUP_TIMEOUT_SECONDS:-900}
+endpoint="http://127.0.0.1:$port"
+
+elapsed=0
+until curl --fail --silent --show-error "$endpoint/health" >/dev/null; do
+  if ! docker ps --format '{{.Names}}' | grep -qx "$container_name"; then
+    docker logs "$container_name" >&2 || true
+    printf '%s\n' 'vLLM exited before becoming healthy.' >&2
+    exit 1
+  fi
+  if [ "$elapsed" -ge "$timeout" ]; then
+    docker logs --tail 200 "$container_name" >&2 || true
+    printf '%s\n' "Timed out after ${timeout}s waiting for vLLM." >&2
+    exit 1
+  fi
+  sleep 5
+  elapsed=$((elapsed + 5))
+done
+
+models=$(curl --fail --silent --show-error "$endpoint/v1/models")
+printf '%s\n' "$models" | grep -q 'qwen38-nvfp4'
+
+response=$(curl --fail --silent --show-error \
+  --header 'Content-Type: application/json' \
+  --data '{"model":"qwen38-nvfp4","messages":[{"role":"user","content":"Reply with exactly: VLLM_OK"}],"temperature":0,"max_tokens":32}' \
+  "$endpoint/v1/chat/completions")
+
+printf '%s\n' "$response" | grep -q 'VLLM_OK' || {
+  printf '%s\n' "$response" >&2
+  printf '%s\n' 'The server answered, but the expected coherent token was absent.' >&2
+  exit 1
+}
+
+curl --fail --silent --show-error "$endpoint/metrics" | grep -q '^vllm:'
+printf '%s\n' 'vLLM Qwen3.8 NVFP4 smoke test passed.'

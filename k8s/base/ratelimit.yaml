@@ -1,0 +1,42 @@
+# Dedicated Redis-compatible backend for Envoy Gateway's global rate-limit
+# service. It is deliberately separate from Langfuse's application cache.
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy-ratelimit-valkey
+  namespace: airgap-ai-stack
+spec:
+  selector:
+    app.kubernetes.io/name: envoy-ratelimit-valkey
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: envoy-ratelimit-valkey
+  namespace: airgap-ai-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: envoy-ratelimit-valkey
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: envoy-ratelimit-valkey
+    spec:
+      containers:
+        - name: valkey
+          image: valkey/valkey:8.0.2-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 3
+            periodSeconds: 5

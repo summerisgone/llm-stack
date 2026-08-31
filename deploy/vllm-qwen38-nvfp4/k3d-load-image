@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+set -eu
+
+cluster=${K3D_CLUSTER:-llm-stack}
+image=${VLLM_IMAGE:-llm-stack/vllm-qwen38-nvfp4:0.27.1}
+
+docker image inspect "$image" >/dev/null || {
+  printf '%s\n' "vLLM image is not present: $image" >&2
+  exit 1
+}
+k3d image import "$image" --cluster "$cluster"
+printf '%s\n' "Imported $image into k3d cluster $cluster."

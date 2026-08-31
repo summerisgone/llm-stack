@@ -1,0 +1,75 @@
+#!/usr/bin/env sh
+set -eu
+
+# Apply security hardening to the ai-stack realm via the Admin API.
+# This is required for existing deployments because --import-realm skips
+# realms that already exist; the realm JSON is the source of truth only for
+# fresh installs. Run this after helm-up whenever security settings change.
+#
+# Settings applied:
+#   sslRequired: all
+#   bruteForceProtected: true (5 failures, 60s increments, up to 900s)
+#   passwordPolicy: length(12) + upper/lower/digit/special
+#   CONFIGURE_TOTP: enabled as a default required action
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+
+kc_pf_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); p=s.getsockname()[1]; s.close(); print(p)')
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_pf_port:8080" &
+kc_pf_pid=$!
+trap 'kill "$kc_pf_pid" 2>/dev/null; wait "$kc_pf_pid" 2>/dev/null || true' EXIT INT TERM
+
+attempt=0
+until curl -fsS "http://127.0.0.1:$kc_pf_port/sso/realms/ai-stack/.well-known/openid-configuration" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 15 ]; then
+    printf '%s\n' "Keycloak port-forward did not become ready" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+admin_token=$(curl -fsS -X POST \
+  "http://127.0.0.1:$kc_pf_port/sso/realms/master/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+realm_api="http://127.0.0.1:$kc_pf_port/sso/admin/realms/ai-stack"
+
+# Read the current realm representation and merge security settings.
+realm_json=$(curl -fsS -H "Authorization: Bearer $admin_token" "$realm_api")
+
+updated=$(printf '%s' "$realm_json" | python3 -c '
+import json, sys
+realm = json.load(sys.stdin)
+realm["sslRequired"] = "all"
+realm["bruteForceProtected"] = True
+realm["failureFactor"] = 5
+realm["waitIncrementSeconds"] = 60
+realm["maxFailureWaitSeconds"] = 900
+realm["minimumQuickLoginWaitSeconds"] = 60
+realm["quickLoginCheckMilliSeconds"] = 1000
+realm["maxDeltaTimeSeconds"] = 43200
+realm["passwordPolicy"] = "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)"
+print(json.dumps(realm))
+')
+curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$realm_api" -d "$updated"
+
+# Enable CONFIGURE_TOTP as a default required action.
+totp_action=$(curl -fsS -H "Authorization: Bearer $admin_token" \
+  "$realm_api/authentication/required-actions/CONFIGURE_TOTP" 2>/dev/null || echo '{}')
+updated_totp=$(printf '%s' "$totp_action" | python3 -c '
+import json, sys
+action = json.load(sys.stdin)
+action["enabled"] = True
+action["defaultAction"] = True
+print(json.dumps(action))
+')
+curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$realm_api/authentication/required-actions/CONFIGURE_TOTP" -d "$updated_totp"
+
+printf '%s\n' 'Realm security settings applied: sslRequired=all, bruteForce protection, TOTP default action, password policy.'

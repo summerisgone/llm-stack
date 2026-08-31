@@ -1,0 +1,14 @@
+# Local Mac development profile (OrbStack + LM Studio, no GPU).
+#
+# This overlay owns the whole local routing surface: the `edge` Gateway on
+# :8080, the host-based `*.localhost` HTTPRoutes, and the LM Studio inference
+# path with its AI Gateway route and JWT / rate-limit policies. None of it is
+# shared with the remote profile, whose routing is owned by the
+# helm/airgap-stack chart templates.
+namespace: airgap-ai-stack
+resources:
+  - ../../base
+  - edge-proxy.yaml
+  - routes.yaml
+  - lmstudio.yaml
+  - lmstudio-backend.yaml

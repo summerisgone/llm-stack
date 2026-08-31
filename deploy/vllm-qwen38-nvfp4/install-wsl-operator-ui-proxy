@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+unit_dir=${XDG_CONFIG_HOME:-"$HOME/.config"}/systemd/user
+
+install -d "$unit_dir"
+for unit in "$script_dir"/systemd/llm-stack-operator-ui-*.socket "$script_dir"/systemd/llm-stack-operator-ui-*.service; do
+  install -m 0644 "$unit" "$unit_dir/$(basename "$unit")"
+done
+
+systemctl --user daemon-reload
+systemctl --user enable --now \
+  llm-stack-operator-ui-grafana.socket \
+  llm-stack-operator-ui-langfuse.socket
+
+# A user systemd instance only starts on login unless lingering is enabled,
+# so the socket units above never come back after a WSL restart that doesn't
+# involve an interactive login as this user (e.g. Docker Desktop launching
+# WSL headless). This is the actual cause of the proxies "not surviving" a
+# restart; the NodePort Services themselves persist fine in the cluster.
+loginctl enable-linger "$(id -un)"
+
+printf '%s\n' 'WSL now listens on TCP ports 32030 (Grafana) and 32031 (Langfuse).'
+printf '%s\n' "Lingering enabled for $(id -un): these sockets will now start on boot without a login."

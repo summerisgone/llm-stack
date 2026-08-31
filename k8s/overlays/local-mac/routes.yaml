@@ -1,0 +1,113 @@
+# LOCAL-MAC PROFILE ONLY.
+#
+# Host-based `*.localhost` routes for local development on OrbStack. The
+# remote profile routes by path on one canonical public origin instead; those
+# routes live in helm/airgap-stack/templates/routes-external.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: pat-dashboard
+  namespace: airgap-ai-stack
+spec:
+  parentRefs:
+    - name: edge
+  hostnames:
+    - tokens.ai.localhost
+  rules:
+    - backendRefs:
+        - name: pat-service
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: pat-openai-api
+  namespace: airgap-ai-stack
+spec:
+  parentRefs:
+    - name: edge
+  hostnames:
+    - api.ai.localhost
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - X-User-Id
+              - X-User-Name
+              - X-Pat-Token-Id
+      backendRefs:
+        - name: pat-service
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openwebui
+  namespace: airgap-ai-stack
+spec:
+  parentRefs:
+    - name: edge
+  hostnames:
+    - ai.localhost
+  rules:
+    - filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - X-User-Id
+              - X-User-Email
+              - X-Groups
+      backendRefs:
+        - name: openwebui
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: keycloak
+  namespace: airgap-ai-stack
+spec:
+  parentRefs:
+    - name: edge
+  hostnames:
+    - sso.ai.localhost
+  rules:
+    - backendRefs:
+        - name: keycloak
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: langfuse
+  namespace: airgap-ai-stack
+spec:
+  parentRefs:
+    - name: edge
+  hostnames:
+    - langfuse.localhost
+  rules:
+    - backendRefs:
+        - name: langfuse
+          port: 3000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grafana
+  namespace: airgap-ai-stack
+spec:
+  parentRefs:
+    - name: edge
+  hostnames:
+    - grafana.localhost
+  rules:
+    - backendRefs:
+        - name: grafana
+          namespace: monitoring
+          port: 80

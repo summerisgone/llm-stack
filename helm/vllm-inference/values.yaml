@@ -1,0 +1,33 @@
+# The RuntimeClass and model PV/PVC are cluster prerequisites, kept outside Helm.
+name: vllm-qwen38-nvfp4
+image: llm-stack/vllm-qwen38-nvfp4:0.27.1
+replicas: 1
+runtimeClassName: nvidia
+nodeName: k3d-llm-stack-server-0
+modelClaim: vllm-qwen38-nvfp4-model
+inference:
+  servedModelName: qwen-3.8-27b
+  maxModelLen: 131072
+  maxNumSeqs: 2
+  maxNumBatchedTokens: 8192
+  gpuMemoryUtilization: "0.94"
+  kvCacheDtype: fp8
+  attentionBackend: TRITON_ATTN
+  prefixCaching: true
+  mambaCacheMode: none
+  mambaSsmCacheDtype: float32
+  speculativeConfig: null
+  kvOffloadingSizeGiB: 8
+  kvOffloadingBackend: native
+  # /dev/shm (dshm below) must exceed this: the native backend mmaps its
+  # buffer at /dev/shm/vllm_offload_<engine_id>.mmap.
+  dshmSizeGiB: 12
+resources:
+  requests:
+    cpu: "4"
+    memory: 12Gi
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "8"
+    memory: 20Gi
+    nvidia.com/gpu: "1"

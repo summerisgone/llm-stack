@@ -1,0 +1,200 @@
+{
+  "realm": "ai-stack",
+  "enabled": true,
+  "displayName": "AI Stack Demo",
+  "registrationAllowed": false,
+  "sslRequired": "all",
+  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10,
+      "config": {}
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "ai-user", "description": "May use AI applications" },
+      { "name": "ai-admin", "description": "Administers the AI stack" },
+      { "name": "observability-viewer", "description": "May view telemetry" }
+    ]
+  },
+  "groups": [
+    { "name": "demo-users", "attributes": { "tenant_id": ["demo"], "qos_class": ["interactive"] } }
+  ],
+  "clients": [
+    {
+      "clientId": "open-webui",
+      "name": "Open WebUI",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "openwebui-demo-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://jitosavo.synology.me:60834/*"],
+      "webOrigins": ["https://jitosavo.synology.me:60834"],
+      "attributes": {
+        "post.logout.redirect.uris": "https://jitosavo.synology.me:60834/auth"
+      },
+      "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
+    },
+    {
+      "clientId": "llm-api",
+      "name": "LLM API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost/*"],
+      "webOrigins": ["http://localhost"],
+      "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
+    },
+    {
+      "clientId": "pat-dashboard",
+      "name": "Personal access token dashboard",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://jitosavo.synology.me:60834/platform/auth/callback"],
+      "webOrigins": ["https://jitosavo.synology.me:60834"],
+      "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
+    },
+    {
+      "clientId": "pat-gateway",
+      "name": "PAT service to Envoy AI Gateway",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "pat-gateway-demo-only",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": { "access.token.lifespan": "315360000" },
+      "defaultClientScopes": ["basic"]
+    },
+    {
+      "clientId": "grafana",
+      "name": "Grafana",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "grafana-oauth-demo-only",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://grafana.localhost:8080/login/generic_oauth"],
+      "webOrigins": ["http://grafana.localhost:8080"],
+      "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "basic",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "Subject (sub)",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": { "access.token.claim": "true", "introspection.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "name": "profile",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "preferred username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": { "user.attribute": "username", "claim.name": "preferred_username", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "name": "email",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": { "user.attribute": "email", "claim.name": "email", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": { "claim.name": "realm_access.roles", "jsonType.label": "String", "multivalued": "true", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "name": "groups",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": { "full.path": "false", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true", "claim.name": "groups" }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "demo",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "User",
+      "email": "demo@ai.local",
+      "groups": ["/demo-users"],
+      "realmRoles": ["ai-user"],
+      "credentials": [{ "type": "password", "value": "demo-password", "temporary": false }]
+    },
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "User",
+      "email": "admin@ai.local",
+      "groups": ["/demo-users"],
+      "realmRoles": ["ai-user", "ai-admin"],
+      "credentials": [{ "type": "password", "value": "admin-demo-only", "temporary": false }]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse
+  namespace: airgap-ai-stack
+spec:
+  template:
+    spec:
+      containers:
+        - name: langfuse
+          env:
+            - name: NEXTAUTH_URL
+              value: http://langfuse.gpu-host.local:32031

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: airgap-stack
+description: |
+  Helm wrapper around the repo's kustomize profile. The resources in
+  templates/resources.yaml are rendered by scripts/helm-render from
+  k8s/overlays/remote-wsl-vllm-nvfp4 (GPU inference objects and the
+  Namespace excluded). Owns the full air-gapped stack so that iterative
+  changes to the kustomize sources converge on a single `helm upgrade`.
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+kubeVersion: ">=1.28.0-0"
+maintainers:
+  - name: llm-stack

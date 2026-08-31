@@ -1,0 +1,16 @@
+# The public Grafana route remains with the edge Gateway in airgap-ai-stack,
+# while the official Envoy Gateway add-on owns Grafana in monitoring.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: grafana-from-airgap-edge
+  namespace: monitoring
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: airgap-ai-stack
+  to:
+    - group: ""
+      kind: Service
+      name: grafana

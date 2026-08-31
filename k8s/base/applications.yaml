@@ -1,0 +1,639 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: airgap-ai-stack
+spec:
+  selector:
+    app.kubernetes.io/name: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: airgap-ai-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.1.4
+          imagePullPolicy: IfNotPresent
+          args: [start, --import-realm]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: jdbc-uri
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: username
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: password
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: admin
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              value: admin-demo-only
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: KC_HOSTNAME
+              value: https://jitosavo.synology.me:60834/sso
+            # Admin console/API get their own fixed hostname. Unlike `hostname`,
+            # `hostname-admin` must be a full URL with scheme -- Keycloak does
+            # NOT derive it from the incoming request, so this only works if
+            # the admin API/console is always reached via the same local port.
+            # Matches `kubectl -n airgap-ai-stack port-forward svc/keycloak
+            # 8888:8080` (docs/USER_GUIDE.md, scripts/pat-smoke-test). Needed
+            # because /sso/admin is closed at the edge (docs/security/README.md),
+            # so it's only ever reached this way, never through the public origin.
+            - name: KC_HOSTNAME_ADMIN
+              value: http://localhost:8888/sso
+            - name: KC_HTTP_RELATIVE_PATH
+              value: /sso
+            - name: KC_HOSTNAME_STRICT
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /sso/health/ready
+              port: 9000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import/realm-demo.json
+              subPath: realm-demo.json
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openwebui-data
+  namespace: airgap-ai-stack
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pat-service
+  namespace: airgap-ai-stack
+spec:
+  selector:
+    app.kubernetes.io/name: pat-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    # Internal only: no HTTPRoute/AIGatewayRoute backendRef targets this
+    # port, so it is unreachable through the edge even though the Service
+    # exposes it in-cluster (same pattern as vllm-qwen38-nvfp4/llmd-qwen-test-epp).
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pat-service
+  namespace: airgap-ai-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pat-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pat-service
+    spec:
+      containers:
+        - name: pat-service
+          image: airgap-ai-stack/pat-service:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pat-db-app
+                  key: uri
+            - name: PAT_HASH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: PAT_HASH_KEY
+            - name: PAT_COOKIE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: PAT_COOKIE_KEY
+            - name: AI_GATEWAY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: PAT_GATEWAY_CLIENT_SECRET
+            - name: OIDC_ISSUER
+              value: https://jitosavo.synology.me:60834/sso/realms/ai-stack
+            - name: OIDC_INTERNAL_ISSUER
+              value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack
+            - name: OIDC_CLIENT_ID
+              value: pat-dashboard
+            - name: OIDC_REDIRECT_URL
+              value: https://jitosavo.synology.me:60834/platform/auth/callback
+            # This service alone sends client-credential JWTs to the private
+            # ClusterIP-only AI Gateway. Browser and OpenAI clients never
+            # receive it.
+            - name: AI_GATEWAY_URL
+              value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080
+            - name: AI_GATEWAY_CLIENT_ID
+              value: pat-gateway
+            # Public path prefix the dashboard is mounted under. The Gateway
+            # URLRewrite filter strips this prefix before forwarding, so the
+            # service must add it back to every Location header and inline
+            # it into the dashboard HTML for client-side fetch() URLs.
+            - name: URL_PREFIX
+              value: /platform
+            # Public origin of Open WebUI, inlined into the dashboard so the
+            # "Open WebUI ↗" link points at the reachable origin (the catch-all
+            # public route at the site root), not a localhost dev address.
+            - name: WEBUI_URL
+              value: https://jitosavo.synology.me:60834
+            # TASK-qos-fair-share.md Stage 0.4: logs header names and
+            # top-level JSON body key names only (never values) for real
+            # client traffic, to confirm which coding agents can carry a
+            # session-identifying header before Stage 3 commits to a
+            # server-side-only fingerprint. Off by default; flip with
+            # `kubectl set env deployment/pat-service QOS_LOG_CLIENT_SHAPE=true`
+            # for the collection window, then unset it again. Remove this
+            # variable once that data is collected.
+            - name: QOS_LOG_CLIENT_SHAPE
+              value: "false"
+            # TASK-qos-fair-share.md Stage 3: chain-hash session state.
+            # Same instance the rate limiter already uses; no auth
+            # configured on this deployment (docs/adr/0008-per-user-fair-share.md
+            # "State: Valkey, not in-process memory").
+            - name: VALKEY_ADDR
+              value: envoy-ratelimit-valkey.airgap-ai-stack.svc.cluster.local:6379
+            # Stage 3 step 1 is observation-only: computing and logging the
+            # chain match, never gating admission. Thresholds below have the
+            # defaults main.go already falls back to; listed explicitly so
+            # they are one `kubectl set env` away from tuning without a
+            # rebuild (§4.4's "no magic numbers" rule applied to Stage 3).
+            - name: QOS_SESSION_TTL_SECONDS
+              value: "1800"
+            - name: QOS_FINGERPRINT_MAX_BODY_BYTES
+              value: "4194304"
+            - name: QOS_FINGERPRINT_TIMEOUT_MS
+              value: "200"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openwebui
+  namespace: airgap-ai-stack
+spec:
+  selector:
+    app.kubernetes.io/name: openwebui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openwebui
+  namespace: airgap-ai-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openwebui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openwebui
+    spec:
+      # Open WebUI promotes its only local user to admin before OAuth role
+      # mapping. Seed a non-login pending record so the first real SSO user is
+      # evaluated solely from its Keycloak roles.
+      initContainers:
+        - name: sso-role-bootstrap
+          image: ghcr.io/open-webui/open-webui:v0.11.3
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              cd /app/backend/open_webui
+              export WEBUI_SECRET_KEY=bootstrap-only-not-used-by-the-application
+              alembic -c alembic.ini upgrade head
+              python3 - <<'PY'
+              import sqlite3
+              import time
+
+              database = '/app/backend/data/webui.db'
+              bootstrap_id = '00000000-0000-0000-0000-000000000001'
+              bootstrap_email = 'openwebui-sso-bootstrap@invalid.local'
+              now = int(time.time())
+
+              with sqlite3.connect(database) as connection:
+                  connection.execute(
+                      'INSERT OR IGNORE INTO "user" '
+                      '(id, name, email, role, profile_image_url, last_active_at, '
+                      'updated_at, created_at, oauth, info, settings) '
+                      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                      (
+                          bootstrap_id,
+                          'SSO role bootstrap (system)',
+                          bootstrap_email,
+                          'pending',
+                          '/user.png',
+                          0,
+                          now,
+                          now,
+                          '{}',
+                          '{}',
+                          '{}',
+                      ),
+                  )
+              PY
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+      containers:
+        - name: openwebui
+          image: ghcr.io/open-webui/open-webui:v0.11.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # OAuth access and refresh tokens in the persistent Open WebUI
+            # database are encrypted with this key.  It must survive pod
+            # restarts or system_oauth cannot authenticate model requests.
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: WEBUI_SECRET_KEY
+            - name: WEBUI_URL
+              value: https://jitosavo.synology.me:60834
+            - name: ENABLE_PERSISTENT_CONFIG
+              value: "false"
+            - name: ENABLE_SIGNUP
+              value: "false"
+            - name: ENABLE_OAUTH_SIGNUP
+              value: "true"
+            - name: ENABLE_LOGIN_FORM
+              value: "false"
+            - name: ENABLE_PASSWORD_AUTH
+              value: "false"
+            - name: DEFAULT_USER_ROLE
+              value: pending
+            - name: OAUTH_MERGE_ACCOUNTS_BY_EMAIL
+              value: "true"
+            - name: OAUTH_CLIENT_ID
+              value: open-webui
+            - name: OAUTH_CLIENT_SECRET
+              value: openwebui-demo-secret
+            - name: OAUTH_PROVIDER_NAME
+              value: Keycloak
+            - name: OPENID_PROVIDER_URL
+              value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/.well-known/openid-configuration
+            - name: OPENID_REDIRECT_URI
+              value: https://jitosavo.synology.me:60834/oauth/oidc/callback
+            - name: OAUTH_SCOPES
+              value: openid profile email
+            - name: OAUTH_ROLES_CLAIM
+              value: realm_access.roles
+            - name: ENABLE_OAUTH_ROLE_MANAGEMENT
+              value: "true"
+            # Keycloak is the authority for Open WebUI privileges. A role is
+            # required to enter; only the explicit ai-admin role is elevated.
+            - name: OAUTH_ALLOWED_ROLES
+              value: ai-user,ai-admin
+            - name: OAUTH_ADMIN_ROLES
+              value: ai-admin
+            - name: OPENAI_API_BASE_URL
+              value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1
+            # Fetch the model list and issue chat requests through Envoy AI
+            # Gateway with the signed-in user's Keycloak access token. Envoy
+            # validates this token and derives X-User-Id itself; Open WebUI
+            # cannot assert an identity by sending a header alone. The base
+            # URL lands on the private ClusterIP-only AIGatewayRoute
+            # which is JWT-guarded, NOT the public PAT-gated /v1.
+            - name: OPENAI_API_CONFIGS
+              value: '{"0":{"auth_type":"system_oauth","enable":true}}'
+            - name: ENABLE_FORWARD_USER_INFO_HEADERS
+              value: "true"
+            # Keep the trusted Open WebUI SSO user fields aligned with the
+            # private AI Gateway trace tags and per-user rate-limit header.
+            - name: FORWARD_USER_INFO_HEADER_USER_NAME
+              value: X-User-Name
+            - name: FORWARD_USER_INFO_HEADER_USER_ID
+              value: X-User-Id
+            # Backends discovered from the Gateway are not Open WebUI-local
+            # model records.  Without this, v0.11 filters those models out
+            # for every non-admin SSO user before they reach the selector.
+            # Gateway JWT/PAT policies remain the authorization boundary.
+            - name: BYPASS_MODEL_ACCESS_CONTROL
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: openwebui-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: airgap-ai-stack
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: airgap-ai-stack
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: airgap-ai-stack
+spec:
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: airgap-ai-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin-demo-only
+            - name: GF_SERVER_ROOT_URL
+              value: http://grafana.localhost:8080
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/datasources/prometheus.yaml
+              subPath: prometheus.yaml
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+        - name: provisioning
+          configMap:
+            name: grafana-provisioning
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse
+  namespace: airgap-ai-stack
+spec:
+  selector:
+    app.kubernetes.io/name: langfuse
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse
+  namespace: airgap-ai-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: langfuse
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: langfuse
+        app.kubernetes.io/component: web
+    spec:
+      containers:
+        - name: langfuse
+          image: docker.langfuse.com/langfuse/langfuse:4.35.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: airgap-runtime
+          env:
+            - name: HOSTNAME
+              value: 0.0.0.0
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-db-app
+                  key: uri
+            - name: NEXTAUTH_URL
+              value: http://langfuse.localhost:8080
+            - name: NEXTAUTH_SECRET
+              value: langfuse-nextauth-demo-only-32chars
+            - name: SALT
+              value: langfuse-salt-demo-only-32-characters
+            - name: ENCRYPTION_KEY
+              value: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+            - name: REDIS_CONNECTION_STRING
+              value: redis://langfuse-valkey-master:6379
+            - name: CLICKHOUSE_URL
+              value: http://chi-langfuse-clickhouse-main-0-0:8123
+            - name: CLICKHOUSE_USER
+              value: langfuse
+            - name: CLICKHOUSE_PASSWORD
+              value: langfuse-demo-only
+            - name: CLICKHOUSE_MIGRATION_URL
+              value: clickhouse://langfuse:langfuse-demo-only@chi-langfuse-clickhouse-main-0-0:9000/langfuse
+            - name: CLICKHOUSE_DB
+              value: default
+            - name: CLICKHOUSE_CLUSTER_ENABLED
+              value: "false"
+            - name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
+              value: langfuse
+            - name: LANGFUSE_S3_EVENT_UPLOAD_REGION
+              value: us-east-1
+            - name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT
+              value: http://minio
+            - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+              value: minio
+            - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+              value: minio-demo-only
+            - name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE
+              value: "true"
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-worker
+  namespace: airgap-ai-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: langfuse
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: langfuse
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+        - name: langfuse-worker
+          image: docker.langfuse.com/langfuse/langfuse-worker:4.35.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: airgap-runtime
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-db-app
+                  key: uri
+            - name: SALT
+              value: langfuse-salt-demo-only-32-characters
+            - name: ENCRYPTION_KEY
+              value: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+            - name: REDIS_CONNECTION_STRING
+              value: redis://langfuse-valkey-master:6379
+            - name: CLICKHOUSE_URL
+              value: http://chi-langfuse-clickhouse-main-0-0:8123
+            - name: CLICKHOUSE_USER
+              value: langfuse
+            - name: CLICKHOUSE_PASSWORD
+              value: langfuse-demo-only
+            - name: CLICKHOUSE_DB
+              value: default
+            - name: CLICKHOUSE_CLUSTER_ENABLED
+              value: "false"
+            - name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
+              value: langfuse
+            - name: LANGFUSE_S3_EVENT_UPLOAD_REGION
+              value: us-east-1
+            - name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT
+              value: http://minio
+            - name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+              value: minio
+            - name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+              value: minio-demo-only
+            - name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE
+              value: "true"

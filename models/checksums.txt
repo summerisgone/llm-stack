@@ -1,0 +1,25 @@
+# Add sha256sum output for every model and tokenizer artifact here.
+# BAAI/bge-m3 @ 5617a9f61b028005a4858fdac845db406aefb181
+# Dense-only: onnx/*, colbert_linear.pt and sparse_linear.pt are not
+# downloaded (docs/adr/0013-embeddings-api-bge-m3.md exposes dense only).
+e54c164a07274f2eb45bb724f54a79d1efcc90c41573887cd9a29aeee0597352  models/bge-m3/1_Pooling/config.json
+26159e7ad065073448460117eb24b7a4572f6f4e78eadff65dc0a11c052449fa  models/bge-m3/config.json
+1eef72430e7194a1e59680e635aed81ffa083f05668dbc5bb1c56c04c0999c38  models/bge-m3/config_sentence_transformers.json
+84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf  models/bge-m3/modules.json
+b5e0ce3470abf5ef3831aa1bd5553b486803e83251590ab7ff35a117cf6aad38  models/bge-m3/pytorch_model.bin
+eb9b44b13c0f52a3b3685c3b1cbdea1ba8b04bea123b98f61610048940776eb1  models/bge-m3/sentence_bert_config.json
+cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865  models/bge-m3/sentencepiece.bpe.model
+8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835  models/bge-m3/special_tokens_map.json
+21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08  models/bge-m3/tokenizer.json
+a62b2b6784f990259fddef5f16388693a8043be4f69179e6a5257eeb3f9abac4  models/bge-m3/tokenizer_config.json
+# Qwen/Qwen2.5-0.5B-Instruct @ 7ae557604adf67be50417f59c2c2f167def9a775
+11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361  models/qwen2.5-0.5b-instruct/.gitattributes
+832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e  models/qwen2.5-0.5b-instruct/LICENSE
+b19c806a904db6dc878a0462e70b551f6b7ac78dfbb88c2eb966ca2b9109ae15  models/qwen2.5-0.5b-instruct/README.md
+18e18afcaccafade98daf13a54092927904649e1dd4eba8299ab717d5d94ff45  models/qwen2.5-0.5b-instruct/config.json
+e558847a8b4402616f1273797b015104dc266fe4b520056fca88823ba8f8ebe6  models/qwen2.5-0.5b-instruct/generation_config.json
+599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3  models/qwen2.5-0.5b-instruct/merges.txt
+fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe  models/qwen2.5-0.5b-instruct/model.safetensors
+c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539  models/qwen2.5-0.5b-instruct/tokenizer.json
+5b5d4f65d0acd3b2d56a35b56d374a36cbc1c8fa5cf3b3febbbfabf22f359583  models/qwen2.5-0.5b-instruct/tokenizer_config.json
+ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910  models/qwen2.5-0.5b-instruct/vocab.json

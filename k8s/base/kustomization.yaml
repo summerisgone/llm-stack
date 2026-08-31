@@ -1,0 +1,12 @@
+# Profile-neutral application stack. Everything here is deployed by every
+# profile and contains no routing objects: the public Gateway, its listeners
+# and the HTTPRoute/AIGatewayRoute set differ per site and are owned by
+# exactly one place per profile (see k8s/README.md).
+resources:
+  - namespace.yaml
+  - gatewayclass.yaml
+  - ratelimit.yaml
+  - object-storage.yaml
+  - observability.yaml
+  - databases.yaml
+  - applications.yaml

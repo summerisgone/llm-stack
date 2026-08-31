@@ -1,0 +1,52 @@
+#!/usr/bin/env sh
+set -eu
+
+env_file=${LLAMACPP_ENV_FILE:-"$(CDPATH= cd -- "$(dirname -- "$0")/../../config/llamacpp" && pwd)/qwen-gguf.env"}
+if [ -f "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+
+image=${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+model_gguf=${MODEL_GGUF:-}
+served_model_name=${SERVED_MODEL_NAME:-llamacpp-local}
+container_name=${LLAMACPP_CONTAINER_NAME:-llamacpp}
+port=${PORT:-8090}
+n_gpu_layers=${N_GPU_LAYERS:-0}
+ctx_size=${CTX_SIZE:-8192}
+
+case "$model_gguf" in
+  ""|*CHANGE-ME*)
+    printf '%s\n' "MODEL_GGUF is not set: fill it in config/llamacpp/qwen-gguf.env first." >&2
+    exit 1
+    ;;
+esac
+test -f "$model_gguf" || {
+  printf '%s\n' "Model file not found: $model_gguf" >&2
+  exit 1
+}
+if docker container inspect "$container_name" >/dev/null 2>&1; then
+  printf '%s\n' "Container already exists: $container_name" >&2
+  printf '%s\n' "Remove it explicitly before starting a replacement." >&2
+  exit 1
+fi
+
+model_dir=$(CDPATH= cd -- "$(dirname -- "$model_gguf")" && pwd)
+model_file=$(basename -- "$model_gguf")
+
+exec docker run \
+  --detach \
+  --name "$container_name" \
+  --gpus all \
+  --publish "$port:$port" \
+  --volume "$model_dir:/models:ro" \
+  "$image" \
+  --model "/models/$model_file" \
+  --alias "$served_model_name" \
+  --host 0.0.0.0 \
+  --port "$port" \
+  --n-gpu-layers "$n_gpu_layers" \
+  --ctx-size "$ctx_size" \
+  "$@"

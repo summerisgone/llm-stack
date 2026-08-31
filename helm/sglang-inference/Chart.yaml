@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sglang-inference
+description: SGLang inference server for Qwen3.8 NVFP4, referencing the shared model PVC
+version: 0.1.0
+appVersion: "0.5.19"
+type: application

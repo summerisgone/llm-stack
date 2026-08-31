@@ -1,0 +1,254 @@
+# NVIDIA GPU state exporters for the WSL2/k3d remote profile.
+#
+# DCGM-exporter cannot enumerate this WSL2 paravirtual GPU (DCGM init exits 1
+# silently even with the driver mounted), so instead we ship tiny Prometheus
+# exporters that shell out to `nvidia-smi`. Each runs in the same image + `nvidia`
+# RuntimeClass as one of the stack's inference engines (vLLM or SGLang — only one
+# runs at a time here), but WITHOUT an nvidia.com/gpu resource request, so it
+# never competes with the engine for the only GPU. WHATEVER engine is live,
+# nvidia-smi still reports the real utilization / memory / temperature / power /
+# clocks of the card. Two exporters exist so the approach is available under
+# both the vLLM and the SGLang profile; they query the same card, so pick one
+# with the dashboard's `$gpu_job` variable.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-exporter-script
+  namespace: airgap-ai-stack
+  labels:
+    app.kubernetes.io/name: gpu-exporter
+data:
+  gpu_metrics.py: |
+    #!/usr/bin/env python3
+    """Tiny Prometheus exporter for NVIDIA GPU state via `nvidia-smi`."""
+    import subprocess, threading, time
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    QUERY = ("name,index,uuid,utilization.gpu,memory.total,memory.used,"
+             "temperature.gpu,power.draw,clocks.sm,clocks.mem,fan.speed")
+    FIELDS = ["name", "index", "uuid", "util_gpu", "mem_total", "mem_used",
+              "temp_gpu", "power", "clk_sm", "clk_mem", "fan"]
+
+    text = "gpu_exporter_up 0\n"
+
+    def fmt(v):
+        try:
+            x = float(v)
+            return str(int(x)) if x == int(x) else repr(x)
+        except Exception:
+            return None
+
+    def collect():
+        global text
+        lines = []
+        up = 0
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=" + QUERY,
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=20)
+            for row in out.stdout.strip().splitlines():
+                if not row.strip():
+                    continue
+                cells = [c.strip() for c in row.split(",")]
+                v = {}
+                for i, name in enumerate(FIELDS):
+                    if i < len(cells):
+                        v[name] = cells[i]
+                g = v.get("index", "0")
+                n = v.get("name", "gpu")
+                lbl = 'gpu="%s",name="%s"' % (g, n)
+                for m, f, unit in [
+                    ("gpu_utilization_percent", "util_gpu", ""),
+                    ("gpu_power_watts", "power", ""),
+                    ("gpu_fan_percent", "fan", ""),
+                    ("gpu_temperature_celsius", "temp_gpu", ""),
+                ]:
+                    val = fmt(v.get(f))
+                    if val is not None:
+                        lines.append("%s{%s} %s%s" % (m, lbl, val, unit))
+                mt = fmt(v.get("mem_total")); mu = fmt(v.get("mem_used"))
+                if mt is not None:
+                    lines.append("gpu_memory_total_bytes{%s} %d"
+                                 % (lbl, int(float(mt)) * 1048576))
+                if mu is not None:
+                    lines.append("gpu_memory_used_bytes{%s} %d"
+                                 % (lbl, int(float(mu)) * 1048576))
+                if mt and mu and float(mt) > 0:
+                    pct = float(mu) / float(mt) * 100
+                    lines.append("gpu_memory_utilization_percent{%s} %.2f"
+                                 % (lbl, pct))
+                for m, f in [("gpu_sm_clock_hz", "clk_sm"),
+                             ("gpu_mem_clock_hz", "clk_mem")]:
+                    val = fmt(v.get(f))
+                    if val is not None:
+                        lines.append("%s{%s} %d"
+                                     % (m, lbl, int(float(val)) * 1000000))
+            up = 1
+        except Exception:
+            up = 0
+        lines.append("gpu_exporter_up %d" % up)
+        text = "\n".join(lines) + "\n"
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/metrics":
+                body = text.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    def main():
+        collect()
+        def loop():
+            while True:
+                time.sleep(5)
+                collect()
+        threading.Thread(target=loop, daemon=True).start()
+        HTTPServer(("0.0.0.0", 9400), H).serve_forever()
+
+    if __name__ == "__main__":
+        main()
+---
+# vLLM-profile carrier. Image is the engine's own NVIDIA build (has nvidia-smi
+# + python3) but only runs the exporter script, no engine, no GPU allocation.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-exporter
+  namespace: airgap-ai-stack
+  labels:
+    app.kubernetes.io/name: gpu-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gpu-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gpu-exporter
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: gpu-exporter
+          image: llm-stack/vllm-qwen38-nvfp4:0.27.1
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/opt/gpu_metrics.py"]
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+          ports:
+            - name: metrics
+              containerPort: 9400
+          securityContext:
+            privileged: true
+          livenessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: script
+              mountPath: /opt/gpu_metrics.py
+              subPath: gpu_metrics.py
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: gpu-exporter-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-exporter
+  namespace: airgap-ai-stack
+  labels:
+    app.kubernetes.io/name: gpu-exporter
+spec:
+  selector:
+    app.kubernetes.io/name: gpu-exporter
+  ports:
+    - name: metrics
+      port: 9400
+      targetPort: 9400
+---
+# SGLang-profile carrier, same shared script + runtime.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-exporter-sglang
+  namespace: airgap-ai-stack
+  labels:
+    app.kubernetes.io/name: gpu-exporter-sglang
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gpu-exporter-sglang
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gpu-exporter-sglang
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: gpu-exporter
+          image: lmsysorg/sglang:dev-qwen38-27b-dflash2@sha256:616a3e97f45191af975896cfa644279096cb31bd408a071c2e99ca7209c3cafe
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/opt/gpu_metrics.py"]
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+          ports:
+            - name: metrics
+              containerPort: 9400
+          securityContext:
+            privileged: true
+          livenessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: script
+              mountPath: /opt/gpu_metrics.py
+              subPath: gpu_metrics.py
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: gpu-exporter-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-exporter-sglang
+  namespace: airgap-ai-stack
+  labels:
+    app.kubernetes.io/name: gpu-exporter-sglang
+spec:
+  selector:
+    app.kubernetes.io/name: gpu-exporter-sglang
+  ports:
+    - name: metrics
+      port: 9400
+      targetPort: 9400

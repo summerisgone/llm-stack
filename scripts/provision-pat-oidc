@@ -1,0 +1,59 @@
+#!/usr/bin/env sh
+set -eu
+
+# Realm imports run only for a fresh Keycloak database. Keep existing stacks
+# convergent by provisioning Open WebUI and the two PAT clients through the Admin API too.
+public_base_url=${PUBLIC_BASE_URL:-https://jitosavo.synology.me:60834}
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+gateway_secret=$(sed -n 's/^PAT_GATEWAY_CLIENT_SECRET=//p' .env | tail -n 1)
+[ -n "$gateway_secret" ]
+
+# Keycloak realm-management admin. Rotated per site; never hardcode it.
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+
+# The admin surface is closed on the public origin. Use a port-forward.
+kc_pf_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); p=s.getsockname()[1]; s.close(); print(p)')
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_pf_port:8080" &
+kc_pf_pid=$!
+trap 'kill "$kc_pf_pid" 2>/dev/null; wait "$kc_pf_pid" 2>/dev/null || true' EXIT INT TERM
+
+attempt=0
+until curl -fsS "http://127.0.0.1:$kc_pf_port/sso/realms/ai-stack/.well-known/openid-configuration" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 15 ]; then
+    printf '%s\n' "Keycloak port-forward did not become ready" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+issuer="http://127.0.0.1:$kc_pf_port/sso/realms/master"
+admin_api="http://127.0.0.1:$kc_pf_port/sso/admin/realms/ai-stack"
+
+admin_token=$(curl -fsS -X POST "$issuer/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+upsert_client() {
+  client_name=$1
+  client_payload=$2
+  internal_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients?clientId=$client_name" | \
+    python3 -c 'import json,sys; clients=json.load(sys.stdin); print(clients[0]["id"] if clients else "")')
+  if [ -z "$internal_id" ]; then
+    curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+      "$admin_api/clients" -d "$client_payload"
+  else
+    curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+      "$admin_api/clients/$internal_id" -d "$client_payload"
+  fi
+}
+
+# RP-initiated logout returns to /auth; Keycloak validates it separately from
+# the login callback. Allow only the exact return URL, not a wildcard.
+upsert_client open-webui "{\"clientId\":\"open-webui\",\"name\":\"Open WebUI\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"secret\":\"openwebui-demo-secret\",\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"redirectUris\":[\"$public_base_url/oauth/oidc/callback\"],\"webOrigins\":[\"$public_base_url\"],\"attributes\":{\"post.logout.redirect.uris\":\"$public_base_url/auth\"},\"defaultClientScopes\":[\"basic\",\"profile\",\"email\",\"roles\",\"groups\"]}"
+upsert_client pat-dashboard "{\"clientId\":\"pat-dashboard\",\"name\":\"Personal access token dashboard\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":true,\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"redirectUris\":[\"$public_base_url/platform/auth/callback\"],\"webOrigins\":[\"$public_base_url\"],\"defaultClientScopes\":[\"basic\",\"profile\",\"email\",\"roles\",\"groups\"]}"
+upsert_client pat-gateway "{\"clientId\":\"pat-gateway\",\"name\":\"PAT service to Envoy AI Gateway\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"secret\":\"$gateway_secret\",\"serviceAccountsEnabled\":true,\"standardFlowEnabled\":false,\"directAccessGrantsEnabled\":false,\"attributes\":{\"access.token.lifespan\":\"315360000\"},\"defaultClientScopes\":[\"basic\"]}"
+
+printf '%s\n' 'Open WebUI and PAT Keycloak clients are ready.'

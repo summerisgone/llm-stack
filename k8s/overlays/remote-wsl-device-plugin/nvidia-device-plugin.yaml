@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: nvidia-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nvidia-device-plugin
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nvidia-device-plugin
+    spec:
+      priorityClassName: system-node-critical
+      # On WSL2 the driver reachable through libcuda_loader/libnvidia-ml_loader
+      # in the Windows driver store is injected by the nvidia containerd hook.
+      # A plain hostPath mount of the three shim libraries is not sufficient
+      # (NVML init fails with ERROR_DRIVER_NOT_LOADED), so the plugin pod runs
+      # as a regular GPU pod via the nvidia RuntimeClass.
+      runtimeClassName: nvidia
+      containers:
+        - name: nvidia-device-plugin
+          image: llm-stack/k8s-device-plugin:0.20.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # The plugin discovers all GPUs through NVML itself; give it the
+            # same injected driver environment as any GPU consumer pod.
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+            - name: LD_LIBRARY_PATH
+              value: /usr/lib/x86_64-linux-gnu:/usr/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins

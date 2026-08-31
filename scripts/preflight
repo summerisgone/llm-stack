@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+kubectl version --client >/dev/null
+kubectl kustomize k8s >/dev/null
+kubectl apply --dry-run=client -k k8s >/dev/null
+kubectl kustomize k8s/overlays/local-mac >/dev/null
+kubectl apply --dry-run=client -k k8s/overlays/local-mac >/dev/null
+kubectl kustomize k8s/overlays/remote-wsl-vllm-nvfp4 >/dev/null
+kubectl apply --dry-run=client -k k8s/overlays/remote-wsl-vllm-nvfp4 >/dev/null
+kubectl kustomize k8s/overlays/remote-wsl-device-plugin >/dev/null
+kubectl apply --dry-run=client -k k8s/overlays/remote-wsl-device-plugin >/dev/null
+printf '%s\n' 'Kubernetes configurations are valid.'

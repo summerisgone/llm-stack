@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Issue a personal access token for an existing user without a browser, by
+replicating what the PAT dashboard does after its OAuth callback: sign in
+with the user's own credentials over the OIDC token endpoint, build the
+same signed session cookie the service issues, then call its token API
+directly. Unlike scripts/kc-user-*, this runs entirely over the public
+origin ($STACK_BASE_URL / lib_endpoints.py) - no admin API, no
+port-forward, same as a real dashboard login.
+"""
+import argparse
+import base64
+import hashlib
+import hmac
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib_endpoints import Endpoints  # noqa: E402
+
+
+def read_cookie_key():
+    if not os.path.isfile(".env"):
+        sys.exit(".env not found (run this from the repository root)")
+    key = None
+    with open(".env") as f:
+        for line in f:
+            if line.startswith("PAT_COOKIE_KEY="):
+                key = line.rstrip("\n").split("=", 1)[1]
+    if not key:
+        sys.exit("PAT_COOKIE_KEY not set in .env")
+    return key
+
+
+def b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def b64url_decode(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Issue a PAT for an existing user.")
+    parser.add_argument("username")
+    parser.add_argument("password")
+    parser.add_argument("token_name", nargs="?", help="defaults to <username>")
+    parser.add_argument("expires_in_days", nargs="?", type=int, default=30)
+    args = parser.parse_args()
+    token_name = args.token_name or args.username
+
+    ep = Endpoints()
+    cookie_key = read_cookie_key()
+
+    form = urllib.parse.urlencode(
+        {
+            "grant_type": "password",
+            "client_id": "llm-api",
+            "username": args.username,
+            "password": args.password,
+        }
+    ).encode()
+    try:
+        with ep.open("POST", f"{ep.issuer}/protocol/openid-connect/token", data=form) as resp:
+            access_token = json.load(resp)["access_token"]
+    except urllib.error.HTTPError as e:
+        sys.exit(f"login failed: {e.code} {e.read().decode(errors='replace')}")
+
+    claims = json.loads(b64url_decode(access_token.split(".")[1]))
+    payload = b64url(
+        json.dumps(
+            {
+                "sub": claims["sub"],
+                "preferred_username": claims["preferred_username"],
+                "roles": claims["realm_access"]["roles"],
+                "exp": claims["exp"],
+            },
+            separators=(",", ":"),
+        ).encode()
+    )
+    signature = b64url(hmac.new(cookie_key.encode(), payload.encode(), hashlib.sha256).digest())
+    session_cookie = f"{payload}.{signature}"
+
+    body = json.dumps({"name": token_name, "expires_in_days": args.expires_in_days}).encode()
+    try:
+        with ep.open(
+            "POST",
+            f"{ep.dashboard}/api/tokens",
+            data=body,
+            headers={"Content-Type": "application/json", "Cookie": f"pat_session={session_cookie}"},
+        ) as resp:
+            created = json.load(resp)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"token creation failed: {e.code} {e.read().decode(errors='replace')}")
+
+    print(f"pat_id: {created['id']}")
+    print(f"token:  {created['token']}")
+
+
+if __name__ == "__main__":
+    main()

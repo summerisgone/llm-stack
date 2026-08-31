@@ -1,0 +1,79 @@
+# bge-m3 embeddings route (docs/adr/0013-embeddings-api-bge-m3.md). A
+# separate AIGatewayRoute, not a rule inside `llmd` (llmd.yaml): it needs its
+# own SecurityPolicy and BackendTrafficPolicy -- a per-user rate limit sized
+# for batch indexing instead of human chat, a request buffer sized to
+# maxClientBatchSize x 8192 tokens instead of a full chat context, and a
+# short request timeout -- so embedding traffic can never consume a user's
+# chat allowance or vice versa. If ADR-0013 V2 finds EAG cannot give a
+# second route precedence over `llmd`'s match-less catch-all, this becomes a
+# rule inside llmd.yaml instead (see the ADR's "Routing" section).
+{{- if .Values.inference.embeddings.enabled }}
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: embeddings
+  namespace: {{ .Values.namespace }}
+spec:
+  hostnames: []
+  parentRefs:
+    - name: ai-gateway-private
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      sectionName: private
+  rules:
+    - name: openai-bge-m3
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ .Values.inference.embeddings.modelName }}
+      timeouts:
+        request: 60s
+      backendRefs:
+        - name: embeddings-openai
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: embeddings-jwt
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: embeddings
+  jwt:
+    providers:
+      - name: keycloak
+        issuer: {{ .Values.oidc.externalIssuer }}
+        remoteJWKS:
+          uri: http://keycloak.{{ .Values.namespace }}.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: embeddings-per-user-limit
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: embeddings
+  # Sized to maxClientBatchSize x 8192 tokens at the same ~4.6 bytes/token
+  # the llmd-per-user-limit comment measured (llmd.yaml), plus margin for a
+  # batch of many short items instead of one long one. ADR-0013 V2 sends a
+  # max-size batch and checks for 413; adjust from that measurement.
+  requestBuffer:
+    limit: 2Mi
+  rateLimit:
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: X-User-Id
+                  type: Distinct
+          limit:
+            requests: {{ .Values.inference.embeddings.perUserRateLimitPerMinute }}
+            unit: Minute
+          xRateLimitHeaders: DraftVersion03
+{{- end }}

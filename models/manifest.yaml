@@ -1,0 +1,18 @@
+# Local model weights are intentionally not versioned in Git.
+models:
+  qwen38:
+    path: models/qwen38
+    sha256_manifest: models/checksums.txt
+  qwen25-0.5b-instruct:
+    source: Qwen/Qwen2.5-0.5B-Instruct
+    revision: 7ae557604adf67be50417f59c2c2f167def9a775
+    path: models/qwen2.5-0.5b-instruct
+    sha256_manifest: models/checksums.txt
+  # docs/adr/0013-embeddings-api-bge-m3.md. Revision is BAAI/bge-m3's HF `sha`
+  # as of 2026-09-13. Dense-only: onnx/*, colbert_linear.pt and
+  # sparse_linear.pt are not downloaded (the ADR exposes dense output only).
+  bge-m3:
+    source: BAAI/bge-m3
+    revision: 5617a9f61b028005a4858fdac845db406aefb181
+    path: models/bge-m3
+    sha256_manifest: models/checksums.txt

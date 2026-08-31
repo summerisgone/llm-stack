@@ -1,0 +1,150 @@
+#!/usr/bin/env sh
+set -eu
+
+# This is the end-to-end PAT playbook. By default LM Studio must already have
+# qwen3.8-27b loaded. The vLLM overlay opts out of that host-only precondition.
+inference_model=${INFERENCE_SMOKE_MODEL:-qwen3.8-27b}
+require_lmstudio=${INFERENCE_SMOKE_REQUIRE_LMSTUDIO:-true}
+verify_upstream_log=${INFERENCE_SMOKE_VERIFY_UPSTREAM_LOG:-true}
+# Set to false when the GPU is unavailable: the PAT issue / catalogue /
+# revocation boundaries are still exercised, only the calls that reach the
+# model are skipped.
+verify_chat=${INFERENCE_SMOKE_VERIFY_CHAT:-true}
+if [ "$verify_chat" != true ]; then
+  verify_upstream_log=false
+fi
+if [ "$require_lmstudio" = true ]; then
+  curl -fsS http://127.0.0.1:1234/api/v1/models | grep -q '"key": "qwen3.8-27b"'
+fi
+
+. "$(dirname "$0")/lib-endpoints.sh"
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+
+# Creating the isolated smoke user needs a Keycloak realm-management admin.
+# Never hardcode the credential: it is rotated per site.
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+
+[ -f .env ]
+cookie_key=$(sed -n 's/^PAT_COOKIE_KEY=//p' .env | tail -n 1)
+[ -n "$cookie_key" ]
+
+kubectl -n "$namespace" rollout status deployment/pat-service --timeout=60s
+
+# The admin API is not reachable from the public origin (closed by the edge
+# route rules). Route all admin calls through a local port-forward instead.
+kc_pf_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); p=s.getsockname()[1]; s.close(); print(p)')
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_pf_port:8080" &
+kc_pf_pid=$!
+trap 'kill "$kc_pf_pid" 2>/dev/null; wait "$kc_pf_pid" 2>/dev/null || true' EXIT INT TERM
+
+# Wait until the port-forward is accepting connections.
+attempt=0
+until curl -fsS "http://127.0.0.1:$kc_pf_port/sso/realms/ai-stack/.well-known/openid-configuration" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 15 ]; then
+    printf '%s\n' "Keycloak port-forward did not become ready" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+kc_admin_local="http://127.0.0.1:$kc_pf_port/sso"
+admin_issuer_local="$kc_admin_local/realms/master"
+admin_api_local="$kc_admin_local/admin/realms/$stack_realm"
+
+# PAT must use the ClusterIP-only AI Gateway. The public Gateway has no
+# inference route, so browser/PAT traffic cannot reach llm-d directly.
+test "$(kubectl -n "$namespace" get deployment pat-service -o jsonpath='{.spec.template.spec.containers[?(@.name=="pat-service")].env[?(@.name=="AI_GATEWAY_URL")].value}')" = "http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080"
+dashboard_headers=$(stack_curl -fsS -o /dev/null -D - "$dashboard/")
+printf '%s\n' "$dashboard_headers" | grep -qi "^location: ${dashboard_prefix}/auth/login"
+login_headers=$(stack_curl -fsS -o /dev/null -D - "$dashboard/auth/login")
+printf '%s\n' "$login_headers" | grep -qi "^location: $issuer/protocol/openid-connect/auth?"
+
+# Create an isolated user so the global per-owner Envoy limit is deterministic.
+# Admin API calls go through the local port-forward, never the public origin.
+suffix=$(date +%s)
+username="pat-smoke-$suffix"
+# Must satisfy the realm password policy (provision-realm-security): 12+
+# chars, upper/lower/digit/special.
+password="Pat-smoke-password-$suffix!"
+admin_token=$(curl -fsS -X POST "$admin_issuer_local/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' "$admin_api_local/users" \
+  -d "{\"username\":\"$username\",\"email\":\"$username@example.test\",\"firstName\":\"PAT\",\"lastName\":\"Smoke\",\"enabled\":true,\"emailVerified\":true,\"requiredActions\":[]}"
+user_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api_local/users?username=$username&exact=true" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+role=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api_local/roles/ai-user" | \
+  python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))')
+curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$admin_api_local/users/$user_id/role-mappings/realm" -d "[$role]"
+curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$admin_api_local/users/$user_id/reset-password" -d "{\"type\":\"password\",\"value\":\"$password\",\"temporary\":false}"
+# The realm's TOTP default action (provision-realm-security) re-adds
+# CONFIGURE_TOTP to every new user regardless of the empty list passed at
+# creation, which blocks the direct-grant login below ("Account is not fully
+# set up"). Clear it explicitly now that the account is otherwise ready.
+curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$admin_api_local/users/$user_id" -d '{"requiredActions":[]}'
+
+# The test obtains this user's Keycloak identity then builds the same signed
+# short-lived session cookie created after the dashboard OAuth callback. It
+# never uses the SSO access token against /v1.
+access_token=$(stack_curl -fsS -X POST "$issuer/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=llm-api -d "username=$username" -d "password=$password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+subject=$(printf '%s' "$access_token" | python3 -c 'import base64,json,sys; part=sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["sub"])')
+expires=$(printf '%s' "$access_token" | python3 -c 'import base64,json,sys; part=sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["exp"])')
+session_cookie=$(PAT_COOKIE_KEY="$cookie_key" PAT_SUBJECT="$subject" PAT_EXPIRES="$expires" python3 -c '
+import base64,hashlib,hmac,json,os
+payload=base64.urlsafe_b64encode(json.dumps({"sub":os.environ["PAT_SUBJECT"],"preferred_username":"pat-smoke","roles":["ai-user"],"exp":int(os.environ["PAT_EXPIRES"])},separators=(",", ":")).encode()).rstrip(b"=").decode()
+signature=base64.urlsafe_b64encode(hmac.new(os.environ["PAT_COOKIE_KEY"].encode(),payload.encode(),hashlib.sha256).digest()).rstrip(b"=").decode()
+print(payload+"."+signature)
+')
+
+created=$(stack_curl -fsS -X POST -H 'Content-Type: application/json' -H "Cookie: pat_session=$session_cookie" \
+  -d '{"name":"PAT smoke test","expires_in_days":1}' "$dashboard/api/tokens")
+pat=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+pat_id=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+printf '%s\n' 'Issued a self-service PAT; only its HMAC hash was saved.'
+
+body=$(INFERENCE_SMOKE_MODEL="$inference_model" python3 -c '
+import json, os
+print(json.dumps({"model": os.environ["INFERENCE_SMOKE_MODEL"], "messages": [{"role": "user", "content": "Reply briefly: OK"}], "max_tokens": 16, "temperature": 0}))
+')
+request_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
+if [ "$verify_chat" = true ]; then
+  test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $pat" -H "X-Request-Id: $request_id" -d "$body" "$api/chat/completions")" = 200
+fi
+# The catalogue is served by the AI Gateway model router from its route rules,
+# so it answers even with the model server scaled to zero.
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $pat" "$api/models")" = 200
+if [ "$verify_upstream_log" = true ]; then
+  attempt=0
+  forwarded=false
+  while [ "$attempt" -lt 10 ]; do
+    if kubectl -n "$namespace" logs deployment/lmstudio-upstream --tail=-1 --since=5m | \
+      grep -F "\"user_id\":\"$subject\"" >/dev/null; then
+      forwarded=true
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  test "$forwarded" = true
+fi
+if [ "$verify_chat" = true ]; then
+  printf '%s\n' 'Accepted the PAT for inference and forwarded its owner to Envoy AI Gateway.'
+else
+  printf '%s\n' 'Accepted the PAT for the model catalogue; inference calls skipped (INFERENCE_SMOKE_VERIFY_CHAT=false).'
+fi
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Cookie: pat_session=$session_cookie" "$dashboard/api/tokens/$pat_id")" = 204
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $pat" "$api/models")" = 401
+printf '%s\n' 'Revocation took effect immediately; the PAT can no longer reach inference.'
+
+# Clean up the smoke user created via the admin API.
+curl -fsS -X DELETE -H "Authorization: Bearer $admin_token" \
+  "$admin_api_local/users/$user_id" || true

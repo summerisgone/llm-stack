@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""List Keycloak users in the realm, optionally filtered by a username
+substring. Columns: username, email, enabled/disabled, id, then realm
+roles per user.
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib_keycloak_admin import KeycloakAdmin  # noqa: E402
+
+
+def main():
+    parser = argparse.ArgumentParser(description="List Keycloak users.")
+    parser.add_argument("username_filter", nargs="?", default="")
+    args = parser.parse_args()
+
+    with KeycloakAdmin() as kc:
+        query = f"?username={args.username_filter}" if args.username_filter else ""
+        users = kc.request("GET", f"/users{query}")
+        for u in users:
+            status = "enabled" if u.get("enabled") else "disabled"
+            print(f"{u['username']}\t{u.get('email', '')}\t{status}\t{u['id']}")
+        for u in users:
+            roles = kc.request("GET", f"/users/{u['id']}/role-mappings/realm")
+            names = ",".join(r["name"] for r in roles)
+            print(f"  {u['username']} roles: {names}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,37 @@
+#!/usr/bin/env sh
+set -eu
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+service=${VLLM_NVFP4_SERVICE:-vllm-qwen38-nvfp4}
+timeout=${VLLM_NVFP4_STARTUP_TIMEOUT_SECONDS:-1200}
+
+kubectl -n "$namespace" rollout status "deployment/$service" --timeout="${timeout}s"
+pod=$(kubectl -n "$namespace" get pod -l "app.kubernetes.io/name=$service" \
+  -o jsonpath='{.items[0].metadata.name}')
+test -n "$pod"
+
+# Send traffic through the ClusterIP/DNS name from the GPU pod.  This checks
+# the in-cluster service path without a local port-forward or an extra image.
+kubectl -n "$namespace" exec "$pod" -- python3 -c '
+import json
+from urllib.request import Request, urlopen
+
+service = "'"$service"'.'"$namespace"'.svc.cluster.local"
+base = "http://" + service + ":8000"
+assert urlopen(base + "/health", timeout=20).status == 200
+models = json.loads(urlopen(base + "/v1/models", timeout=20).read())
+assert any(item["id"] == "qwen-3.8-27b" for item in models["data"])
+payload = {
+    "model": "qwen-3.8-27b",
+    "messages": [{"role": "user", "content": "Reply with exactly VLLM_OK and nothing else."}],
+    "temperature": 0,
+    "max_tokens": 128,
+}
+request = Request(base + "/v1/chat/completions", data=json.dumps(payload).encode(),
+                  headers={"Content-Type": "application/json"})
+response = json.loads(urlopen(request, timeout=180).read())
+message = response["choices"][0]["message"]
+assert message.get("content", "").strip() == "VLLM_OK", response
+assert response["choices"][0]["finish_reason"] == "stop", response
+'
+printf '%s\n' 'vLLM Qwen3.8 NVFP4 Kubernetes smoke test passed.'
