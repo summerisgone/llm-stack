@@ -1,0 +1,49 @@
+#!/usr/bin/env sh
+set -eu
+
+# Service-boundary smoke: the SSO checks plus operator-managed state and the
+# unauthenticated edge behaviour. Works against both routing profiles; see
+# scripts/lib-endpoints.sh. Needs no GPU and no loaded model.
+
+. "$(dirname "$0")/lib-endpoints.sh"
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+require_lmstudio=${SMOKE_REQUIRE_LMSTUDIO:-auto}
+if [ "$require_lmstudio" = auto ]; then
+  if [ "$stack_mode" = host ]; then require_lmstudio=true; else require_lmstudio=false; fi
+fi
+
+kubectl -n "$namespace" wait --for=condition=Programmed gateway/edge --timeout=30s
+
+SMOKE_REQUIRE_LMSTUDIO="$require_lmstudio" "$(dirname "$0")/smoke-test"
+
+# Langfuse and Grafana are publicly routed only in the local-mac profile; in
+# the remote profile they are operator NodePorts and are checked only when
+# their URLs are supplied.
+if [ -n "$langfuse" ]; then
+  stack_curl -fsSI "$langfuse/" | grep -Eqi 'HTTP/.* 200'
+fi
+if [ -n "$grafana" ]; then
+  stack_curl -fsS "$grafana/api/health" | grep -Eq '"database"[[:space:]]*:[[:space:]]*"ok"'
+fi
+
+kubectl -n "$namespace" exec keycloak-db-1 -- pg_isready -U app -d app
+kubectl -n "$namespace" exec langfuse-db-1 -- pg_isready -U app -d app
+kubectl -n "$namespace" exec pat-db-1 -- pg_isready -U app -d app
+kubectl -n "$namespace" exec chi-langfuse-clickhouse-main-0-0-0 -- clickhouse-client --query 'SELECT 1' | grep -qx '1'
+kubectl -n "$namespace" exec langfuse-valkey-0 -- valkey-cli ping | grep -qx 'PONG'
+kubectl -n "$namespace" wait --for=jsonpath='{.status.healthStatus}'=green tenant/minio --timeout=30s
+kubectl -n "$namespace" exec deployment/prometheus -- wget -q -O - http://127.0.0.1:9090/-/healthy | grep -q 'Healthy'
+
+if [ "$require_lmstudio" = true ]; then
+  kubectl -n "$namespace" rollout status deployment/lmstudio-upstream --timeout=30s
+fi
+kubectl -n "$namespace" rollout status deployment/pat-service --timeout=30s
+
+# The PAT dashboard is SSO-only and the OpenAI API rejects anonymous callers.
+# In path mode the dashboard is mounted under a prefix it re-adds itself.
+stack_curl -fsS -o /dev/null -D - "$dashboard/" | grep -qi "^location: ${dashboard_prefix}/auth/login"
+stack_curl -fsS -o /dev/null -D - "$dashboard/auth/login" | grep -qi "^location: $issuer/protocol/openid-connect/auth?"
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' "$api/models")" = 401
+
+printf '%s\n' "Kubernetes applications, PAT boundary, operator-managed state, and Envoy edge routing passed readiness checks ($stack_mode routing)."

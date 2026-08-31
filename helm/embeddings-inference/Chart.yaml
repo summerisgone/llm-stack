@@ -1,0 +1,6 @@
+apiVersion: v2
+name: embeddings-inference
+description: bge-m3 embeddings server, CPU by default or a memory-loan GPU mode alongside the LLM engine
+version: 0.1.0
+appVersion: "1.9.3"
+type: application

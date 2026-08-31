@@ -1,0 +1,61 @@
+#!/usr/bin/env sh
+set -eu
+
+# Reads config/sglang/qwen38.env for defaults; every value can still be
+# overridden from the environment, same convention as
+# deploy/vllm-qwen38-nvfp4/run.
+env_file=${SGLANG_ENV_FILE:-"$(CDPATH= cd -- "$(dirname -- "$0")/../../config/sglang" && pwd)/qwen38.env"}
+if [ -f "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+
+image=${SGLANG_IMAGE:-lmsysorg/sglang:v0.5.19@sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9}
+model_dir=${MODEL_PATH:-/home/llmstack/models/RadixArk-Qwen3.8-27B-NVFP4}
+served_model_name=${SERVED_MODEL_NAME:-qwen-3.8-27b}
+container_name=${SGLANG_CONTAINER_NAME:-sglang-qwen38}
+port=${PORT:-30000}
+api_key_file=${API_KEY_FILE:-/home/llmstack/.config/sglang/api_key}
+extra_args=${SGLANG_ARGS:-}
+
+test -f "$model_dir/model.safetensors.index.json" || {
+  printf '%s\n' "Model is incomplete: $model_dir" >&2
+  exit 1
+}
+test -s "$api_key_file" || {
+  printf '%s\n' "API key is missing: $api_key_file" >&2
+  exit 1
+}
+if docker container inspect "$container_name" >/dev/null 2>&1; then
+  printf '%s\n' "Container already exists: $container_name" >&2
+  printf '%s\n' "Remove it explicitly before starting a replacement." >&2
+  exit 1
+fi
+
+# --network host: SGLang's OpenAI endpoint must be reachable from the k3d
+# node at host.k3d.internal:$port (k3d's own alias for the Docker bridge
+# gateway on this host), not just from other containers on this network.
+# shellcheck disable=SC2086
+exec docker run \
+  --detach \
+  --name "$container_name" \
+  --gpus all \
+  --ipc host \
+  --shm-size 16g \
+  --network host \
+  --ulimit memlock=-1 \
+  --volume "$model_dir:/model:ro" \
+  --volume "$api_key_file:/run/secrets/sglang_api_key:ro" \
+  --entrypoint /bin/bash \
+  "$image" \
+  -lc 'exec sglang "$@" --api-key "$(cat /run/secrets/sglang_api_key)"' \
+  _ \
+  serve \
+  --model-path /model \
+  --served-model-name "$served_model_name" \
+  --host 0.0.0.0 \
+  --port "$port" \
+  $extra_args \
+  "$@"

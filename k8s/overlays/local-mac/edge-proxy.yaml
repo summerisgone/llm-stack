@@ -1,0 +1,41 @@
+# LOCAL-MAC PROFILE ONLY.
+#
+# The development `edge` Gateway on :8080. The remote profile's `edge`
+# Gateway (listener `external`, port from values) is owned by
+# helm/airgap-stack/templates/gateway.yaml; two definitions of the same
+# Gateway is exactly the drift this split removes.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: edge
+  namespace: airgap-ai-stack
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 1
+      envoyService:
+        name: airgap-ai-edge
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edge
+  namespace: airgap-ai-stack
+spec:
+  gatewayClassName: envoy
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: edge
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 8080
+      allowedRoutes:
+        namespaces:
+          from: Same

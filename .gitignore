@@ -1,0 +1,13 @@
+.DS_Store
+.env
+__pycache__/
+*.pyc
+secrets/*.txt
+secrets/*.pem
+secrets/*.key
+models/*
+!models/manifest.yaml
+!models/checksums.txt
+helm/airgap-stack/runtime.secret.yaml
+.claude/*.lock
+.claude/settings.local.json

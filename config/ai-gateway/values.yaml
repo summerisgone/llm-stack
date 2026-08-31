@@ -1,0 +1,5 @@
+controller:
+  # Apply the trusted identity headers to GenAI spans as well as Envoy spans.
+  # Keep the default session mapping; user identity must not be a metric label.
+  # Each header can map to only one attribute (duplicate keys overwrite).
+  spanRequestHeaderAttributes: "agent-session-id:session.id,x-session-key:session.id,x-user-name:langfuse.user.id,x-user-id:langfuse.trace.metadata.user_subject,x-pat-token-id:langfuse.trace.metadata.pat_token_id"

@@ -1,0 +1,31 @@
+# The remote WSL profile uses the llm-d standalone router through a plain
+# Envoy Gateway Backend, so no GAIE InferencePool backend resource is
+# registered. Envoy AI Gateway still registers as the translation extension,
+# so its xds-translator hooks are declared exactly as in the local profile but
+# with an empty backendResources list.
+config:
+  envoyGateway:
+    extensionApis:
+      enableBackend: true
+      enableEnvoyPatchPolicy: true
+    extensionManager:
+      hooks:
+        xdsTranslator:
+          translation:
+            listener:
+              includeAll: true
+            route:
+              includeAll: true
+            cluster:
+              includeAll: true
+            secret:
+              includeAll: true
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+      backendResources: []

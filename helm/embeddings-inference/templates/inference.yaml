@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.name }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Values.name }}
+  ports:
+    - name: http
+      port: {{ .Values.inference.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Values.name }}
+    spec:
+      {{- if eq .Values.accelerator "gpu" }}
+      runtimeClassName: nvidia
+      {{- end }}
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.nodeName }}
+      containers:
+        - name: embeddings
+          {{- if eq .Values.accelerator "gpu" }}
+          image: {{ required "values.image.gpu must be set (EMBEDDINGS_GPU_IMAGE, chosen at ADR-0013 V3) before accelerator: gpu can be used" .Values.image.gpu | quote }}
+          {{- else }}
+          image: {{ .Values.image.cpu | quote }}
+          {{- end }}
+          imagePullPolicy: IfNotPresent
+          # Flags verified for real, twice: once via docker directly on the
+          # remote-wsl-vllm-nvfp4 host, then again against this exact chart
+          # deployed live in the cluster (2026-09-14) -- weights load via
+          # candle (pytorch_model.bin directly, no safetensors needed), the
+          # real bge-m3 revision at ~/models/bge-m3, full contract passing
+          # against the live Service: 200/1024-dim/L2-normalized single
+          # request, a 32-item batch (200, all 32 returned), a 33-item batch
+          # (422 "batch size 33 > maximum allowed batch size 32"), a >8192
+          # token item (422 "must have less than 8192 tokens", not silently
+          # truncated), and /info reporting served_model_name "bge-m3".
+          # Three bugs this process caught and fixed: --auto-truncate
+          # defaults to true (would have silently truncated over-length
+          # input, contradicting the ADR's contract); --served-model-name
+          # was missing (without it, responses/-info report model_id
+          # "/model", the mount path, instead of "bge-m3"); and the initial
+          # resources/probe values below were paper guesses that OOMKilled
+          # and then livenessProbe-killed the pod in the real cluster -- see
+          # their own comments for the measured numbers that replaced them.
+          # The CPU candle backend also logs "Backend does not support a
+          # batch size > 4" and processes batches in internal groups of 4,
+          # transparent to the client (the 32-item batch test still 200s).
+          args:
+            - --model-id
+            - /model
+            - --served-model-name
+            - {{ .Values.inference.servedModelName | quote }}
+            - --port
+            - {{ .Values.inference.port | quote }}
+            - --max-client-batch-size
+            - {{ .Values.inference.maxClientBatchSize | quote }}
+            - --max-batch-tokens
+            - {{ .Values.inference.maxBatchTokens | quote }}
+            - --max-concurrent-requests
+            - {{ .Values.inference.maxConcurrentRequests | quote }}
+            - --tokenization-workers
+            - {{ .Values.inference.tokenizationWorkers | quote }}
+            - --auto-truncate
+            - "false"
+          env:
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            {{- if eq .Values.accelerator "gpu" }}
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+            - name: LD_LIBRARY_PATH
+              value: /usr/lib/x86_64-linux-gnu:/usr/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.inference.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            # Warmup measured ~150s unconstrained (16 CPU) but >210s under
+            # this pod's own cpu limit -- a real deploy hit the old
+            # livenessProbe's 210s grace exactly (killed the container mid
+            # warmup, 2026-09-14) before this was widened. ~10min grace here.
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- if eq .Values.accelerator "gpu" }}
+            {{- toYaml .Values.gpu.resources | nindent 12 }}
+            {{- else }}
+            {{- toYaml .Values.resources | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: model
+              mountPath: /model
+              readOnly: true
+      volumes:
+        - name: model
+          persistentVolumeClaim:
+            claimName: {{ .Values.modelClaim }}

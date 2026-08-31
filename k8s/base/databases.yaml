@@ -1,0 +1,92 @@
+# Database operators are installed separately by `make operators-up`. These
+# resources own the stateful workloads; application Deployments never create a
+# PostgreSQL, ClickHouse or Valkey StatefulSet themselves.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: keycloak-db
+  namespace: airgap-ai-stack
+spec:
+  instances: 1
+  storage:
+    size: 5Gi
+  bootstrap:
+    initdb: {}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: langfuse-db
+  namespace: airgap-ai-stack
+spec:
+  instances: 1
+  storage:
+    size: 10Gi
+  bootstrap:
+    initdb: {}
+---
+# PAT hashes are deliberately isolated from Keycloak and telemetry data. CNPG
+# creates the `pat-db-app` Secret consumed by the self-service deployment.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pat-db
+  namespace: airgap-ai-stack
+spec:
+  instances: 1
+  storage:
+    size: 5Gi
+  bootstrap:
+    initdb: {}
+---
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: langfuse-clickhouse
+  namespace: airgap-ai-stack
+spec:
+  configuration:
+    users:
+      langfuse/password: langfuse-demo-only
+      langfuse/networks/ip: ::/0
+    clusters:
+      - name: main
+        layout:
+          shardsCount: 1
+          replicasCount: 1
+        templates:
+          podTemplate: clickhouse
+          volumeClaimTemplate: data
+  templates:
+    podTemplates:
+      - name: clickhouse
+        spec:
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:25.12
+    volumeClaimTemplates:
+      - name: data
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 20Gi
+---
+apiVersion: redis.redis.opstreelabs.in/v1beta2
+kind: RedisReplication
+metadata:
+  name: langfuse-valkey
+  namespace: airgap-ai-stack
+spec:
+  clusterSize: 1
+  kubernetesConfig:
+    image: valkey/valkey:8.0.2-alpine
+    imagePullPolicy: IfNotPresent
+  storage:
+    keepAfterDelete: true
+    volumeClaimTemplate:
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi

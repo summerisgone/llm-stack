@@ -1,0 +1,161 @@
+#!/usr/bin/env sh
+# provision-legacy-token — создаёт пользователя в Keycloak и вставляет
+# в БД PAT-сервиса токен с заранее известным значением.
+#
+# Используется при миграции со старых систем с фиксированными API-ключами:
+# пользователи продолжают работать с теми же токенами, а позже переходят на SSO.
+#
+# Обязательные переменные окружения:
+#   LEGACY_TOKEN      — значение токена, например sk-<ваш-старый-ключ>
+#   KC_USERNAME       — логин нового пользователя в Keycloak
+#   KC_EMAIL          — email пользователя
+#
+# Опциональные:
+#   KC_FIRST_NAME     — имя (default: KC_USERNAME)
+#   KC_LAST_NAME      — фамилия (default: "")
+#   KC_PASSWORD       — начальный пароль; если не задан, аккаунт создаётся
+#                       без пароля (только SSO через корпоративный IdP)
+#   TOKEN_NAME        — метка токена в UI (default: "Legacy token")
+#   EXPIRES_IN_DAYS   — срок действия в днях (default: 365, max: 3650)
+#   PUBLIC_BASE_URL   — внешний URL стека
+#   K8S_NAMESPACE     — неймспейс (default: airgap-ai-stack)
+#   KEYCLOAK_ADMIN_USER / KEYCLOAK_ADMIN_PASSWORD
+
+set -eu
+
+: "${LEGACY_TOKEN:?Задайте LEGACY_TOKEN}"
+: "${KC_USERNAME:?Задайте KC_USERNAME}"
+: "${KC_EMAIL:?Задайте KC_EMAIL}"
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+token_name=${TOKEN_NAME:-Legacy token}
+expires_days=${EXPIRES_IN_DAYS:-365}
+kc_first=${KC_FIRST_NAME:-$KC_USERNAME}
+kc_last=${KC_LAST_NAME:-}
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+
+# Токен должен начинаться с sk-
+case "$LEGACY_TOKEN" in
+  sk-*) ;;
+  *) printf 'LEGACY_TOKEN должен начинаться с sk-\n' >&2; exit 1 ;;
+esac
+
+# PAT_HASH_KEY из .env (нужен для вычисления хэша)
+pat_hash_key=$(sed -n 's/^PAT_HASH_KEY=//p' .env | tail -n 1)
+[ -n "$pat_hash_key" ] || { printf 'PAT_HASH_KEY не найден в .env\n' >&2; exit 1; }
+
+# ── Keycloak port-forward ────────────────────────────────────────────────────
+kc_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); p=s.getsockname()[1]; s.close(); print(p)')
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_port:8080" &
+kc_pid=$!
+cleanup() { kill "$kc_pid" 2>/dev/null; wait "$kc_pid" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+
+attempt=0
+until curl -fsS "http://127.0.0.1:$kc_port/sso/realms/ai-stack/.well-known/openid-configuration" >/dev/null 2>&1; do
+  attempt=$((attempt+1)); [ "$attempt" -gt 20 ] && { printf 'Keycloak не отвечает\n' >&2; exit 1; }; sleep 1
+done
+
+kc_base="http://127.0.0.1:$kc_port/sso"
+admin_token=$(curl -fsS -X POST "$kc_base/realms/master/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+admin_api="$kc_base/admin/realms/ai-stack"
+auth_h="Authorization: Bearer $admin_token"
+
+# ── Создать или найти пользователя ───────────────────────────────────────────
+existing=$(curl -fsS -H "$auth_h" "$admin_api/users?username=$KC_USERNAME&exact=true")
+user_id=$(printf '%s' "$existing" | python3 -c 'import json,sys; users=json.load(sys.stdin); print(users[0]["id"] if users else "")')
+
+if [ -z "$user_id" ]; then
+  printf 'Создаю пользователя %s...\n' "$KC_USERNAME"
+  # Собираем payload; пароль опционален
+  cred_block=""
+  if [ -n "${KC_PASSWORD:-}" ]; then
+    cred_block=",\"credentials\":[{\"type\":\"password\",\"value\":\"$KC_PASSWORD\",\"temporary\":true}]"
+  fi
+  user_payload="{\"username\":\"$KC_USERNAME\",\"email\":\"$KC_EMAIL\",\"firstName\":\"$kc_first\",\"lastName\":\"$kc_last\",\"enabled\":true,\"emailVerified\":true$cred_block}"
+  create_resp=$(curl -fsS -w '\n%{http_code}' -X POST -H "$auth_h" -H 'Content-Type: application/json' \
+    "$admin_api/users" -d "$user_payload")
+  http_code=$(printf '%s' "$create_resp" | tail -n1)
+  [ "$http_code" = "201" ] || { printf 'Ошибка создания пользователя: %s\n' "$http_code" >&2; exit 1; }
+  user_id=$(curl -fsS -H "$auth_h" "$admin_api/users?username=$KC_USERNAME&exact=true" | \
+    python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+else
+  printf 'Пользователь %s уже существует (id=%s), использую его.\n' "$KC_USERNAME" "$user_id"
+fi
+
+# ── Назначить роль ai-user ───────────────────────────────────────────────────
+role_rep=$(curl -fsS -H "$auth_h" "$admin_api/roles/ai-user")
+role_id=$(printf '%s' "$role_rep" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+role_name=$(printf '%s' "$role_rep" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
+
+curl -fsS -X POST -H "$auth_h" -H 'Content-Type: application/json' \
+  "$admin_api/users/$user_id/role-mappings/realm" \
+  -d "[{\"id\":\"$role_id\",\"name\":\"$role_name\"}]"
+printf 'Роль ai-user назначена.\n'
+
+# ── Вычислить HMAC токена ────────────────────────────────────────────────────
+# Воспроизводим tokenHash() из pat-service: HMAC-SHA256(token, PAT_HASH_KEY),
+# результат — raw bytes в escaped-hex для psql
+token_hash_hex=$(python3 - <<PYEOF
+import hmac, hashlib, sys
+key = b"$pat_hash_key"
+token = b"$LEGACY_TOKEN"
+h = hmac.new(key, token, hashlib.sha256).digest()
+print(h.hex())
+PYEOF
+)
+
+token_prefix=$(printf '%s' "$LEGACY_TOKEN" | cut -c1-15)
+
+# ── Postgres: работаем через kubectl exec в primary-под ──────────────────────
+# (на хосте нет ни pg_isready, ни psql — клиентские утилиты живут в поде)
+pg_pod=$(kubectl -n "$namespace" get pods -l cnpg.io/cluster=pat-db,cnpg.io/instanceRole=primary \
+  -o jsonpath='{.items[0].metadata.name}')
+[ -n "$pg_pod" ] || { printf 'primary-под pat-db не найден\n' >&2; exit 1; }
+
+attempt=0
+until kubectl -n "$namespace" exec "$pg_pod" -- pg_isready -h 127.0.0.1 -p 5432 -q 2>/dev/null; do
+  attempt=$((attempt+1)); [ "$attempt" -gt 15 ] && { printf 'pat-db не отвечает\n' >&2; exit 1; }; sleep 1
+done
+
+# Получаем DATABASE_URL из секрета (CloudNativePG кладёт его туда автоматически)
+db_url=$(kubectl -n "$namespace" get secret pat-db-app -o jsonpath='{.data.uri}' | base64 -d)
+# Подменяем хост/порт на localhost внутри primary-пода
+db_url_pf=$(printf '%s' "$db_url" | sed 's|@[^/]*|@127.0.0.1:5432|')
+
+# Генерируем id записи (16 байт → base64url, как в go randomURL(16))
+token_id=$(python3 -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(16)).rstrip(b'=').decode())")
+
+expires_at=$(python3 -c "
+from datetime import datetime, timedelta, timezone
+d = datetime.now(timezone.utc) + timedelta(days=$expires_days)
+print(d.isoformat())
+")
+
+# ── Вставить в БД ────────────────────────────────────────────────────────────
+kubectl -n "$namespace" exec -i "$pg_pod" -- psql "$db_url_pf" -v ON_ERROR_STOP=1 <<SQL
+INSERT INTO personal_access_tokens
+  (id, owner_subject, owner_name, token_hash, token_prefix, name, expires_at)
+VALUES
+  ('$token_id',
+   '$user_id',
+   '$KC_USERNAME',
+   decode('$token_hash_hex', 'hex'),
+   '$token_prefix',
+   '$token_name',
+   '$expires_at')
+ON CONFLICT (token_hash) DO NOTHING;
+SQL
+
+printf '\n✓ Готово.\n'
+printf '  Пользователь Keycloak : %s (%s)\n' "$KC_USERNAME" "$user_id"
+printf '  Токен (prefix)         : %s...\n' "$token_prefix"
+printf '  Действует до           : %s\n' "$expires_at"
+printf '\nПользователь может работать с токеном как раньше.\n'
+printf 'Когда будет готов переход на SSO — попросите его войти через браузер\n'
+printf 'на /platform/ и создать новый токен; старый можно отозвать из UI.\n'

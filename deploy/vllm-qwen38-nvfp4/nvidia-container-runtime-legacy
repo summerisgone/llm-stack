@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+export NVIDIA_CTK_CONFIG_FILE_PATH=/opt/nvidia/nvidia-container-runtime-legacy.toml
+exec /usr/bin/nvidia-container-runtime "$@"

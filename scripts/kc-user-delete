@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Delete a Keycloak user through the admin API."""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib_keycloak_admin import KeycloakAdmin  # noqa: E402
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Delete a Keycloak user.")
+    parser.add_argument("username")
+    args = parser.parse_args()
+
+    with KeycloakAdmin() as kc:
+        users = kc.request("GET", f"/users?username={args.username}&exact=true")
+        if not users:
+            sys.exit(f"no such user: {args.username}")
+        user_id = users[0]["id"]
+        kc.request("DELETE", f"/users/{user_id}")
+
+    print(f"deleted {args.username} ({user_id})")
+
+
+if __name__ == "__main__":
+    main()

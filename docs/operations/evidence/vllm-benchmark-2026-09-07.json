@@ -1,0 +1,66 @@
+{
+  "note": "Context-length tuning session, TASK-qos-fair-share.md follow-up. All requests through a Kubernetes exec into the vLLM pod itself, hitting localhost:8000 directly (no PAT/AI Gateway/EPP hop). max-num-seqs stayed at 2 throughout.",
+  "config_before": {
+    "max_model_len": 84672,
+    "gpu_memory_utilization": 0.90,
+    "kv_offloading_size_gib": null,
+    "gpu_kv_cache_size_tokens": 186278,
+    "max_concurrency_at_max_model_len": 2.20
+  },
+  "config_after": {
+    "max_model_len": 131072,
+    "gpu_memory_utilization": 0.94,
+    "kv_offloading_backend": "native",
+    "kv_offloading_size_gib": 8,
+    "dshm_size_gib": 12,
+    "gpu_kv_cache_size_tokens": 230104,
+    "max_concurrency_at_max_model_len": 1.7556,
+    "num_gpu_blocks": 158,
+    "block_size_tokens": 1568
+  },
+  "gpu_memory_utilization_ceiling_probe": {
+    "note": "Binary search on gpu-memory-utilization with max-model-len=84672 fixed, to find the real headroom on this card before picking 0.94.",
+    "0.90": {"gpu_kv_cache_size_tokens": 186278, "nvidia_smi_free_mib": 1886},
+    "0.93": {"gpu_kv_cache_size_tokens": 214502, "nvidia_smi_free_mib": 3698},
+    "0.94": {"gpu_kv_cache_size_tokens": 222969, "nvidia_smi_free_mib": 3443},
+    "0.95": {"result": "crash at startup", "error": "ValueError: Free memory on device cuda:0 (30.2/31.84 GiB) on startup is less than desired GPU memory utilization (0.95, 30.25 GiB)."}
+  },
+  "short_prompt_benchmark": {
+    "method": "Same methodology as docs/operations/evidence/vllm-benchmark-2026-09-04.json: 25-27 token synthetic prompt, ignore_eos=true, max_tokens=512 (all requests hit finish_reason=length, i.e. genuinely decoded 512 tokens each), temperature=0, streaming with usage, enable_thinking=false. 3 sequential single requests then 2 concurrent requests, run from an idle server.",
+    "baseline_2026-09-04_84672_no_offload": {
+      "single_decode_tokens_per_second": [71.25, 71.44, 71.59],
+      "concurrent_two_decode_tokens_per_second": [66.55, 66.26],
+      "concurrent_aggregate_tokens_per_second": 126.91
+    },
+    "131072_with_offload_8gib": {
+      "timestamp_utc": "2026-09-07T03:50:28Z",
+      "single_decode_tokens_per_second": [62.46, 62.52, 62.71],
+      "concurrent_two_decode_tokens_per_second": [61.88, 61.97],
+      "concurrent_aggregate_tokens_per_second": 119.30
+    },
+    "131072_without_offload_isolation_test": {
+      "timestamp_utc": "2026-09-07T03:55:32Z",
+      "single_decode_tokens_per_second": [66.62, 66.68, 66.65],
+      "concurrent_two_decode_tokens_per_second": [61.56, 61.49],
+      "concurrent_aggregate_tokens_per_second": 113.93
+    },
+    "reading": "Raising max-model-len 84672->131072 and gpu-memory-utilization 0.90->0.94 costs ~6-12% single-request decode throughput on its own (71->66.6 tok/s), consistent with larger block-table/CUDA-graph padding at longer max-model-len. Enabling kv-offloading-size=8 on top costs a further ~5-6% on single requests (66.6->62.5 tok/s) from the connector's per-step bookkeeping, but is within noise on the 2-concurrent case (61.5 vs 61.9 tok/s) -- the offload connector's overhead is a near-fixed per-step cost that shows up more clearly when GPU compute itself is cheap (short context, single request) than when it is already the bottleneck (2 concurrent requests)."
+  },
+  "long_context_concurrent_stress_test": {
+    "method": "Two concurrent chat completions with distinct ~110-117k token synthetic prompts (different filler text so they do not share a prefix-cache hit), max_tokens=64, ignore_eos=true, temperature=0, run against the 131072/0.94/offload-8GiB config. Combined prompt tokens (~228k) sit right at the 230,104-token GPU KV pool.",
+    "timestamp_utc": "2026-09-07T~03:59Z",
+    "metrics_before": {"kv_offload_store_bytes_total": 10783752192, "num_requests_running": 2, "kv_cache_usage_perc": 0.2357},
+    "metrics_after": {"kv_offload_store_bytes_total": 17357078528, "kv_offload_load_bytes_total": 513409024, "num_requests_running": 1, "kv_cache_usage_perc": 0.2038},
+    "results": [
+      {"prompt_tokens": 111132, "output_tokens": 61, "finish_reason": "length", "ttft_seconds": 3.79, "decode_tokens_per_second": 45.21},
+      {"prompt_tokens": 117042, "output_tokens": 64, "finish_reason": "length", "ttft_seconds": 48.43, "decode_tokens_per_second": 26.92}
+    ],
+    "reading": "Both requests completed successfully (finish_reason=length, no errors, no crash, no restart) with a combined live context (~228k tokens) that exceeds the raw GPU-resident KV pool (230,104 tokens) once max-num-seqs=2 concurrency is accounted for at this max-model-len. kv_offload_load_bytes_total went from 0 to ~513MB during the run: the CPU offload buffer was genuinely read from, i.e. some of request 1's evicted-then-needed blocks were reloaded from CPU RAM instead of being recomputed. Decode speed at this real long context (27-45 tok/s) is well below the short-prompt figures above -- expected, since attention cost during decode scales with context length, not a regression from the tuning itself. TTFT for the second request (48.4s) reflects two ~115k-token prefills sharing max-num-batched-tokens=8192 chunked-prefill slots on one GPU, not KV eviction cost."
+  },
+  "node_memory_after_stress_test": {
+    "kubectl_top_node_percent": 69,
+    "nvidia_smi_free_mib_after_burst": 996,
+    "nvidia_smi_free_mib_idle": 3443,
+    "note": "PyTorch's CUDA caching allocator does not release memory back to the driver after a burst, so free GPU memory measured via nvidia-smi is tighter after real long-context load than at idle. This is expected allocator behavior, not a leak; smoke test and /health stayed green throughout."
+  }
+}

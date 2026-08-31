@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Add a Keycloak user through the admin API, assign a realm role and set a
+policy-conforming password. Prints the generated password once; it is not
+recoverable afterwards.
+"""
+import argparse
+import os
+import secrets
+import string
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib_keycloak_admin import KeycloakAdmin  # noqa: E402
+
+
+def generate_password():
+    # Realm password policy (provision-realm-security): 12+ chars, upper,
+    # lower, digit, special.
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        pw = "".join(secrets.choice(alphabet) for _ in range(16)) + secrets.choice("!@#$%^&*-_")
+        if any(c.islower() for c in pw) and any(c.isupper() for c in pw) and any(c.isdigit() for c in pw):
+            return pw
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Add a Keycloak user via the admin API.")
+    parser.add_argument("username")
+    parser.add_argument("role", nargs="?", default="ai-user")
+    parser.add_argument("email", nargs="?", help="defaults to <username>@ai-stack.local")
+    parser.add_argument("first_name", nargs="?", help="defaults to <username>")
+    parser.add_argument("last_name", nargs="?", default="User")
+    args = parser.parse_args()
+
+    email = args.email or f"{args.username}@ai-stack.local"
+    # The realm's user-profile config requires firstName/lastName for role
+    # "user" (users/profile, attribute .required.roles); omitting them does
+    # not fail user creation but makes Keycloak insert an implicit
+    # VERIFY_PROFILE action at login time, which direct-grant reports as the
+    # same "Account is not fully set up" / resolve_required_actions error as
+    # a leftover CONFIGURE_TOTP action.
+    first_name = args.first_name or args.username
+
+    with KeycloakAdmin() as kc:
+        existing = kc.request("GET", f"/users?username={args.username}&exact=true")
+        if existing:
+            sys.exit(f"user already exists: {args.username}")
+
+        password = generate_password()
+        kc.request(
+            "POST",
+            "/users",
+            {
+                "username": args.username,
+                "email": email,
+                "firstName": first_name,
+                "lastName": args.last_name,
+                "enabled": True,
+                "emailVerified": True,
+                "requiredActions": [],
+            },
+        )
+        users = kc.request("GET", f"/users?username={args.username}&exact=true")
+        user_id = users[0]["id"]
+
+        role = kc.request("GET", f"/roles/{args.role}")
+        kc.request("POST", f"/users/{user_id}/role-mappings/realm", [role])
+
+        kc.request(
+            "PUT",
+            f"/users/{user_id}/reset-password",
+            {"type": "password", "value": password, "temporary": False},
+        )
+
+        # The realm's CONFIGURE_TOTP default action (provision-realm-security)
+        # is re-added to every new user regardless of the empty
+        # requiredActions passed at creation; clear it now or
+        # direct-grant/browser login fails with "Account is not fully set
+        # up".
+        kc.request("PUT", f"/users/{user_id}", {"requiredActions": []})
+
+    print(f"user:     {args.username}")
+    print(f"user_id:  {user_id}")
+    print(f"email:    {email}")
+    print(f"role:     {args.role}")
+    print(f"password: {password}")
+
+
+if __name__ == "__main__":
+    main()

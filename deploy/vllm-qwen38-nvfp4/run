@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+set -eu
+
+image=${VLLM_IMAGE:-llm-stack/vllm-qwen38-nvfp4:0.27.1}
+model_dir=${VLLM_MODEL_DIR:-/home/llmstack/models/RadixArk-Qwen3.8-27B-NVFP4}
+container_name=${VLLM_CONTAINER_NAME:-vllm-qwen38-nvfp4}
+port=${VLLM_PORT:-8000}
+
+test -f "$model_dir/config.json" || {
+  printf '%s\n' "Model config not found: $model_dir/config.json" >&2
+  exit 1
+}
+
+if docker container inspect "$container_name" >/dev/null 2>&1; then
+  printf '%s\n' "Container already exists: $container_name" >&2
+  printf '%s\n' "Remove it explicitly before starting a replacement." >&2
+  exit 1
+fi
+
+exec docker run \
+  --detach \
+  --name "$container_name" \
+  --gpus all \
+  --ipc host \
+  --ulimit memlock=-1 \
+  --publish "$port:8000" \
+  --volume "$model_dir:/model:ro" \
+  "$image" \
+  "$@"

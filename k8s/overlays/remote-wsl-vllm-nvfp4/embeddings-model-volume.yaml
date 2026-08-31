@@ -1,0 +1,46 @@
+# docs/adr/0013-embeddings-api-bge-m3.md. Same pattern as model-volume.yaml:
+# a static, read-only PV over a host bind mount, kept outside Helm (Makefile
+# GPU_OBJECTS, scripts/helm-render GPU_KEEP_OUT) so a chart upgrade never
+# touches it. hostPath matches model-volume.yaml's own documented mapping
+# (/var/lib/models is a read-only k3d bind mount of /home/llmstack/models on
+# the WSL2 host) -- weights are on the host at ~/models/bge-m3, rsynced there
+# and sha256-verified against models/checksums.txt on 2026-09-14.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: embeddings-bge-m3-model
+  labels:
+    app.kubernetes.io/name: embeddings-bge-m3
+spec:
+  capacity:
+    storage: 8Gi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  volumeMode: Filesystem
+  hostPath:
+    path: /var/lib/models/bge-m3
+    type: Directory
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k3d-llm-stack-server-0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: embeddings-bge-m3-model
+  namespace: airgap-ai-stack
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 8Gi
+  storageClassName: ""
+  volumeName: embeddings-bge-m3-model

@@ -1,0 +1,76 @@
+#!/usr/bin/env sh
+set -eu
+
+# Cross-host pat-service deploy from a workstation with no registry.
+#
+# pat-service runs with imagePullPolicy: Never, so its image must be present
+# in the k3d node's containerd before a pod can start. There is no shared
+# registry to push to, so this script: builds the linux/amd64 image on the
+# workstation (`make pat-image`), saves it as a tar, copies the tar to the
+# remote k3d host over SSH, and imports it straight into the node's
+# containerd. k3d-load-pat-service is the same import but run ON the WSL2
+# host, where `docker` already points at the node; this one works from a
+# workstation whose docker daemon is unrelated to the node. After the import
+# the pat-service Deployment is rolled out (via host kubectl) so a running
+# pod picks up the new image.
+#
+# The image is built for linux/amd64 even on Apple silicon via buildx.
+# An older copy already on the node (same tag, different digest) is dropped
+# before the import, otherwise the kubelet keeps scheduling the cached
+# digest while the pod reports Pending/ErrImageNotFound.
+#
+# Environment overrides (same names as the Makefile remote vars):
+#   WSL_SSH_HOST (default llmstack@gpu-host.local)
+#   WSL_SSH_PORT (default 2222)
+#   K3D_CLUSTER  (default llm-stack)
+#   PAT_IMAGE    (default airgap-ai-stack/pat-service:local)
+
+host=${WSL_SSH_HOST:-llmstack@gpu-host.local}
+port=${WSL_SSH_PORT:-2222}
+cluster=${K3D_CLUSTER:-llm-stack}
+node="k3d-$cluster-server-0"
+image=${PAT_IMAGE:-airgap-ai-stack/pat-service:local}
+tar=/tmp/pat-service.tar
+
+docker image inspect "$image" --format '{{.Id}}' >/dev/null 2>&1 || {
+  printf '%s\n' "pat-service image is not present locally: $image" >&2
+  printf '%s\n' 'Build it with: make pat-image' >&2
+  exit 1
+}
+
+printf '%s\n' "Saving $image to $tar"
+docker save "$image" -o "$tar"
+printf '%s\n' "Copying $tar to $host:/tmp/pat-service.tar"
+scp -q -P "$port" "$tar" "${host}:/tmp/pat-service.tar"
+
+# Import half runs on the remote host, which owns the k3d node container.
+ssh -p "$port" "$host" sh -s -- "$node" "$image" <<'EOF'
+set -eu
+node=$1
+tag=$2
+
+# Drop the existing image from the node's containerd so the freshly imported
+# image (possibly the same tag, different digest) takes its place before any
+# new pod schedules.
+docker cp /tmp/pat-service.tar "$node:/tmp/pat-service.tar"
+docker exec "$node" sh -c 'ctr -n k8s.io images rm "$(ctr -n k8s.io images ls -q | grep -E "airgap-ai-stack/pat-service(:|@)")" 2>/dev/null || true'
+docker exec "$node" ctr -n k8s.io images import /tmp/pat-service.tar
+docker exec "$node" rm -f /tmp/pat-service.tar
+docker exec "$node" crictl images | grep -q 'airgap-ai-stack/pat-service' || {
+  printf '%s\n' "pat-service image is not visible in the node: $tag" >&2
+  exit 1
+}
+
+# Restart the pat-service workload so it schedules against the freshly
+# imported image (imagePullPolicy: Never caches the old digest otherwise).
+# Skip cleanly if the Deployment does not exist yet (first-time deploy).
+if kubectl -n airgap-ai-stack get deployment/pat-service >/dev/null 2>&1; then
+  kubectl -n airgap-ai-stack rollout restart deployment/pat-service
+  kubectl -n airgap-ai-stack rollout status deployment/pat-service --timeout=180s
+else
+  printf '%s\n' 'pat-service Deployment not present; nothing to restart.' >&2
+fi
+EOF
+
+rm -f "$tar"
+printf '%s\n' "Imported $image into k3d cluster $cluster on $host."

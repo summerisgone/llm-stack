@@ -1,0 +1,42 @@
+# /var/lib/models is a read-only k3d bind mount of /home/llmstack/models on the
+# remote WSL2 host. This static PV keeps weights outside container images and
+# allows more model directories to be exposed as distinct claims later.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vllm-qwen38-nvfp4-model
+  labels:
+    app.kubernetes.io/name: vllm-qwen38-nvfp4
+spec:
+  capacity:
+    storage: 24Gi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  volumeMode: Filesystem
+  hostPath:
+    path: /var/lib/models/RadixArk-Qwen3.8-27B-NVFP4
+    type: Directory
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k3d-llm-stack-server-0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vllm-qwen38-nvfp4-model
+  namespace: airgap-ai-stack
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 24Gi
+  storageClassName: ""
+  volumeName: vllm-qwen38-nvfp4-model

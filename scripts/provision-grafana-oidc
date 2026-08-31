@@ -1,0 +1,61 @@
+#!/usr/bin/env sh
+set -eu
+
+grafana_base_url=${GRAFANA_BASE_URL:-http://grafana.gpu-host.local:32030}
+client_secret=${GRAFANA_OIDC_CLIENT_SECRET:-grafana-oauth-demo-only}
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+
+# Keycloak realm-management admin. Rotated per site; never hardcode it.
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+
+# The admin surface is closed on the public origin. Use a port-forward.
+kc_pf_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); p=s.getsockname()[1]; s.close(); print(p)')
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_pf_port:8080" &
+kc_pf_pid=$!
+trap 'kill "$kc_pf_pid" 2>/dev/null; wait "$kc_pf_pid" 2>/dev/null || true' EXIT INT TERM
+
+attempt=0
+until curl -fsS "http://127.0.0.1:$kc_pf_port/sso/realms/ai-stack/.well-known/openid-configuration" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 15 ]; then
+    printf '%s\n' "Keycloak port-forward did not become ready" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+issuer="http://127.0.0.1:$kc_pf_port/sso/realms/master"
+admin_api="http://127.0.0.1:$kc_pf_port/sso/admin/realms/ai-stack"
+
+admin_token=$(curl -fsS -X POST "$issuer/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+client_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients?clientId=grafana" | \
+  python3 -c 'import json,sys; clients=json.load(sys.stdin); print(clients[0]["id"] if clients else "")')
+
+client_payload="{\"clientId\":\"grafana\",\"name\":\"Grafana\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"secret\":\"$client_secret\",\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"redirectUris\":[\"$grafana_base_url/login/generic_oauth\"],\"webOrigins\":[\"$grafana_base_url\"],\"defaultClientScopes\":[\"basic\",\"profile\",\"email\",\"roles\",\"groups\"]}"
+
+if [ -z "$client_id" ]; then
+  curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+    "$admin_api/clients" \
+    -d "$client_payload"
+  client_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients?clientId=grafana" | \
+    python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+else
+  curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+    "$admin_api/clients/$client_id" \
+    -d "$client_payload"
+fi
+
+stored_secret=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients/$client_id/client-secret" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+
+if [ "$stored_secret" != "$client_secret" ]; then
+  printf '%s\n' 'Grafana Keycloak client secret differs from the configured demo secret.' >&2
+  exit 1
+fi
+
+printf '%s\n' 'Grafana Keycloak OIDC client is ready.'

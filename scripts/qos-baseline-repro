@@ -1,0 +1,71 @@
+#!/usr/bin/env sh
+set -eu
+
+# Reproduces the QoS problem statement (TASK-qos-fair-share.md, Stage 0.4):
+# one user floods 4 parallel long chat completions against the 2-slot vLLM
+# deployment while a second user sends a single request, and we measure how
+# long the second user waits behind the first user's flood.
+#
+# Needs two personal access tokens for two different Keycloak users (so the
+# requests carry two different X-Llm-D-Inference-Fairness-Id values). Create
+# throwaway ones with:
+#
+#   python3 scripts/kc-user-add qos-test-a
+#   python3 scripts/kc-user-add qos-test-b
+#   STACK_BASE_URL=<origin> python3 scripts/kc-pat-issue qos-test-a <password-a> repro-a 1
+#   STACK_BASE_URL=<origin> python3 scripts/kc-pat-issue qos-test-b <password-b> repro-b 1
+#
+# then:
+#
+#   QOS_PAT_A=sk-... QOS_PAT_B=sk-... STACK_BASE_URL=<origin> \
+#     ./scripts/qos-baseline-repro [output-dir]
+#
+# The default per-user rate limit (llmd-per-user-limit, 3 req/min) makes the
+# 4-parallel burst trip 429s before the interesting concurrency behaviour
+# shows up. Raise it for the duration of the measurement, e.g.:
+#
+#   kubectl -n airgap-ai-stack patch backendtrafficpolicy llmd-per-user-limit \
+#     --type merge -p '{"spec":{"rateLimit":{"global":{"rules":[{"clientSelectors":[{"headers":[{"invert":false,"name":"X-User-Id","type":"Distinct"}]}],"limit":{"requests":100,"unit":"Minute"},"xRateLimitHeaders":"DraftVersion03"}]}}}}'
+#
+# and set it back to 3 afterwards (same command, requests:3), unless
+# TASK-qos-fair-share.md Stage 3.4's revised default has already landed.
+
+command -v jq >/dev/null || { printf '%s\n' "jq is required." >&2; exit 1; }
+
+: "${QOS_PAT_A:?set QOS_PAT_A to user A's sk-... token}"
+: "${QOS_PAT_B:?set QOS_PAT_B to user B's sk-... token}"
+model=${INFERENCE_SMOKE_MODEL:-qwen-3.8-27b}
+out_dir=${1:-/tmp/qos-baseline-repro}
+
+. "$(dirname "$0")/lib-endpoints.sh"
+
+mkdir -p "$out_dir"
+rm -f "$out_dir"/*.json "$out_dir"/*.timing
+
+long_prompt=$(printf 'Explain in detail, step by step, how transformer attention works, covering queries, keys, values, softmax normalization, multi-head attention, and positional encodings. %.0s' $(seq 1 40))
+
+body() {
+  jq -n --arg model "$model" --arg prompt "$long_prompt" --argjson max_tokens "$1" \
+    '{model: $model, messages: [{role: "user", content: $prompt}], max_tokens: $max_tokens, stream: false}'
+}
+
+fire() {
+  name=$1 token=$2 max_tokens=$3
+  stack_curl -sS --max-time 120 -X POST "$api/chat/completions" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d "$(body "$max_tokens")" \
+    -o "$out_dir/$name.json" \
+    -w "$name http=%{http_code} ttft=%{time_starttransfer}s total=%{time_total}s\n" \
+    >>"$out_dir/timings.txt" 2>&1 || true
+}
+
+: >"$out_dir/timings.txt"
+for i in 1 2 3 4; do
+  fire "userA-$i" "$QOS_PAT_A" 300 &
+done
+sleep 1
+fire "userB-solo" "$QOS_PAT_B" 60 &
+wait
+
+cat "$out_dir/timings.txt"

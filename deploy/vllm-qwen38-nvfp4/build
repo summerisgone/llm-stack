@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+image=${VLLM_IMAGE:-llm-stack/vllm-qwen38-nvfp4:0.27.1}
+base_image=${VLLM_BASE_IMAGE:-vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967}
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+docker build \
+  --build-arg "VLLM_BASE_IMAGE=$base_image" \
+  --label "org.opencontainers.image.base.name=$base_image" \
+  --tag "$image" \
+  "$script_dir"
+
+docker image inspect "$image" --format 'Built {{.RepoTags}} from {{index .Config.Labels "org.opencontainers.image.base.name"}}'

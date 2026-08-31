@@ -1,0 +1,41 @@
+#!/usr/bin/env sh
+set -eu
+
+# Import the locally built pat-service image into the remote k3d node's
+# containerd. pat-service uses imagePullPolicy: Never, so the image must be
+# reachable by the kubelet without a registry. Compares k3d image import's
+# digest-rename workaround for this cluster: reuse the direct `ctr` import
+# used for the device plugin because k3d's tools-node import drops images
+# with multi-arch manifests reliably.
+#
+# The local image is built on macOS via `make pat-image`, which uses buildx
+# with --platform=linux/amd64. The host may already have an older copy of
+# the image (from a previous build) that we must replace, not just add a
+# tag to, otherwise kubelet keeps referencing the cached image by digest.
+cluster=${K3D_CLUSTER:-llm-stack}
+image=${PAT_IMAGE:-airgap-ai-stack/pat-service:local}
+node="k3d-$cluster-server-0"
+
+if ! docker image inspect "$image" --format '{{.Id}}' >/dev/null 2>&1; then
+  printf '%s\n' "pat-service image is not present locally: $image" >&2
+  printf '%s\n' 'Build it with: make pat-image' >&2
+  exit 1
+fi
+
+tar=/tmp/pat-service.tar
+docker save "$image" -o "$tar"
+docker cp "$tar" "$node:/tmp/pat-service.tar"
+
+# Drop the existing image from the kubelet's containerd so the freshly
+# imported image (possibly the same tag, different digest) takes its place
+# before any new pod schedules.
+docker exec "$node" sh -c 'ctr -n k8s.io images rm "$(ctr -n k8s.io images ls -q | grep -E "airgap-ai-stack/pat-service(:|@)")" 2>/dev/null || true'
+docker exec "$node" ctr -n k8s.io images import /tmp/pat-service.tar
+docker exec "$node" rm -f /tmp/pat-service.tar
+rm -f "$tar"
+
+docker exec "$node" crictl images | grep -q 'airgap-ai-stack/pat-service' || {
+  printf '%s\n' "pat-service image is not visible in the node: $image" >&2
+  exit 1
+}
+printf '%s\n' "Imported $image into k3d cluster $cluster."

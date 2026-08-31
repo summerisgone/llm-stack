@@ -1,0 +1,123 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-qwen38-nvfp4
+  namespace: airgap-ai-stack
+  labels:
+    app.kubernetes.io/name: vllm-qwen38-nvfp4
+spec:
+  selector:
+    app.kubernetes.io/name: vllm-qwen38-nvfp4
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen38-nvfp4
+  namespace: airgap-ai-stack
+  labels:
+    app.kubernetes.io/name: vllm-qwen38-nvfp4
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm-qwen38-nvfp4
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm-qwen38-nvfp4
+    spec:
+      runtimeClassName: nvidia
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/hostname: k3d-llm-stack-server-0
+      containers:
+        - name: vllm
+          image: llm-stack/vllm-qwen38-nvfp4:0.27.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - /model
+            - --served-model-name
+            - qwen38-nvfp4
+            - --language-model-only
+            - --dtype
+            - auto
+            - --kv-cache-dtype
+            - fp8
+            - --attention-backend
+            - TRITON_ATTN
+            - --max-model-len
+            - "84672"
+            - --max-num-seqs
+            - "2"
+            - --max-num-batched-tokens
+            - "8192"
+            - --gpu-memory-utilization
+            - "0.90"
+            - --reasoning-parser
+            - qwen3
+            - --enable-auto-tool-choice
+            - --tool-call-parser
+            - qwen3_coder
+          env:
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            - name: VLLM_NO_USAGE_STATS
+              value: "1"
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+            # Triton's registry subprocess consults this before ld.so.cache.
+            # The legacy NVIDIA hook injects WSL2 libcuda at container start.
+            - name: LD_LIBRARY_PATH
+              value: /usr/lib/x86_64-linux-gnu:/usr/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 600
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 24Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: model
+              mountPath: /model
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: model
+          persistentVolumeClaim:
+            claimName: vllm-qwen38-nvfp4-model
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

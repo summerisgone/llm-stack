@@ -1,0 +1,166 @@
+# Production-style EPP for the remote WSL2 GPU profile. llm-d runs after Envoy
+# AI Gateway, in front of the single RTX 5090's one live engine replica
+# (vLLM or SGLang, see modelServers below -- never both, one GPU). The
+# standalone proxy terminates every request through ext-proc so EPP can
+# queue, score, and pick the live endpoint by its /metrics state.
+router:
+  inferencePool:
+    # TASK-qos-fair-share.md Этап 1Б.3: InferencePool exists purely as the
+    # namespace anchor EPP uses to look up InferenceObjective bands -- the
+    # AIGatewayRoute keeps pointing at the existing Backend unchanged.
+    create: true
+  # Priority bands read by EPP's flowControl per-request via the
+  # x-llm-d-inference-objective header (TASK-qos-fair-share.md §4.1). Negative
+  # priority is deliberately left free for a future sheddable background
+  # class -- do not use it for `demoted`.
+  inferenceObjectives:
+    - name: warm
+      priority: 10
+    - name: normal
+      priority: 5
+    - name: demoted
+      priority: 1
+  extraServicePorts:
+    - name: http
+      port: 8081
+      protocol: TCP
+      targetPort: 8081
+  proxy:
+    enabled: true
+    proxyType: envoy
+    mode: sidecar
+    failOpen: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  epp:
+    replicas: 1
+    # soft-reflective-ceiling-policy (ADR 0012) is Alpha stability in this
+    # build (b1bf63da5e9a52dc8815264809d00f45f5b5e966) and is rejected at
+    # startup ("has Alpha stability level, but command line flag
+    # --allow-experimental-plugins is not set") without this. Confirmed by
+    # in-pod --config-text probe -- program-aware-fairness in ADR 0008 was
+    # not gated the same way, so do not assume this flag is unnecessary for
+    # a given plugin without probing it.
+    flags:
+      allow-experimental-plugins: true
+    image:
+      registry: ghcr.io/llm-d
+      repository: llm-d-router-endpoint-picker
+      # See LLMD_EPP_IMAGE_MANIFEST_DIGEST in versions.lock.env. The upstream
+      # v0 chart does not yet support a digest-only image reference.
+      tag: main
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    pluginsConfigFile: fairshare-plugins.yaml
+    pluginsCustomConfig:
+      fairshare-plugins.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        featureGates:
+          - flowControl
+        plugins:
+          - type: queue-scorer
+          - type: kv-cache-utilization-scorer
+          - type: prefix-cache-scorer
+          # Polls vLLM /metrics and exposes engine state to the three scorers.
+          # This includes prompt input, local cache-hit, and newly computed
+          # prompt-token counters emitted by current vLLM builds.
+          - type: metrics-data-source
+            parameters:
+              scheme: http
+              path: /metrics
+              insecureSkipVerify: true
+          - type: core-metrics-extractor
+            parameters:
+              # Only needed when modelServers.type != vllm -- the chart's own
+              # default-plugins.yaml sets this automatically (see
+              # llm-d-router-standalone/charts/router/templates/_config.yaml),
+              # but pluginsCustomConfig below replaces that generated file
+              # entirely, so it has to be set here by hand. Keep in sync with
+              # modelServers.type.
+              defaultEngine: sglang
+          - type: round-robin-fairness-policy
+          - type: fcfs-ordering-policy
+          # ADR 0012: request-count concurrency-detector (maxConcurrency: 3)
+          # gave the ceiling policy below only one operating point (saturation
+          # = 2/3, arithmetically, from the divisor of 3). utilization-detector
+          # scores KV/queue pressure instead, which is this deployment's
+          # actual bottleneck (ADR 0010), and is the flow-control default this
+          # stack had silently overridden. Left undeclared here to fall back to
+          # the plugin's own defaults (queueDepthThreshold: 5,
+          # kvCacheUtilThreshold: 0.8) -- both are settable via `parameters`
+          # (probe-confirmed) if the default kvCacheUtilThreshold proves too
+          # tight against this stack's resident KV usage; see ADR 0012 "What
+          # must be verified" #2, still open pending a loaded reading.
+          - type: utilization-detector
+          # Gates priority bands on a graduated ceiling instead of the
+          # all-or-nothing static-usage-limit-policy default. Takes no
+          # parameters -- any non-empty parameters block is rejected at load
+          # time. Requires router.epp.flags.allow-experimental-plugins above.
+          - type: soft-reflective-ceiling-policy
+        schedulingProfiles:
+          - name: default
+            plugins:
+              - pluginRef: queue-scorer
+                weight: 2
+              - pluginRef: kv-cache-utilization-scorer
+                weight: 2
+              - pluginRef: prefix-cache-scorer
+                weight: 3
+        flowControl:
+          maxBytes: 2Gi
+          maxRequests: "32"
+          defaultRequestTTL: 10m
+          saturationDetector:
+            pluginRef: utilization-detector
+          # Graduated dispatch ceiling (ADR 0012): a band at or past its
+          # rank-derived ceiling degrades continuously instead of being cut
+          # off outright, so normal/demoted get a shrinking share under
+          # contention rather than zero. Rank-only, so the 10/5/1 priorities
+          # above need no re-tuning.
+          usageLimitPolicyPluginRef: soft-reflective-ceiling-policy
+          priorityBands:
+            - priority: 0
+              maxRequests: "32"
+              fairnessPolicyRef: round-robin-fairness-policy
+              orderingPolicyRef: fcfs-ordering-policy
+          # warm/normal/demoted bands (priority 10/5/1) are not listed above --
+          # they are provisioned at runtime from router.inferenceObjectives and
+          # inherit this template instead. Left unset, they silently fall back
+          # to the system default global-strict-fairness-policy, which ignores
+          # flow boundaries and let one fairness_id starve the others inside a
+          # band (Stage 1C in docs/adr/0008-per-user-fair-share.md; acceptance
+          # of this field verified by in-pod --config-text probe).
+          defaultPriorityBand:
+            fairnessPolicyRef: round-robin-fairness-policy
+            orderingPolicyRef: fcfs-ordering-policy
+  monitoring:
+    prometheus:
+      enabled: false
+      auth:
+        enabled: false
+  # Points EPP at whichever engine is actually live -- only one runs at a
+  # time (one GPU). Switching engines means changing all three fields
+  # together, plus core-metrics-extractor.defaultEngine above. See
+  # docs/operations/inference-backends.md and TASK-qos-fair-share.md §7.1.
+  #
+  # vLLM:   type: vllm,   targetPorts: [8000],  matchLabels app.kubernetes.io/name: vllm-qwen38-nvfp4
+  # SGLang: type: sglang, targetPorts: [30000], matchLabels app.kubernetes.io/name: sglang-qwen38
+  modelServers:
+    type: sglang
+    protocol: http
+    targetPorts:
+      - number: 30000
+    matchLabels:
+      app.kubernetes.io/name: sglang-qwen38

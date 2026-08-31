@@ -1,0 +1,177 @@
+# Keep the official Envoy Gateway add-on dashboards and datasources. The stack
+# chart exposes Grafana through a dedicated NodePort; it is not public-routed.
+grafana:
+  enabled: true
+  fullnameOverride: grafana
+  service:
+    type: ClusterIP
+  datasources:
+    vllm.yaml:
+      apiVersion: 1
+      datasources:
+        - name: vLLM Prometheus
+          uid: vllm-prometheus
+          type: prometheus
+          access: proxy
+          url: http://prometheus.airgap-ai-stack.svc.cluster.local:9090
+          editable: false
+          jsonData:
+            timeInterval: 15s
+  env:
+    GF_SERVER_ROOT_URL: http://grafana.gpu-host.local:32030
+    GF_SECURITY_ADMIN_USER: admin
+    GF_SECURITY_ADMIN_PASSWORD: admin-demo-only
+    GF_AUTH_BASIC_ENABLED: "false"
+    GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    GF_AUTH_ANONYMOUS_ENABLED: "false"
+    GF_SECURITY_COOKIE_SAMESITE: lax
+    GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+    GF_AUTH_GENERIC_OAUTH_NAME: Keycloak
+    GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
+    GF_AUTH_GENERIC_OAUTH_AUTO_LOGIN: "true"
+    GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana
+    GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: grafana-oauth-demo-only
+    GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email roles groups
+    GF_AUTH_GENERIC_OAUTH_AUTH_URL: ***REMOVED***/sso/realms/ai-stack/protocol/openid-connect/auth
+    GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/token
+    GF_AUTH_GENERIC_OAUTH_API_URL: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/userinfo
+    GF_AUTH_GENERIC_OAUTH_VALIDATE_ID_TOKEN: "true"
+    GF_AUTH_GENERIC_OAUTH_JWK_SET_URL: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+    GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(realm_access.roles[*], 'ai-admin') && 'Admin' || 'Viewer'"
+    GF_AUTH_GENERIC_OAUTH_USE_PKCE: "true"
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: envoy-gateway
+          orgId: 1
+          folder: envoy-gateway
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/envoy-gateway
+        - name: vllm
+          orgId: 1
+          folder: vLLM
+          type: file
+          disableDeletion: false
+          editable: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards/vllm
+        - name: llm-d
+          orgId: 1
+          folder: llm-d
+          type: file
+          disableDeletion: false
+          editable: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards/llm-d
+        - name: system-state
+          orgId: 1
+          folder: system-state
+          type: file
+          disableDeletion: false
+          editable: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards/system-state
+        - name: fair-share
+          orgId: 1
+          folder: QoS
+          type: file
+          disableDeletion: false
+          editable: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards/fair-share
+        - name: cluster-monitor
+          orgId: 1
+          folder: cluster-monitor
+          type: file
+          disableDeletion: false
+          editable: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards/cluster-monitor
+  dashboardsConfigMaps:
+    envoy-gateway: grafana-dashboards
+  # The JSON is supplied from the repository by monitoring-up via --set-file.
+  # Grafana's chart creates and mounts its ConfigMap without runtime downloads.
+  alerting:
+    rules.yaml:
+      apiVersion: 1
+      groups:
+        - orgId: 1
+          name: adr-0012-flow-control
+          folder: QoS
+          interval: 1m
+          rules:
+            - uid: adr0012-stale-endpoints
+              title: "ADR-0012: EPP saturation detector fail-closed (stale endpoints)"
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 300
+                    to: 0
+                  datasourceUid: vllm-prometheus
+                  model:
+                    expr: max_over_time(llm_d_epp_flow_control_stale_endpoints[5m])
+                    instant: true
+                    refId: A
+                - refId: B
+                  datasourceUid: "-100"
+                  model:
+                    type: threshold
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          type: gt
+                          params: [0]
+                    refId: B
+              noDataState: OK
+              execErrState: Alerting
+              for: 0s
+              dashboardUid: qos-user-activity
+              panelId: 13
+              annotations:
+                summary: "utilization-detector reports a stale /metrics scrape (llm_d_epp_flow_control_stale_endpoints=1). Pool saturation is pinned at 1.0 and every non-critical priority band is gated shut, indistinguishable from genuine overload without this gauge -- see ADR 0012 Consequences."
+                dashboard: "QoS / User Activity (QoS), panel 13"
+              labels:
+                severity: critical
+                adr: "0012"
+
+prometheus:
+  server:
+    service:
+      type: ClusterIP
+
+tempo:
+  service:
+    type: ClusterIP
+
+# Enable the optional component called out in the Envoy Gateway observability
+# guide. It forwards traces to the add-on Tempo instance.
+opentelemetry-collector:
+  enabled: true
+
+# k3d nodes do not expose /etc/machine-id as a regular host file. Fluent Bit
+# only tails container logs in this profile, so keep the required log mounts
+# and omit the unused machine-id mount that otherwise blocks the DaemonSet.
+fluent-bit:
+  daemonSetVolumes:
+    - name: varlog
+      hostPath:
+        path: /var/log
+    - name: varlibdockercontainers
+      hostPath:
+        path: /var/lib/docker/containers
+  daemonSetVolumeMounts:
+    - name: varlog
+      mountPath: /var/log
+    - name: varlibdockercontainers
+      mountPath: /var/lib/docker/containers
+      readOnly: true

@@ -1,0 +1,17 @@
+# The local Mac deploy profile re-adds the LM Studio OpenAI AIServiceBackend.
+# Base ships without any AIServiceBackend; only this overlay selects the
+# lmstudio-upstream Backend. The AIGatewayRoute and its JWT / rate-limit
+# policies stay in base, so this overlay only supplies the missing backend.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: lmstudio-openai
+  namespace: airgap-ai-stack
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: lmstudio-upstream
+  schema:
+    name: OpenAI
+    prefix: /v1

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: vllm-inference
+description: Single RTX 5090 Qwen3.8 NVFP4 inference, using the existing model PVC
+version: 0.1.0
+appVersion: "0.27.1"
+type: application

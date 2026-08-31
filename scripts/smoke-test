@@ -1,0 +1,90 @@
+#!/usr/bin/env sh
+set -eu
+
+# SSO boundary smoke: Keycloak discovery, the Open WebUI and Grafana OIDC
+# redirects, and the Keycloak-governed Open WebUI role configuration.
+# Works against both routing profiles; see scripts/lib-endpoints.sh.
+# Needs no GPU and no loaded model.
+
+. "$(dirname "$0")/lib-endpoints.sh"
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+require_lmstudio=${SMOKE_REQUIRE_LMSTUDIO:-auto}
+
+# The LM Studio upstream exists only in the local-mac profile.
+if [ "$require_lmstudio" = auto ]; then
+  if [ "$stack_mode" = host ]; then require_lmstudio=true; else require_lmstudio=false; fi
+fi
+
+deployment_env() {
+  kubectl -n "$namespace" get "deployment/$1" \
+    -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name==\"$2\")].value}"
+}
+
+# In the internet-facing (path-mode) deployment the admin surface must be
+# closed: /sso/admin and /sso/realms/master return 404 from the edge.
+if [ "$stack_mode" = path ]; then
+  test "$(stack_curl -sS -o /dev/null -w '%{http_code}' "$sso_base/admin")" = 404
+  test "$(stack_curl -sS -o /dev/null -w '%{http_code}' "$sso_base/realms/master")" = 404
+fi
+
+stack_curl -fsS "$issuer/.well-known/openid-configuration" | grep -q '"issuer"'
+stack_curl -fsSI "$webui/" | grep -Eqi 'HTTP/.* (200|30[12])'
+stack_curl -fsS "$webui/api/config" | grep -q '"oidc":"Keycloak"'
+
+kubectl -n "$namespace" rollout status deployment/keycloak --timeout=30s
+kubectl -n "$namespace" rollout status deployment/openwebui --timeout=30s
+
+# Assert the redirect against the callback the deployment actually declares,
+# rather than a hardcoded site URL: the value is site-specific, the invariant
+# is that Open WebUI delegates to this realm and returns to its own callback.
+openwebui_redirect_uri="$(deployment_env openwebui OPENID_REDIRECT_URI)"
+[ -n "$openwebui_redirect_uri" ]
+oidc_headers="$(stack_curl -fsS -o /dev/null -D - "$webui/oauth/oidc/login")"
+printf '%s\n' "$oidc_headers" | grep -qi "^location: $issuer/protocol/openid-connect/auth?"
+printf '%s\n' "$oidc_headers" | grep -q "redirect_uri=$(urlencode "$openwebui_redirect_uri")"
+
+# Grafana is publicly routed only in the local-mac profile. In the remote
+# profile it is an operator NodePort, so it is checked only when its URL is
+# supplied.
+if [ -n "$grafana" ]; then
+  grafana_oidc_headers="$(stack_curl -fsS -o /dev/null -D - "$grafana/login/generic_oauth")"
+  printf '%s\n' "$grafana_oidc_headers" | grep -qi "^location: $issuer/protocol/openid-connect/auth?"
+  printf '%s\n' "$grafana_oidc_headers" | grep -q 'client_id=grafana'
+fi
+
+# Password sign-in stays disabled and Keycloak stays the authority for roles.
+[ "$(deployment_env openwebui ENABLE_LOGIN_FORM)" = "false" ]
+[ "$(deployment_env openwebui ENABLE_PASSWORD_AUTH)" = "false" ]
+[ "$(deployment_env openwebui DEFAULT_USER_ROLE)" = "pending" ]
+[ "$(deployment_env openwebui OAUTH_ALLOWED_ROLES)" = "ai-user,ai-admin" ]
+[ "$(deployment_env openwebui OAUTH_ADMIN_ROLES)" = "ai-admin" ]
+[ "$(deployment_env openwebui ENABLE_FORWARD_USER_INFO_HEADERS)" = "true" ]
+[ "$(deployment_env openwebui BYPASS_MODEL_ACCESS_CONTROL)" = "true" ]
+
+# The seeded record must stay non-login so the first real SSO user is judged
+# only by its Keycloak roles.
+kubectl -n "$namespace" exec deployment/openwebui -- python3 -c '
+import sqlite3
+connection = sqlite3.connect("/app/backend/data/webui.db")
+role = connection.execute(
+    "SELECT role FROM user WHERE email = ?", ("openwebui-sso-bootstrap@invalid.local",)
+).fetchone()
+assert role == ("pending",), role
+'
+
+# Chat traffic must use the signed-in user's token against the private AI
+# Gateway. The model list differs per profile, so only the auth mode is fixed.
+deployment_env openwebui OPENAI_API_CONFIGS | grep -q '"auth_type":"system_oauth"'
+deployment_env openwebui OPENAI_API_BASE_URL | grep -q '^http://ai-gateway-private\.'
+
+if [ "$require_lmstudio" = true ]; then
+  kubectl -n "$namespace" rollout status deployment/lmstudio-upstream --timeout=30s
+fi
+kubectl -n "$namespace" rollout status deployment/langfuse --timeout=30s
+kubectl -n "$namespace" rollout status deployment/langfuse-worker --timeout=30s
+kubectl -n monitoring rollout status deployment/grafana --timeout=30s
+kubectl -n monitoring get configmap grafana-dashboards >/dev/null
+kubectl -n "$namespace" wait --for=jsonpath='{.status.healthStatus}'=green tenant/minio --timeout=120s
+
+printf '%s\n' "SSO discovery, Keycloak-governed Open WebUI roles, and Kubernetes workloads are running ($stack_mode routing)."

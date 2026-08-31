@@ -1,0 +1,9 @@
+namespace: airgap-ai-stack
+resources:
+  - base
+configMapGenerator:
+  - name: keycloak-realm
+    files:
+      - realm-demo.json
+generatorOptions:
+  disableNameSuffixHash: true

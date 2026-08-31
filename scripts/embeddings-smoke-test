@@ -1,0 +1,140 @@
+#!/usr/bin/env sh
+set -eu
+
+# docs/adr/0013-embeddings-api-bge-m3.md V2 (gateway contract). Covers the
+# core assertions: 200/1024-dim/L2-normalized, /v1/models lists bge-m3, no
+# PAT -> 401, revoked PAT -> 401, a max-size batch -> 200 (no 413). It does
+# NOT cover the 429 over-limit case, the over-length-item case, or the "EPP
+# metrics unchanged" check from the ADR's full V2 list -- those need
+# live-cluster iteration (timing, and reading llm-d EPP's /metrics) beyond a
+# single pass/fail smoke run; add them here once V2 is actually run.
+#
+# Off by default: the deployed stack has inference.embeddings.enabled=false
+# until an operator turns ADR-0013 on, so this is a safe no-op in
+# `make smoke-nogpu` / `make verify` until then. Set
+# EMBEDDINGS_SMOKE_ENABLED=true once helm/embeddings-inference is running
+# and inference.embeddings.enabled=true in the deployed airgap-stack release.
+embeddings_enabled=${EMBEDDINGS_SMOKE_ENABLED:-false}
+if [ "$embeddings_enabled" != true ]; then
+  printf '%s\n' 'embeddings-smoke-test: EMBEDDINGS_SMOKE_ENABLED is not true, skipping (ADR-0013 not yet deployed).'
+  exit 0
+fi
+
+. "$(dirname "$0")/lib-endpoints.sh"
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+
+# Creating the isolated smoke user needs a Keycloak realm-management admin.
+# Never hardcode the credential: it is rotated per site.
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+
+[ -f .env ]
+cookie_key=$(sed -n 's/^PAT_COOKIE_KEY=//p' .env | tail -n 1)
+[ -n "$cookie_key" ]
+
+kubectl -n "$namespace" rollout status deployment/pat-service --timeout=60s
+
+# The admin API is not reachable from the public origin (closed by the edge
+# route rules). Route all admin calls through a local port-forward instead.
+kc_pf_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); p=s.getsockname()[1]; s.close(); print(p)')
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_pf_port:8080" &
+kc_pf_pid=$!
+trap 'kill "$kc_pf_pid" 2>/dev/null; wait "$kc_pf_pid" 2>/dev/null || true' EXIT INT TERM
+
+attempt=0
+until curl -fsS "http://127.0.0.1:$kc_pf_port/sso/realms/ai-stack/.well-known/openid-configuration" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 15 ]; then
+    printf '%s\n' "Keycloak port-forward did not become ready" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+kc_admin_local="http://127.0.0.1:$kc_pf_port/sso"
+admin_issuer_local="$kc_admin_local/realms/master"
+admin_api_local="$kc_admin_local/admin/realms/$stack_realm"
+
+suffix=$(date +%s)
+username="embeddings-smoke-$suffix"
+password="Embeddings-smoke-password-$suffix!"
+admin_token=$(curl -fsS -X POST "$admin_issuer_local/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' "$admin_api_local/users" \
+  -d "{\"username\":\"$username\",\"email\":\"$username@example.test\",\"firstName\":\"Embeddings\",\"lastName\":\"Smoke\",\"enabled\":true,\"emailVerified\":true,\"requiredActions\":[]}"
+user_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api_local/users?username=$username&exact=true" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+role=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api_local/roles/ai-user" | \
+  python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))')
+curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$admin_api_local/users/$user_id/role-mappings/realm" -d "[$role]"
+curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$admin_api_local/users/$user_id/reset-password" -d "{\"type\":\"password\",\"value\":\"$password\",\"temporary\":false}"
+curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$admin_api_local/users/$user_id" -d '{"requiredActions":[]}'
+
+access_token=$(stack_curl -fsS -X POST "$issuer/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=llm-api -d "username=$username" -d "password=$password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+subject=$(printf '%s' "$access_token" | python3 -c 'import base64,json,sys; part=sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["sub"])')
+expires=$(printf '%s' "$access_token" | python3 -c 'import base64,json,sys; part=sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["exp"])')
+session_cookie=$(PAT_COOKIE_KEY="$cookie_key" PAT_SUBJECT="$subject" PAT_EXPIRES="$expires" python3 -c '
+import base64,hashlib,hmac,json,os
+payload=base64.urlsafe_b64encode(json.dumps({"sub":os.environ["PAT_SUBJECT"],"preferred_username":"embeddings-smoke","roles":["ai-user"],"exp":int(os.environ["PAT_EXPIRES"])},separators=(",", ":")).encode()).rstrip(b"=").decode()
+signature=base64.urlsafe_b64encode(hmac.new(os.environ["PAT_COOKIE_KEY"].encode(),payload.encode(),hashlib.sha256).digest()).rstrip(b"=").decode()
+print(payload+"."+signature)
+')
+
+created=$(stack_curl -fsS -X POST -H 'Content-Type: application/json' -H "Cookie: pat_session=$session_cookie" \
+  -d '{"name":"Embeddings smoke test","expires_in_days":1}' "$dashboard/api/tokens")
+pat=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+pat_id=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+printf '%s\n' 'Issued a self-service PAT; only its HMAC hash was saved.'
+
+# Contract: model bge-m3, 1024-dim, L2-normalized (cosine == dot product).
+body='{"model":"bge-m3","input":"ADR-0013 embeddings smoke test","encoding_format":"float"}'
+resp=$(stack_curl -fsS -H 'Content-Type: application/json' -H "Authorization: Bearer $pat" -d "$body" "$api/embeddings")
+printf '%s' "$resp" | python3 -c '
+import json, math, sys
+d = json.load(sys.stdin)
+vec = d["data"][0]["embedding"]
+assert len(vec) == 1024, f"dims={len(vec)}, want 1024"
+norm = math.sqrt(sum(x * x for x in vec))
+assert abs(norm - 1.0) < 1e-3, f"L2 norm={norm}, want ~1.0"
+'
+printf '%s\n' 'Embeddings request returned 1024-dim, L2-normalized vectors.'
+
+# GET /v1/models lists bge-m3 alongside the chat model.
+models=$(stack_curl -fsS -H "Authorization: Bearer $pat" "$api/models")
+printf '%s' "$models" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+ids = [m["id"] for m in d["data"]]
+assert "bge-m3" in ids, f"bge-m3 not in /v1/models: {ids}"
+'
+printf '%s\n' '/v1/models lists bge-m3.'
+
+# No PAT -> 401.
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "$body" "$api/embeddings")" = 401
+
+# Max-size batch -> 200, no 413.
+max_batch=${EMBEDDINGS_SMOKE_MAX_BATCH:-32}
+batch_body=$(EMBEDDINGS_SMOKE_MAX_BATCH="$max_batch" python3 -c '
+import json, os
+n = int(os.environ["EMBEDDINGS_SMOKE_MAX_BATCH"])
+print(json.dumps({"model": "bge-m3", "input": [f"smoke test item {i}" for i in range(n)], "encoding_format": "float"}))
+')
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $pat" -d "$batch_body" "$api/embeddings")" = 200
+printf '%s\n' "Max-size batch ($max_batch items) accepted with no 413."
+
+# Revocation takes effect immediately.
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Cookie: pat_session=$session_cookie" "$dashboard/api/tokens/$pat_id")" = 204
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $pat" -d "$body" "$api/embeddings")" = 401
+printf '%s\n' 'Revocation took effect immediately; the PAT can no longer reach embeddings.'
+
+# Clean up the smoke user created via the admin API.
+curl -fsS -X DELETE -H "Authorization: Bearer $admin_token" \
+  "$admin_api_local/users/$user_id" || true

@@ -1,0 +1,144 @@
+# Chart-level values for the air-gapped stack wrapper.
+#
+# The namespace must match what the kustomize sources embed in each object's
+# metadata (airgap-ai-stack). It is also the install namespace of the release.
+namespace: airgap-ai-stack
+
+# Environment exposed to every workload through the airgap-runtime Secret
+# via envFrom. These are the demo defaults from .env.example. helm-stack-up
+# layers the real .env over them as a values overlay so .env stays the source
+# of truth; override any key directly here or through --set.
+runtimeEnvironment:
+  LANGFUSE_PUBLIC_KEY: lf_pk_ai_stack_local_demo_only
+  LANGFUSE_SECRET_KEY: lf_sk_ai_stack_local_demo_only
+  LANGFUSE_HOST: http://langfuse:3000
+  LANGFUSE_INIT_ORG_ID: ai-stack
+  LANGFUSE_INIT_ORG_NAME: AI Stack
+  LANGFUSE_INIT_PROJECT_ID: local-ai-stack
+  LANGFUSE_INIT_PROJECT_NAME: Local AI Stack
+  LANGFUSE_INIT_USER_EMAIL: admin@langfuse.localhost
+  LANGFUSE_INIT_USER_NAME: AI Stack Admin
+  LANGFUSE_INIT_USER_PASSWORD: langfuse-admin-demo-only
+  PAT_HASH_KEY: replace-this-with-a-unique-32-byte-minimum-pat-hash-key
+  PAT_COOKIE_KEY: replace-this-with-a-unique-32-byte-minimum-cookie-signing-key
+  PAT_GATEWAY_CLIENT_SECRET: pat-gateway-demo-only
+  WEBUI_SECRET_KEY: replace-this-with-a-unique-openwebui-session-encryption-key
+  # Upstream bearer tokens for optional inference backends (see `inference`
+  # below). Empty means "no Authorization header is injected"; only set one
+  # if that backend actually requires it. Never real values in this file --
+  # override through .env like every other runtime secret.
+  SGLANG_API_KEY: ""
+  EXTERNAL_API_KEY: ""
+
+# --- Inference backends -------------------------------------------------------
+# vLLM behind llm-d (templates/llmd.yaml, catch-all + the "qwen38-nvfp4"
+# model rule) is the always-on default. Everything here is an additional,
+# independently-toggled AI Gateway rule keyed on model name -- see
+# docs/adr/0006-pluggable-inference-backends.md. Each engine is started and
+# stopped outside Kubernetes (host Docker containers, or an external
+# service); flipping `enabled` only tells the gateway the endpoint now
+# exists, it does not start anything.
+inference:
+  # Single canonical model name advertised in the OpenAI API, identical
+  # whichever engine (vLLM or SGLang) is actually serving -- clients keep
+  # sending `model: qwen-3.8-27b` unchanged across engine switches.
+  # Must match each engine chart's `inference.servedModelName`.
+  modelName: qwen-3.8-27b
+  # Per-user storm guard on the inference route (llmd-per-user-limit
+  # BackendTrafficPolicy) -- frequency, not concurrency; slot admission is
+  # separate (pat-service internal/qos, and redundantly the llm-d EPP
+  # concurrency-detector). 3/min was a temporary value set to keep Stage 0's
+  # baseline measurements from tripping it before the interesting
+  # concurrency behaviour was even observable
+  # (TASK-qos-fair-share.md Stage 0.6); raised now that Stage 3's
+  # observation-mode session tracking needs real, unthrottled coding-agent
+  # traffic to validate against (§4.5: "заменить высоким потолком против
+  # шторма, порядка 60/мин").
+  perUserRateLimitPerMinute: 60
+  # SGLang serving the same NVFP4 checkpoint as vLLM (helm/sglang-inference,
+  # make sglang-up), mutually exclusive with it: this host has one GPU.
+  # Unlike llamacpp/externalApi below, this flag does not choose a route --
+  # SGLang is always reached through llm-d EPP, the same AIServiceBackend as
+  # vLLM (llmd.yaml); which engine EPP actually dispatches to is
+  # config/llmd/router-nvfp4-values.yaml's modelServers block. This flag only
+  # gates injecting SGLANG_API_KEY as the upstream Authorization header on
+  # that shared path (TASK-qos-fair-share.md §7.1,
+  # docs/adr/0008-per-user-fair-share.md "SGLang portability"). Set it
+  # whenever SGLang is the live engine and SGLANG_API_KEY is non-empty.
+  # true: config/llmd/router-nvfp4-values.yaml modelServers.type is sglang
+  # today (TASK-qos-fair-share.md §7.1 engine switch). Flip both back to
+  # vllm together if reverting.
+  sglang:
+    enabled: true
+  # llama.cpp's server (deploy/llamacpp). No profile is wired up until a
+  # checksummed GGUF model is in place; see config/llamacpp.
+  llamacpp:
+    enabled: false
+    host: host.k3d.internal
+    port: 8090
+    modelName: llamacpp-local
+  # Any other OpenAI-compatible endpoint: LM Studio on the LAN (the
+  # local-mac profile's default), Ollama, a hosted API. Plain HTTP only --
+  # routing a public HTTPS endpoint needs a BackendTLSPolicy this chart does
+  # not define. Setting enabled without a host is a configuration error.
+  externalApi:
+    enabled: false
+    host: ""
+    port: 1234
+    modelName: external-api
+  # bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Unlike
+  # llamacpp/externalApi above, this flag also controls a second
+  # AIGatewayRoute (templates/embeddings.yaml), not just a rule inside
+  # `llmd` -- embeddings traffic must never enter the EPP queue that models
+  # the LLM's slots. host/port is the embeddings-inference chart's Service
+  # (helm/embeddings-inference, make embeddings-up), reachable regardless of
+  # accelerator mode -- the Service name and port never change between modes.
+  # enabled: true is an explicit operator decision (2026-09-14), made before
+  # ADR-0013's own V4 (load-based rate-limit tuning) and V5 (retrieval
+  # quality gate) closed -- the ADR is still status Proposed. perUserRateLimitPerMinute
+  # and maxClientBatchSize below are still V4 placeholders, not measured.
+  embeddings:
+    enabled: true
+    host: embeddings-bge-m3.airgap-ai-stack.svc.cluster.local
+    port: 80
+    modelName: bge-m3
+    # Placeholder pending ADR-0013 V4's load numbers; sized for batch
+    # indexing, not human chat, so it is deliberately far above
+    # perUserRateLimitPerMinute above.
+    perUserRateLimitPerMinute: 120
+    # Must match helm/embeddings-inference values.yaml inference.maxClientBatchSize.
+    maxClientBatchSize: 32
+
+# --- Routing / ingress -------------------------------------------------------
+# Browser-facing traffic uses one canonical origin and path routing. Cluster
+# workloads use Kubernetes Service DNS; neither depends on the Windows host
+# name or a k3d load-balancer IP.
+routing:
+  edge:
+    # Public listener reached through the TLS-terminating Synology proxy.
+    externalPort: 3091
+  # External app group is distinguished only by URL path, never Host.
+  external:
+    ssoPath: /sso              # -> keycloak
+    platformPath: /platform    # -> pat-service (PAT management dashboard + /api/tokens)
+    apiPath: /v1               # -> pat-service (OpenAI-compatible reverse proxy)
+    # default (no path) -> openwebui
+  nodePorts:
+    grafana: 32030
+    langfuse: 32031
+
+# --- OIDC / SSO --------------------------------------------------------------
+# The sole browser-facing origin. Keycloak issuer and OAuth callbacks must be
+# stable absolute URLs; no workload uses the Windows host name as an endpoint.
+oidc:
+  publicBaseURL: ***REMOVED***
+  # Realm name used in Keycloak URL paths.
+  realm: ai-stack
+  # Fully-qualified external issuer for the browser clients. Includes the
+  # /sso path-prefix Keycloak runs under (KC_HTTP_RELATIVE_PATH). Matches
+  # KC_HOSTNAME so JWT iss claims line up with what the realm returns.
+  externalIssuer: ***REMOVED***/sso/realms/ai-stack
+  # Internal-issuer URL used by services that talk to Keycloak over the
+  # cluster-internal service DNS (no /sso rewrite needed; Envoy handles that).
+  internalIssuer: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack
+  internalAIGatewayURL: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080

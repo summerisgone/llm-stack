@@ -1,0 +1,61 @@
+#!/usr/bin/env sh
+set -eu
+
+# Smoke for the main remote profile: llm-d EPP must expose its metrics and the
+# full PAT -> Envoy AI Gateway -> llm-d proxy -> vLLM NVFP4 path must answer.
+# With INFERENCE_SMOKE_VERIFY_CHAT=false the calls that reach the model are
+# skipped, so the test is usable while the GPU is occupied elsewhere.
+# Runs from the local machine against the remote k3d cluster (needs the SSH
+# tunnel) or from the WSL2 host directly.
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+model=${INFERENCE_SMOKE_MODEL:-qwen-3.8-27b}
+local_port=${LLMD_SMOKE_PORT:-19090}
+
+command -v curl >/dev/null || {
+  printf '%s\n' 'curl is required for the llm-d smoke test.' >&2
+  exit 1
+}
+
+kubectl -n "$namespace" rollout status deployment/llmd-qwen-test-epp --timeout=5m
+kubectl -n "$namespace" port-forward service/llmd-qwen-test-epp "$local_port:9090" >/tmp/llmd-epp-port-forward.log 2>&1 &
+port_forward_pid=$!
+
+cleanup() {
+  kill "$port_forward_pid" >/dev/null 2>&1 || true
+  wait "$port_forward_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+elapsed=0
+until metrics=$(curl --fail --silent --show-error "http://127.0.0.1:$local_port/metrics"); do
+  if [ "$elapsed" -ge 60 ]; then
+    cat /tmp/llmd-epp-port-forward.log >&2 || true
+    printf '%s\n' 'Timed out waiting for llm-d EPP metrics.' >&2
+    exit 1
+  fi
+  sleep 2
+  elapsed=$((elapsed + 2))
+done
+
+case "$metrics" in
+  *llm_d_epp_*) ;;
+  *)
+    printf '%s\n' 'llm-d EPP did not expose llm_d_epp_* metrics.' >&2
+    exit 1
+    ;;
+esac
+
+# The e2e PAT playbook with the remote specifics: no LM Studio, no lmstudio
+# upstream log to inspect, but the revocation checks stay active because they
+# live on the AI Gateway route that now targets llm-d.
+# STACK_TUNNEL_PORT (local port already tunneled to the remote edge :8080) is
+# passed through so the PAT calls reach the remote Gateway from the local
+# machine.
+INFERENCE_SMOKE_MODEL="$model" \
+INFERENCE_SMOKE_REQUIRE_LMSTUDIO=false \
+INFERENCE_SMOKE_VERIFY_UPSTREAM_LOG=false \
+INFERENCE_SMOKE_VERIFY_CHAT="${INFERENCE_SMOKE_VERIFY_CHAT:-true}" \
+STACK_TUNNEL_PORT="${STACK_TUNNEL_PORT:-}" \
+STACK_BASE_URL="${STACK_BASE_URL:-***REMOVED***}" \
+./scripts/pat-smoke-test
+printf '%s\n' 'llm-d EPP smoke test passed (standalone proxy, EPP metrics, and PAT route).'

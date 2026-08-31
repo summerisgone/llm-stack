@@ -1,0 +1,51 @@
+#!/usr/bin/env sh
+set -eu
+
+env_file=${SGLANG_ENV_FILE:-"$(CDPATH= cd -- "$(dirname -- "$0")/../../config/sglang" && pwd)/qwen38.env"}
+if [ -f "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+
+container_name=${SGLANG_CONTAINER_NAME:-sglang-qwen38}
+served_model_name=${SERVED_MODEL_NAME:-qwen-3.8-27b}
+port=${PORT:-30000}
+api_key_file=${API_KEY_FILE:-/home/llmstack/.config/sglang/api_key}
+timeout=${SGLANG_STARTUP_TIMEOUT_SECONDS:-900}
+endpoint="http://127.0.0.1:$port"
+api_key=$(cat "$api_key_file")
+
+elapsed=0
+until curl --fail --silent --show-error --header "Authorization: Bearer $api_key" "$endpoint/v1/models" >/dev/null; do
+  if ! docker ps --format '{{.Names}}' | grep -qx "$container_name"; then
+    docker logs "$container_name" >&2 || true
+    printf '%s\n' 'SGLang exited before becoming healthy.' >&2
+    exit 1
+  fi
+  if [ "$elapsed" -ge "$timeout" ]; then
+    docker logs --tail 200 "$container_name" >&2 || true
+    printf '%s\n' "Timed out after ${timeout}s waiting for SGLang." >&2
+    exit 1
+  fi
+  sleep 5
+  elapsed=$((elapsed + 5))
+done
+
+models=$(curl --fail --silent --show-error --header "Authorization: Bearer $api_key" "$endpoint/v1/models")
+printf '%s\n' "$models" | grep -q "$served_model_name"
+
+response=$(curl --fail --silent --show-error \
+  --header "Authorization: Bearer $api_key" \
+  --header 'Content-Type: application/json' \
+  --data "{\"model\":\"$served_model_name\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: SGLANG_OK\"}],\"temperature\":0,\"max_tokens\":32}" \
+  "$endpoint/v1/chat/completions")
+
+printf '%s\n' "$response" | grep -q 'SGLANG_OK' || {
+  printf '%s\n' "$response" >&2
+  printf '%s\n' 'The server answered, but the expected coherent token was absent.' >&2
+  exit 1
+}
+
+printf '%s\n' 'SGLang Qwen3.8 NVFP4 smoke test passed.'

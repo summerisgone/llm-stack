@@ -1,0 +1,183 @@
+# External-facing route: one hostname (routing.domain) on the external
+# listener, split by path (proxy_pass style). Path priority: /sso, /platform,
+# /v1; anything else falls back to Open WebUI.
+#
+# Admin surface closure: /sso/admin and /sso/realms/master are blocked at the
+# edge with a 404 direct response. Keycloak administration goes through a
+# port-forward or the host-network NodePort only (see docs/security/README.md).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: HTTPRouteFilter
+metadata:
+  name: reject-404
+  namespace: {{ .Values.namespace }}
+spec:
+  directResponse:
+    statusCode: 404
+    body:
+      type: Inline
+      inline: "Not Found"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: edge-test-external
+  namespace: {{ .Values.namespace }}
+spec:
+  parentRefs:
+    - name: edge
+      sectionName: external
+  rules:
+    # Block the Keycloak admin console and master realm before the catch-all
+    # /sso rule. Longer prefixes always match first within an HTTPRoute.
+    - name: sso-reject-admin
+      matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.routing.external.ssoPath }}/admin
+        - path:
+            type: PathPrefix
+            value: {{ .Values.routing.external.ssoPath }}/realms/master
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.envoyproxy.io
+            kind: HTTPRouteFilter
+            name: reject-404
+    # Token endpoint gets its own rule so the rate-limit BTP below can apply
+    # a tighter per-IP limit to credential-presenting requests only.
+    - name: sso-token
+      matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.routing.external.ssoPath }}/realms/{{ .Values.oidc.realm }}/protocol/openid-connect/token
+      backendRefs:
+        - name: keycloak
+          port: 8080
+    - name: sso
+      matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.routing.external.ssoPath }}
+      backendRefs:
+        - name: keycloak
+          port: 8080
+    # PAT management dashboard and /api/tokens REST endpoints. Envoy strips
+    # the /platform prefix before forwarding, so pat-service sees the paths
+    # it routes natively: /, /assets/, /auth/login, /auth/callback,
+    # /auth/logout, /api/tokens, /api/tokens/{id}.
+    - name: platform
+      matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.routing.external.platformPath }}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: pat-service
+          port: 8080
+    # OpenAI-compatible reverse proxy. The /v1 prefix is preserved so
+    # pat-service's /v1/ proxy handler (forwarding to the AI Gateway) picks
+    # the request up directly. Inbound user/pat headers are stripped: only
+    # the service's own client-credential JWT travels to the gateway.
+    - name: api
+      matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.routing.external.apiPath }}
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - X-User-Id
+              - X-User-Name
+              - X-Pat-Token-Id
+      # Match llmd.yaml's internal AIGatewayRoute timeout. Without this,
+      # Envoy's default 15s per-route timeout fires before a large-context
+      # completion finishes prefill under contention -- the client sees a
+      # false 504 while pat-service and the backend engine keep running the
+      # request to completion regardless (observed 2026-09-07: 94 edge 504s,
+      # all ~15.0-15.4s, no matching error on pat-service or the EPP).
+      timeouts:
+        request: 10m
+      backendRefs:
+        - name: pat-service
+          port: 8080
+    - name: openwebui
+      backendRefs:
+        - name: openwebui
+          port: 8080
+---
+# Tight rate limit on the token endpoint: 10 req/min per source IP.
+# This slows credential-stuffing attacks before they hit PAT validation.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: edge-sso-token-rate-limit
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: edge-test-external
+      sectionName: sso-token
+  rateLimit:
+    global:
+      rules:
+        - clientSelectors:
+            - sourceCIDR:
+                value: 0.0.0.0/0
+                type: Distinct
+          limit:
+            requests: 10
+            unit: Minute
+---
+# General rate limit on the /sso prefix: 100 req/min per source IP.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: edge-sso-rate-limit
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: edge-test-external
+      sectionName: sso
+  rateLimit:
+    global:
+      rules:
+        - clientSelectors:
+            - sourceCIDR:
+                value: 0.0.0.0/0
+                type: Distinct
+          limit:
+            requests: 100
+            unit: Minute
+---
+# Rate limit on /v1 by source IP before PAT lookup: 60 req/min per IP.
+# The per-owner limit (3 req/min on inference) still applies after auth.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: edge-api-ip-rate-limit
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: edge-test-external
+      sectionName: api
+  rateLimit:
+    global:
+      rules:
+        - clientSelectors:
+            - sourceCIDR:
+                value: 0.0.0.0/0
+                type: Distinct
+          limit:
+            requests: 60
+            unit: Minute

@@ -1,0 +1,114 @@
+# docs/adr/0013-embeddings-api-bge-m3.md. Model weights are the read-only
+# PV/PVC created by gpu-objects-up (k8s/overlays/remote-wsl-vllm-nvfp4/
+# embeddings-model-volume.yaml), same pattern as the LLM engine charts.
+name: embeddings-bge-m3
+replicas: 1
+nodeName: k3d-llm-stack-server-0
+modelClaim: embeddings-bge-m3-model
+
+# cpu (default) | gpu. Switching modes: edit this value, `make embeddings-up`,
+# then `make vllm-up` (or `make sglang-up`) to apply the paired LLM memory
+# reduction or its reversal -- the two moves happen in one commit, never
+# separately. See the ADR's "Workload: one chart, two accelerator modes".
+accelerator: cpu
+
+inference:
+  servedModelName: bge-m3
+  port: 80
+  # OpenAI API limits enforced server-side; the AI Gateway's per-route
+  # request buffer (helm/airgap-stack templates/embeddings.yaml) must stay
+  # sized to maxClientBatchSize * 8192 tokens, re-checked at V2.
+  maxClientBatchSize: 32
+  # NOT maxClientBatchSize * 8192: measured live (2026-09-14) that
+  # --max-batch-tokens does not change warmup/steady memory at all (262144
+  # and 16384 both peaked ~13.5GiB) -- it is TEI's internal per-pass
+  # throughput knob, not a requirement that a whole client batch fit one
+  # pass. Confirmed at this value against the real deployed Service: a
+  # 32-item batch returns 200 with all 32 vectors, a 33-item batch 422.
+  # Left at TEI's own upstream default.
+  maxBatchTokens: 16384
+  # Both added 2026-09-14 after a real load test took the whole node
+  # NotReady for ~14 minutes (see resources comment below): TEI's own
+  # /metrics showed te_request_failure{err="dropped"} in the hundreds --
+  # with the 512 upstream default, TEI accepted far more concurrent work
+  # than a handful of CPU cores can execute, instead of shedding load with
+  # a fast 429. 16 gives real admission control sized to what this pod can
+  # actually run; the AI Gateway route's own per-user rate limit
+  # (helm/airgap-stack templates/embeddings.yaml) is a per-minute frequency
+  # guard, not a concurrency one, so it did nothing to prevent this.
+  maxConcurrentRequests: 16
+  # Must not exceed resources.requests.cpu (and gpu.resources.requests.cpu)
+  # below -- TEI reads the *host's* CPU count for its worker-thread default
+  # (observed spawning 15-17 threads under an 8-core cgroup limit), not the
+  # cgroup quota, so an unset value oversubscribes the assigned CPU budget
+  # regardless of what the limit says. Thread thrashing against a throttled
+  # quota is the likely mechanism behind the node incident above.
+  tokenizationWorkers: 2
+
+# EMBEDDINGS_CPU_IMAGE / EMBEDDINGS_GPU_IMAGE in versions.lock.env are the
+# source of truth; these two values must be kept in step by hand, same
+# convention as SGLANG_IMAGE. gpu is empty until ADR-0013 V3 picks TEI's CUDA
+# image or the vLLM pooling runner fallback on SM 12.0.
+image:
+  cpu: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07
+  gpu: ""
+
+# cpu-mode resources. Explicit requests/limits, no GPU resource, no
+# RuntimeClass -- this pod must never contend with vLLM/SGLang for the GPU.
+# memory: an initial 4Gi/6Gi guess OOMKilled the pod in real k8s (2026-09-14,
+# exit 137 ~5s after start). Root-caused with docker + second-by-second
+# `docker stats` sampling on the actual host, unconstrained: the one-time
+# model load/convert (not the warmup batch -- 262144 and 16384
+# --max-batch-tokens both produced the same curve) peaks at ~13.5-13.6GiB
+# before settling to ~5.4-5.6GiB steady state. --dtype float16 cut the peak
+# to ~9.8GiB but was not used: unverified effect on embedding quality on the
+# CPU candle path, and ADR-0013's quality gate (V5) doesn't cover it. 14Gi/
+# 16Gi gives ~2.4GiB margin over the measured fp32 peak; the node has 48Gi
+# allocatable with room for it (verify `kubectl describe node` headroom
+# before raising further, since limits here already push node-wide memory
+# limit commitment over 100% -- tolerated today per the same node's own
+# "may be over 100%" allocation summary, but worth rechecking as more load
+# lands on this box).
+#
+# cpu: request == limit (Guaranteed for this resource) on purpose, after a
+# real load test at request=4/limit=8 took the whole node NotReady for
+# ~14 minutes (2026-09-14, `kubectl get events --field-selector
+# involvedObject.kind=Node`). A Burstable pod that's allowed to burst to 8
+# cores but whose own thread count and request admission aren't bounded to
+# match (see maxConcurrentRequests/tokenizationWorkers above) repeatedly
+# hits its CFS quota and gets throttled mid-burst -- with enough threads
+# doing that at once, scheduling latency for the *node's* own kubelet
+# heartbeat degrades enough to trip NotReady. A flat, non-bursting 2-core
+# ceiling removes the burst-then-throttle cycle entirely; this is a batch/
+# indexing workload (ADR-0013), not latency-critical, so slower throughput
+# under load is the correct trade against taking the node down again. Raise
+# only alongside a matching maxConcurrentRequests/tokenizationWorkers change
+# in the same commit, and load-test on a host you can afford to lose for a
+# few minutes if the theory is wrong.
+resources:
+  requests:
+    cpu: "2"
+    memory: 14Gi
+  limits:
+    cpu: "2"
+    memory: 16Gi
+
+# gpu-mode only. gpuMemoryBudgetGiB is a paper value until ADR-0013 V3
+# measures peak process memory at max batch x 8192 tokens on the real card;
+# it is NOT derived from weight size. The same change that raises it must
+# lower helm/vllm-inference inference.gpuMemoryUtilization (or SGLang's
+# inference.memFractionStatic) by at least as much, in the same commit.
+# resources carries no nvidia.com/gpu key by design: this pod deliberately
+# sits outside scheduler GPU accounting (see the ADR's "gpu (opt-in)" note on
+# why requesting the extended resource is wrong here).
+gpu:
+  gpuMemoryBudgetGiB: 0
+  # cpu: request == limit, same reasoning as the cpu-mode resources block
+  # above (avoid the burst-then-CFS-throttle cycle that took the node down).
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 6Gi

@@ -1,0 +1,34 @@
+# Apply this probe manually before the vLLM deployment. It is intentionally not
+# part of kustomization because it runs once and then should be deleted.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cuda-runtime-smoke
+  namespace: airgap-ai-stack
+spec:
+  restartPolicy: Never
+  runtimeClassName: nvidia
+  containers:
+    - name: cuda-runtime-smoke
+      image: llm-stack/vllm-qwen38-nvfp4:0.27.1
+      imagePullPolicy: Never
+      command:
+        - python3
+        - -c
+        - |
+          import ctypes
+          import os
+          import torch
+          print(f"device={os.stat('/dev/dxg')}")
+          cuda = ctypes.CDLL("libcuda.so.1")
+          print(f"cuInit={cuda.cuInit(0)}")
+          print(f"torch_cuda={torch.version.cuda}")
+          print(f"available={torch.cuda.is_available()}")
+          assert torch.cuda.is_available(), "CUDA is not available"
+          print(torch.cuda.get_device_name(0))
+          print(torch.cuda.get_device_capability(0))
+      env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: all
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: compute,utility

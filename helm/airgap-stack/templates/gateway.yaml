@@ -1,0 +1,37 @@
+# Public Envoy Gateway. Browser services are routed by path only, so the
+# Windows host name is never an application endpoint or routing selector.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: edge
+  namespace: {{ .Values.namespace }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 1
+      envoyService:
+        name: airgap-ai-edge
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edge
+  namespace: {{ .Values.namespace }}
+spec:
+  gatewayClassName: envoy
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: edge
+  listeners:
+    - name: external
+      protocol: HTTP
+      port: {{ .Values.routing.edge.externalPort }}
+      allowedRoutes:
+        namespaces:
+          from: Same
