@@ -12,6 +12,32 @@ Nothing in the request path leaves the cluster: the model, the token store and
 the trace store are all local. The stack is built to be air-gappable, and to
 be stood up more than once — see [docs/install](docs/install/README.md).
 
+## Helm charts
+
+Four charts in `helm/`, each its own release with its own `make` target:
+
+| Chart | Deploys | Command | Notes |
+| --- | --- | --- | --- |
+| `helm/airgap-stack` | routing (Gateway, HTTPRoutes, AIGatewayRoute) plus the rendered `k8s/base` application workloads | `make helm-up` | the release; GPU objects and model Deployments are filtered out, see [ADR 0007](docs/adr/0007-inference-engines-as-helm-releases.md) |
+| `helm/vllm-inference` | vLLM Deployment/Service on the shared model PVC | `make vllm-up` | a values change restarts only the model server, not the rest of the stack |
+| `helm/sglang-inference` | SGLang Deployment/Service on the same PVC | `make sglang-up` | optional second engine; needs vLLM scaled to 0 first (one GPU) |
+| `helm/embeddings-inference` | bge-m3 embeddings server, CPU or GPU-loan mode | `make embeddings-up` | GPU mode requires vLLM or SGLang already Running, see [ADR 0013](docs/adr/0013-embeddings-api-bge-m3.md) |
+
+`make stack-up` runs all of the above in order. See [helm/README.md](helm/README.md) for what each chart owns.
+
+### Dependency: Kubernetes operators
+
+None of these four charts install the database/storage operators or their CRDs. `k8s/base` creates operator custom resources directly - `Cluster` for CloudNativePG, `ClickHouseInstallation` for the Altinity operator, `RedisReplication` for the OT-Helm Redis operator, `Tenant` for the MinIO Operator - and expects the operators already running in the cluster.
+
+The operators are installed separately, by `make operators-up`:
+
+- CloudNativePG into `cnpg-system`
+- the Altinity ClickHouse operator into `clickhouse-operator`, watching only `airgap-ai-stack`
+- the OT-Helm Redis operator into `redis-operator`
+- the MinIO Operator into `minio-operator` (`config/minio-operator/values.yaml`)
+
+`make up` and `make stack-up` both run `operators-up` before anything that depends on it. Deploying `helm/airgap-stack` (or applying `k8s/base` directly) against a cluster without these operators leaves the `Cluster`/`ClickHouseInstallation`/`RedisReplication`/`Tenant` objects unreconciled - Keycloak, Langfuse and the PAT service depend on the Secrets those operators create (`keycloak-db-app`, `langfuse-db-app`, `pat-db-app`) and never become Ready.
+
 ## Deployment profiles
 
 | | `remote-wsl-vllm-nvfp4` | `local-mac` |
