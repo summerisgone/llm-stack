@@ -14,7 +14,10 @@ it has never run. Day-2 operations — tunnels, reboots, dashboards — are in
 - A TLS-terminating reverse proxy in front, publishing one origin and
   forwarding to the Envoy edge listener. The stack never terminates TLS
   itself — see [ADR 0004](../adr/0004-tls-terminates-at-the-site-proxy.md).
-- The model weights on disk, and the vLLM and pat-service images built.
+- The model weights on disk, and the vLLM image built. pat-service is pulled
+  from `ghcr.io/summerisgone/pat-service` (built by
+  `.github/workflows/pat-service-image.yml`); the site needs outbound access
+  to ghcr.io, or the image mirrored in for an air-gapped install.
 
 ## Values that are site-specific
 
@@ -47,11 +50,10 @@ $EDITOR .env
 # 2. Validate everything that needs no cluster.
 make verify
 
-# 3. On the GPU host: create the cluster and load the images.
+# 3. On the GPU host: create the cluster and load the vLLM image.
 deploy/vllm-qwen38-nvfp4/k3d-create-nvidia          # destructive: recreates the named cluster
 deploy/vllm-qwen38-nvfp4/build                      # builds the vLLM image
 deploy/vllm-qwen38-nvfp4/k3d-load-image
-make nvfp4-pat-load                                 # builds and imports pat-service
 
 # 4. GPU accounting: the device plugin must advertise nvidia.com/gpu before
 #    the vLLM pod can be scheduled at all.

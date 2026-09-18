@@ -63,11 +63,11 @@ is not a deploy path.
 
 Prerequisites: a k3d cluster created by
 `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia`, the NVIDIA device plugin
-(`make device-plugin-load device-plugin-up`), the vLLM image built and
-imported (`deploy/vllm-qwen38-nvfp4/build`, `k3d-load-image`), and the
-pat-service image imported (`make nvfp4-pat-load`). The full ordered runbook,
-including the values that must be changed for a new site, is in
-[docs/install](docs/install/README.md).
+(`make device-plugin-load device-plugin-up`), and the vLLM image built and
+imported (`deploy/vllm-qwen38-nvfp4/build`, `k3d-load-image`). pat-service is
+pulled from `ghcr.io/summerisgone/pat-service`, no local build needed. The
+full ordered runbook, including the values that must be changed for a new
+site, is in [docs/install](docs/install/README.md).
 
 ```sh
 cp .env.example .env         # then replace every value; see docs/security

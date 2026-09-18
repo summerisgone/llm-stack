@@ -1090,8 +1090,8 @@ spec:
           value: "4194304"
         - name: QOS_FINGERPRINT_TIMEOUT_MS
           value: "200"
-        image: airgap-ai-stack/pat-service:local
-        imagePullPolicy: Never
+        image: ghcr.io/summerisgone/pat-service:latest
+        imagePullPolicy: Always
         name: pat-service
         ports:
         - containerPort: 8080
