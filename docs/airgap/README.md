@@ -19,6 +19,11 @@ Two references are not yet digest-pinned:
 - the NVIDIA device plugin, which is a mirrored tag rather than the official
   `nvcr.io` reference because anonymous pulls are not reachable from the
   reference host.
+- `PAT_SERVICE_IMAGE`, a first-party image published to
+  `ghcr.io/summerisgone/pat-service` by
+  `.github/workflows/pat-service-image.yml` on every change. Pin it to a
+  `sha-<short sha>` tag or digest once one exists, the same convention as
+  `SGLANG_IMAGE`.
 
 ## What is missing
 

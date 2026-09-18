@@ -12,3 +12,11 @@ resources:
   - routes.yaml
   - lmstudio.yaml
   - lmstudio-backend.yaml
+
+patches:
+  - path: pat-service-local-image-patch.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: pat-service

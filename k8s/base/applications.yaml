@@ -141,8 +141,13 @@ spec:
     spec:
       containers:
         - name: pat-service
-          image: airgap-ai-stack/pat-service:local
-          imagePullPolicy: Never
+          # .github/workflows/pat-service-image.yml publishes this on every
+          # push to pat-service/**. Not yet digest-pinned (docs/airgap), so
+          # Always -- IfNotPresent would keep running a stale :latest once
+          # the node has cached one. local-mac overrides both fields back to
+          # the OrbStack-local build via pat-service-local-image-patch.yaml.
+          image: ghcr.io/summerisgone/pat-service:latest
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080

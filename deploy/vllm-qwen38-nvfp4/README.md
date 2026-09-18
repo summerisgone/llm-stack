@@ -47,12 +47,14 @@ node image.
 
 ```sh
 deploy/vllm-qwen38-nvfp4/k3d-create-nvidia
-make nvfp4-pat-load                  # pat-service image -> k3d node (WSL2 host)
-make pat-deploy                      # same import, from a workstation over SSH (no registry)
 make stack-up                        # gateway + operators + vLLM + full stack + llm-d EPP
 ./scripts/vllm-nvfp4-smoke-test      # direct GPU vLLM smoke
 ./scripts/llmd-nvfp4-smoke-test      # EPP metrics + PAT end-to-end
 ```
+
+`stack-up` pulls pat-service straight from `ghcr.io/summerisgone/pat-service`
+(published by `.github/workflows/pat-service-image.yml` on every push to
+`pat-service/**`) — no local build or image import onto the k3d node.
 
 `stack-up` applies the GPU prerequisites from the `remote-wsl-vllm-nvfp4`
 overlay, installs the vLLM server from `helm/vllm-inference`, then the

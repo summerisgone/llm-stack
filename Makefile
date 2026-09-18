@@ -9,7 +9,7 @@ K3D_NODE ?= k3d-llm-stack-server-0
 # truth for every --version below; do not inline a version in a recipe.
 include versions.lock.env
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down nvfp4-pat-load gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up pat-deploy
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -245,8 +245,8 @@ llmd-down:
 	$(HELM) uninstall llmd-qwen-test --namespace $(K8S_NAMESPACE) --ignore-not-found
 
 # Full remote deploy. Run from the WSL2 host directly, or through the SSH
-# tunnel from a workstation after `make nvfp4-pat-load` has imported the
-# pat-service image on the host.
+# tunnel from a workstation. pat-service is pulled from ghcr.io (see
+# k8s/base/applications.yaml), no local build or image import needed.
 stack-up: gateway-up operators-up
 	$(KUBECTL) apply -f $(KUSTOMIZE_DIR)/base/namespace.yaml
 	$(MAKE) gpu-objects-up
@@ -268,16 +268,6 @@ stack-up: gateway-up operators-up
 # Compatibility aliases for the previous target names.
 nvfp4-up: stack-up
 nvfp4-down: llmd-down
-
-nvfp4-pat-load:
-	@deploy/vllm-qwen38-nvfp4/k3d-load-pat-service
-
-# Deploy pat-service from the workstation with no registry: builds the amd64
-# image, tars it, copies it to the remote k3d host over SSH (WSL_SSH_HOST /
-# WSL_SSH_PORT), and imports it into the node's containerd. Equivalent to
-# nvfp4-pat-load but run where `docker` does not already point at the node.
-pat-deploy: pat-image
-	@deploy/vllm-qwen38-nvfp4/pat-deploy
 
 # NVIDIA device plugin registers the RTX 5090 with the kubelet so that
 # nvidia.com/gpu is advertised, scheduled, and accounted. Run on the WSL2

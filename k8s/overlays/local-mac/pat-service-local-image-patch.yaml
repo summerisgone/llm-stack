@@ -1,0 +1,15 @@
+# OrbStack's Kubernetes node shares the host's Docker image store, so a
+# `make pat-image` build is visible to the cluster with no push and no
+# import step. Override the base's ghcr.io image back to the local build.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pat-service
+  namespace: airgap-ai-stack
+spec:
+  template:
+    spec:
+      containers:
+        - name: pat-service
+          image: airgap-ai-stack/pat-service:local
+          imagePullPolicy: Never
