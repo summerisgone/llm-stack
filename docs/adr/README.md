@@ -18,3 +18,4 @@ supersede instead.
 | [0011](0011-pat-session-key-langfuse-tracing.md) | PAT's chain-hash session key maps to Langfuse `session.id`, grouping agent runs into one session |
 | [0013](0013-embeddings-api-bge-m3.md) | Embeddings API: bge-m3 as its own release behind PATs, CPU by default, GPU as an opt-in memory loan from the LLM (Proposed) |
 | [0014](0014-hermes-curated-catalog-and-worker-slots.md) | Hermes: curated base profile in the repo inherited by per-user PVC layers; `K` worker slots with idle eviction via a broker offered in Open WebUI as a model next to direct chat; broker-issued per-user PATs; no background agents (Proposed) |
+| [0015](0015-third-party-engine-metrics-contract.md) | Metrics contract for third-party engines (llama.cpp, ninfer, ...): mandatory usage/scrape tiers vs. optional native-metric tier, and how to onboard a new provider (Proposed) |
