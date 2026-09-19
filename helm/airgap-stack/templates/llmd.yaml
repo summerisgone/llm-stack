@@ -170,12 +170,29 @@ spec:
     # in an exact-match rule on the x-ai-eg-model header (the model parsed
     # from the request body); this rule makes the model dropdown show
     # `qwen-3.8-27b` while the catch-all rule above still forwards any other
-    # model name. Always through llm-d EPP -- vLLM and SGLang are both
-    # reached this way, selected by config/llmd/router-nvfp4-values.yaml's
-    # modelServers block, never by this route. A direct AIServiceBackend per
-    # engine (the previous shape here) let SGLang traffic skip EPP's queue
-    # and fair-share entirely; see TASK-qos-fair-share.md §7.1 and
-    # docs/adr/0008-per-user-fair-share.md "SGLang portability".
+    # model name. By default this always goes through llm-d EPP -- vLLM and
+    # SGLang are both reached this way, selected by
+    # config/llmd/router-nvfp4-values.yaml's modelServers block, never by
+    # this route. A direct AIServiceBackend per engine (the previous shape
+    # here) let SGLang traffic skip EPP's queue and fair-share entirely; see
+    # TASK-qos-fair-share.md §7.1 and docs/adr/0008-per-user-fair-share.md
+    # "SGLang portability".
+    #
+    # inference.ninfer.live is the one deliberate exception: when true, this
+    # same rule (same model name, same clients, no request-shape change)
+    # points at ninfer's own direct AIServiceBackend instead of EPP, so
+    # swapping the live engine to ninfer needs no client-visible change --
+    # the same seamless swap vLLM<->SGLang already had, extended to a
+    # bypass-EPP engine. The cost is the same one llamacpp/externalApi
+    # already accept: zero EPP queueing/fair-share/priority-bands while
+    # ninfer is live this way (docs/adr/0008, docs/adr/0012 do not apply to
+    # its traffic). ninfer additionally cannot honor any `response_format`
+    # other than `{"type":"text"}` -- it has no constrained/JSON-schema
+    # decoding at all (confirmed against upstream docs/serving.md, not
+    # assumed) -- so any client feature relying on JSON-mode responses (seen
+    # failing today: Hermes agent's auxiliary title generation) degrades or
+    # errors while ninfer is live under this name. See
+    # deploy/ninfer/README.md "Known risks" / "Compatibility gaps".
     - name: openai-qwen38nvfp4
       matches:
         - headers:
@@ -186,7 +203,11 @@ spec:
         request: 10m
       streamIdleTimeout: 10m
       backendRefs:
+        {{- if .Values.inference.ninfer.live }}
+        - name: ninfer-openai
+        {{- else }}
         - name: llmd-qwen-test-openai
+        {{- end }}
     # Additional backends (llama.cpp, an external OpenAI-compatible
     # API): same route, one more exact-match rule per model name, each
     # pointing at the AIServiceBackend defined in inference-backends.yaml.
@@ -217,19 +238,8 @@ spec:
       backendRefs:
         - name: external-api-openai
     {{- end }}
-    {{- if .Values.inference.ninfer.enabled }}
-    - name: openai-ninfer
-      matches:
-        - headers:
-            - type: Exact
-              name: x-ai-eg-model
-              value: {{ .Values.inference.ninfer.modelName }}
-      timeouts:
-        request: 10m
-      streamIdleTimeout: 10m
-      backendRefs:
-        - name: ninfer-openai
-    {{- end }}
+    # ninfer has no rule of its own: it shares openai-qwen38nvfp4 above,
+    # toggled by inference.ninfer.live, not a separate model name.
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy

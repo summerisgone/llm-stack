@@ -97,9 +97,15 @@ spec:
 # above, but ninfer runs as an in-cluster Deployment (helm/ninfer-inference,
 # make ninfer-up) requesting its own nvidia.com/gpu: "1" -- unlike llamacpp's
 # host-run container, its host/port is a k8s Service DNS name, not
-# host.k3d.internal. It cannot join the shared qwen-3.8-27b EPP route (own
-# model name, own exact-match rule in llmd.yaml, see ADR-0015 Instructions
-# §2/§6).
+# host.k3d.internal. It still cannot join llm-d EPP itself (see ADR-0015
+# Instructions §6) -- but unlike llamacpp/externalApi, it does not get its
+# own model name/route either: when inference.ninfer.live is true, the
+# canonical qwen-3.8-27b rule in llmd.yaml points straight at
+# ninfer-openai below instead of the EPP backend, so an engine swap is
+# invisible to clients. This Backend/AIServiceBackend pair (and its
+# BackendSecurityPolicy below) are the same regardless of `live` --
+# `enabled` alone just means "ninfer is deployed and reachable", `live`
+# is the separate switch for "the shared name currently points at it".
 {{- if .Values.inference.ninfer.enabled }}
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
