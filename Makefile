@@ -9,6 +9,9 @@ K3D_NODE ?= k3d-llm-stack-server-0
 # truth for every --version below; do not inline a version in a recipe.
 include versions.lock.env
 
+# Local/site-specific overrides (gitignored). Not required to exist.
+-include .env
+
 .PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up
 
 pat-image:
@@ -24,10 +27,16 @@ pat-image:
 # priority bands -- it is never the route's backendRef.
 GATEWAY_VALUES ?= config/gateway/remote-wsl-values.yaml
 MONITORING_CHART ?= oci://docker.io/envoyproxy/gateway-addons-helm
+# Grafana's public root URL (OIDC redirect target). Site-specific: the
+# gpu-host.local default in config/gateway-addons/values.yaml is a generic
+# placeholder; override with GRAFANA_BASE_URL in .env for a local dev host
+# (e.g. GRAFANA_BASE_URL=http://grafana.***REMOVED***.local:32030) instead of
+# committing that hostname.
+GRAFANA_BASE_URL ?= http://grafana.gpu-host.local:32030
 
 .PHONY: monitoring-up
 monitoring-up:
-	$(HELM) upgrade --install eg-addons $(MONITORING_CHART) --version $(ENVOY_GATEWAY_ADDONS_CHART_VERSION) --namespace monitoring --create-namespace --values config/gateway-addons/values.yaml --set-file grafana.dashboards.vllm.vllm.json=config/grafana/dashboards/vllm.json --set-file grafana.dashboards.llm-d.llm-d-diagnostic-drilldown-dashboard.json=config/grafana/dashboards/llm-d/llm-d-diagnostic-drilldown-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-failure-saturation-dashboard.json=config/grafana/dashboards/llm-d/llm-d-failure-saturation-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-inference-gateway.json=config/grafana/dashboards/llm-d/llm-d-inference-gateway.json --set-file grafana.dashboards.llm-d.llm-d-pd-coordinator-metrics.json=config/grafana/dashboards/llm-d/llm-d-pd-coordinator-metrics.json --set-file grafana.dashboards.llm-d.llm-d-performance-kv-cache.json=config/grafana/dashboards/llm-d/llm-d-performance-kv-cache.json --set-file grafana.dashboards.llm-d.llm-d-sglang-overview.json=config/grafana/dashboards/llm-d/llm-d-sglang-overview.json --set-file grafana.dashboards.llm-d.llm-d-vllm-overview.json=config/grafana/dashboards/llm-d/llm-d-vllm-overview.json --set-file grafana.dashboards.system-state.system-state.json=config/grafana/dashboards/system-state.json --set-file grafana.dashboards.fair-share.fair-share.json=config/grafana/dashboards/fair-share.json --set-file grafana.dashboards.fair-share.user-activity.json=config/grafana/dashboards/user-activity.json --set-file grafana.dashboards.fair-share.cluster-load.json=config/grafana/dashboards/cluster-load.json --set-file grafana.dashboards.cluster-monitor.cluster-monitor.json=config/grafana/dashboards/cluster-monitor.json --wait --timeout 5m
+	$(HELM) upgrade --install eg-addons $(MONITORING_CHART) --version $(ENVOY_GATEWAY_ADDONS_CHART_VERSION) --namespace monitoring --create-namespace --values config/gateway-addons/values.yaml --set grafana.env.GF_SERVER_ROOT_URL=$(GRAFANA_BASE_URL) --set-file grafana.dashboards.vllm.vllm.json=config/grafana/dashboards/vllm.json --set-file grafana.dashboards.llm-d.llm-d-diagnostic-drilldown-dashboard.json=config/grafana/dashboards/llm-d/llm-d-diagnostic-drilldown-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-failure-saturation-dashboard.json=config/grafana/dashboards/llm-d/llm-d-failure-saturation-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-inference-gateway.json=config/grafana/dashboards/llm-d/llm-d-inference-gateway.json --set-file grafana.dashboards.llm-d.llm-d-pd-coordinator-metrics.json=config/grafana/dashboards/llm-d/llm-d-pd-coordinator-metrics.json --set-file grafana.dashboards.llm-d.llm-d-performance-kv-cache.json=config/grafana/dashboards/llm-d/llm-d-performance-kv-cache.json --set-file grafana.dashboards.llm-d.llm-d-sglang-overview.json=config/grafana/dashboards/llm-d/llm-d-sglang-overview.json --set-file grafana.dashboards.llm-d.llm-d-vllm-overview.json=config/grafana/dashboards/llm-d/llm-d-vllm-overview.json --set-file grafana.dashboards.system-state.system-state.json=config/grafana/dashboards/system-state.json --set-file grafana.dashboards.fair-share.fair-share.json=config/grafana/dashboards/fair-share.json --set-file grafana.dashboards.fair-share.user-activity.json=config/grafana/dashboards/user-activity.json --set-file grafana.dashboards.fair-share.cluster-load.json=config/grafana/dashboards/cluster-load.json --set-file grafana.dashboards.cluster-monitor.cluster-monitor.json=config/grafana/dashboards/cluster-monitor.json --wait --timeout 5m
 	$(KUBECTL) apply -f k8s/monitoring-tempo-headless.yaml
 
 gateway-up:
