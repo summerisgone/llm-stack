@@ -86,6 +86,21 @@ inference:
     host: ""
     port: 1234
     modelName: external-api
+  # ninfer pilot (docs/adr/0015-third-party-engine-metrics-contract.md,
+  # ~/agent/ninfer-pilot-task.md). Unlike llamacpp/externalApi above, ninfer
+  # is an in-cluster Deployment (helm/ninfer-inference, make ninfer-up), so
+  # host is a k8s Service DNS name, not host.k3d.internal -- Risk 1 in the
+  # pilot brief: a host-run `docker run --gpus all` container is invisible to
+  # k8s's own nvidia.com/gpu accounting and OOM-killed the live sglang pod
+  # during testing. Requires the ninfer-api-key Secret from helm-up
+  # (NINFER_API_KEY in .env), same pattern as SGLANG_API_KEY. Always its own
+  # model name/route -- cannot join the shared qwen-3.8-27b EPP route (see
+  # inference-backends.yaml comment, ADR-0015 §6).
+  ninfer:
+    enabled: true
+    host: ninfer-qwen38.airgap-ai-stack.svc.cluster.local
+    port: 18080
+    modelName: ninfer-qwen38
   # bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Unlike
   # llamacpp/externalApi above, this flag also controls a second
   # AIGatewayRoute (templates/embeddings.yaml), not just a rule inside

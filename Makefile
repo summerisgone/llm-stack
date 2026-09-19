@@ -12,7 +12,7 @@ include versions.lock.env
 # Local/site-specific overrides (gitignored). Not required to exist.
 -include .env
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -36,7 +36,7 @@ GRAFANA_BASE_URL ?= http://grafana.gpu-host.local:32030
 
 .PHONY: monitoring-up
 monitoring-up:
-	$(HELM) upgrade --install eg-addons $(MONITORING_CHART) --version $(ENVOY_GATEWAY_ADDONS_CHART_VERSION) --namespace monitoring --create-namespace --values config/gateway-addons/values.yaml --set grafana.env.GF_SERVER_ROOT_URL=$(GRAFANA_BASE_URL) --set-file grafana.dashboards.vllm.vllm.json=config/grafana/dashboards/vllm.json --set-file grafana.dashboards.llm-d.llm-d-diagnostic-drilldown-dashboard.json=config/grafana/dashboards/llm-d/llm-d-diagnostic-drilldown-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-failure-saturation-dashboard.json=config/grafana/dashboards/llm-d/llm-d-failure-saturation-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-inference-gateway.json=config/grafana/dashboards/llm-d/llm-d-inference-gateway.json --set-file grafana.dashboards.llm-d.llm-d-pd-coordinator-metrics.json=config/grafana/dashboards/llm-d/llm-d-pd-coordinator-metrics.json --set-file grafana.dashboards.llm-d.llm-d-performance-kv-cache.json=config/grafana/dashboards/llm-d/llm-d-performance-kv-cache.json --set-file grafana.dashboards.llm-d.llm-d-sglang-overview.json=config/grafana/dashboards/llm-d/llm-d-sglang-overview.json --set-file grafana.dashboards.llm-d.llm-d-vllm-overview.json=config/grafana/dashboards/llm-d/llm-d-vllm-overview.json --set-file grafana.dashboards.system-state.system-state.json=config/grafana/dashboards/system-state.json --set-file grafana.dashboards.fair-share.fair-share.json=config/grafana/dashboards/fair-share.json --set-file grafana.dashboards.fair-share.user-activity.json=config/grafana/dashboards/user-activity.json --set-file grafana.dashboards.fair-share.cluster-load.json=config/grafana/dashboards/cluster-load.json --set-file grafana.dashboards.cluster-monitor.cluster-monitor.json=config/grafana/dashboards/cluster-monitor.json --wait --timeout 5m
+	$(HELM) upgrade --install eg-addons $(MONITORING_CHART) --version $(ENVOY_GATEWAY_ADDONS_CHART_VERSION) --namespace monitoring --create-namespace --values config/gateway-addons/values.yaml --set grafana.env.GF_SERVER_ROOT_URL=$(GRAFANA_BASE_URL) --set-file grafana.dashboards.vllm.vllm.json=config/grafana/dashboards/vllm.json --set-file grafana.dashboards.llm-d.llm-d-diagnostic-drilldown-dashboard.json=config/grafana/dashboards/llm-d/llm-d-diagnostic-drilldown-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-failure-saturation-dashboard.json=config/grafana/dashboards/llm-d/llm-d-failure-saturation-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-inference-gateway.json=config/grafana/dashboards/llm-d/llm-d-inference-gateway.json --set-file grafana.dashboards.llm-d.llm-d-pd-coordinator-metrics.json=config/grafana/dashboards/llm-d/llm-d-pd-coordinator-metrics.json --set-file grafana.dashboards.llm-d.llm-d-performance-kv-cache.json=config/grafana/dashboards/llm-d/llm-d-performance-kv-cache.json --set-file grafana.dashboards.llm-d.llm-d-sglang-overview.json=config/grafana/dashboards/llm-d/llm-d-sglang-overview.json --set-file grafana.dashboards.llm-d.llm-d-vllm-overview.json=config/grafana/dashboards/llm-d/llm-d-vllm-overview.json --set-file grafana.dashboards.system-state.system-state.json=config/grafana/dashboards/system-state.json --set-file grafana.dashboards.fair-share.fair-share.json=config/grafana/dashboards/fair-share.json --set-file grafana.dashboards.fair-share.user-activity.json=config/grafana/dashboards/user-activity.json --set-file grafana.dashboards.fair-share.cluster-load.json=config/grafana/dashboards/cluster-load.json --set-file grafana.dashboards.cluster-monitor.cluster-monitor.json=config/grafana/dashboards/cluster-monitor.json --set-file grafana.dashboards.ninfer.ninfer.json=config/grafana/dashboards/ninfer.json --wait --timeout 5m
 	$(KUBECTL) apply -f k8s/monitoring-tempo-headless.yaml
 
 gateway-up:
@@ -176,7 +176,8 @@ embeddings-smoke:
 GPU_OBJECTS = \
 	k8s/overlays/remote-wsl-vllm-nvfp4/runtimeclass.yaml \
 	k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml \
-	k8s/overlays/remote-wsl-vllm-nvfp4/embeddings-model-volume.yaml
+	k8s/overlays/remote-wsl-vllm-nvfp4/embeddings-model-volume.yaml \
+	k8s/overlays/remote-wsl-vllm-nvfp4/ninfer-model-volume.yaml
 
 gpu-objects-config:
 	$(KUBECTL) apply --dry-run=client $(addprefix -f ,$(GPU_OBJECTS)) >/dev/null
@@ -217,6 +218,26 @@ sglang-up:
 
 sglang-down:
 	$(HELM) uninstall $(SGLANG_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
+
+# ninfer pilot inference deployment (docs/adr/0015, ~/agent/ninfer-pilot-task.md).
+# Edit helm/ninfer-inference/values.yaml, then run `make ninfer-up`. Requires
+# the ninfer-qwen38-nvfp4-model PVC from gpu-objects-up and the
+# ninfer-api-key Secret from helm-up (NINFER_API_KEY in .env). One GPU on
+# this node: do not run alongside vllm-up/sglang-up at replicas=1 -- k8s's
+# device plugin refuses to co-schedule both (Risk 1, deploy/ninfer/README.md).
+NINFER_CHART = helm/ninfer-inference
+NINFER_RELEASE = ninfer-inference
+
+ninfer-up:
+	$(HELM) upgrade --install $(NINFER_RELEASE) $(NINFER_CHART) \
+		--namespace $(K8S_NAMESPACE) \
+		--values $(NINFER_CHART)/values.yaml \
+		--take-ownership \
+		$(HELM_FORCE_CONFLICTS) \
+		--wait --timeout 15m
+
+ninfer-down:
+	$(HELM) uninstall $(NINFER_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
 
 # bge-m3 embeddings deployment (docs/adr/0013-embeddings-api-bge-m3.md). Edit
 # helm/embeddings-inference/values.yaml, then run `make embeddings-up`.

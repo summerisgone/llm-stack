@@ -203,6 +203,18 @@ data:
           - targets: [sglang-qwen38:30000]
             labels:
               namespace: airgap-ai-stack
+      # ninfer pilot (docs/adr/0015). ninfer itself has no /metrics; this
+      # scrapes the jsonl_exporter sidecar (helm/ninfer-inference) that tails
+      # --request-log-jsonl instead. Naming the job "ninfer" gives
+      # up{job="ninfer"} once this target is scraped successfully -- ADR-0015
+      # Tier 2's stated minimum bar, satisfied by the same scrape as Tier 3,
+      # no separate blackbox-exporter probe needed.
+      - job_name: ninfer
+        metrics_path: /metrics
+        static_configs:
+          - targets: [ninfer-qwen38:9400]
+            labels:
+              namespace: airgap-ai-stack
       - job_name: embeddings-bge-m3
         metrics_path: /metrics
         static_configs:

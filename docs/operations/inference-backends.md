@@ -15,6 +15,7 @@ launch settings are in [vllm-inference.md](vllm-inference.md).
 | SGLang | `qwen-3.8-27b` | `helm/sglang-inference` release, `make sglang-up` | llm-d EPP | `config/llmd/router-nvfp4-values.yaml` `router.modelServers` |
 | llama.cpp | `llamacpp-local` | `deploy/llamacpp` (host Docker) | direct `AIServiceBackend`, bypasses EPP | `inference.llamacpp.enabled` |
 | External API | `external-api` (or whatever `inference.externalApi.modelName` is set to) | not managed by this repo | direct `AIServiceBackend`, bypasses EPP | `inference.externalApi.enabled` |
+| ninfer (pilot) | `ninfer-qwen38` | `helm/ninfer-inference` release, `make ninfer-up` | direct `AIServiceBackend`, bypasses EPP | `inference.ninfer.enabled` |
 
 The canonical vLLM/SGLang model name is a **single, immutable contract**:
 `qwen-3.8-27b`, regardless of which engine is serving. Both engine charts run
@@ -40,17 +41,19 @@ token, vLLM does not, and EPP's dispatch path has no per-endpoint auth hook
 of its own (`helm/airgap-stack/templates/llmd.yaml`, `BackendSecurityPolicy/
 sglang-api-key`). It plays no part in choosing which engine answers.
 
-llama.cpp and the external API stay on the older, simpler pattern: their own
-`Backend`/`AIServiceBackend` pair and their own exact-match rule on a
-*different* model name, toggled by `inference.<name>.enabled` in
+llama.cpp, the external API, and ninfer stay on the older, simpler pattern:
+their own `Backend`/`AIServiceBackend` pair and their own exact-match rule on
+a *different* model name, toggled by `inference.<name>.enabled` in
 `helm/airgap-stack/values.yaml` (see `helm/airgap-stack/templates/
 inference-backends.yaml`). Traffic to those model names bypasses llm-d
 entirely — no queue, no fair-share, no priority bands. That is an accepted,
 documented gap (`TASK-qos-fair-share.md` §7.6), not a bug, and is why SGLang
-was moved off this pattern while these two stayed on it: SGLang is a
-realistic replacement for the fair-shared production engine, llama.cpp and
-the external API are not (yet) reached by real coding-agent traffic under
-this scheme.
+was moved off this pattern while these three stayed on it: SGLang is a
+realistic replacement for the fair-shared production engine, the other three
+are not (yet) reached by real coding-agent traffic under this scheme. ninfer
+is additionally unverified against llm-d's `core-metrics-extractor` (ADR
+0015 §"Instructions" step 6) — even setting that aside, it stays on this
+pattern for pilot scope regardless (see `deploy/ninfer/README.md`).
 
 A client selects the model by request `model`; Open WebUI's model dropdown,
 the `/v1/models` endpoint, and `x-ai-eg-model` all key off the same name.
@@ -162,10 +165,15 @@ curl -s $STACK_BASE_URL/v1/chat/completions -H "Authorization: Bearer sk-…" \
 ## Reachability from the cluster
 
 In-cluster engines are addressed over Service DNS: vLLM at
-`vllm-qwen38-nvfp4:8000`, SGLang at `sglang-qwen38:30000`. Prometheus scrapes
-both, plus the llm-d EPP, with `namespace=airgap-ai-stack` attached
-(`k8s/overlays/remote-wsl-vllm-nvfp4/prometheus-config-patch.yaml`), which is
-what the vLLM, SGLang and llm-d dashboards filter on.
+`vllm-qwen38-nvfp4:8000`, SGLang at `sglang-qwen38:30000`, ninfer at
+`ninfer-qwen38:18080` (`inference.ninfer.host`/`port` in
+`helm/airgap-stack/values.yaml` — unlike llama.cpp, ninfer is always an
+in-cluster Deployment, never a host-run container; see
+`deploy/ninfer/README.md` Risk 1). Prometheus scrapes vLLM, SGLang and the
+llm-d EPP directly, plus a sidecar that re-exposes ninfer's JSONL request log
+as Prometheus text (ninfer has no native `/metrics`) under `job: ninfer`, all
+with `namespace=airgap-ai-stack` attached
+(`k8s/overlays/remote-wsl-vllm-nvfp4/prometheus-config-patch.yaml`).
 
 A host-run backend (llama.cpp, or SGLang started from
 `deploy/sglang-qwen38` instead) is addressed as `host.k3d.internal:<port>` —

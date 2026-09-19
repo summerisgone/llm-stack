@@ -41,6 +41,11 @@ GPU_KEEP_OUT = {
     # PV/PVC above, in both accelerator modes.
     ("PersistentVolume", "embeddings-bge-m3-model"),
     ("PersistentVolumeClaim", "embeddings-bge-m3-model"),
+    # docs/adr/0015-third-party-engine-metrics-contract.md /
+    # ~/agent/ninfer-pilot-task.md: ninfer's own `.ninfer` artifact, same
+    # reasoning as the vLLM model PV/PVC above.
+    ("PersistentVolume", "ninfer-qwen38-nvfp4-model"),
+    ("PersistentVolumeClaim", "ninfer-qwen38-nvfp4-model"),
 }
 
 # Network/routing objects are owned by chart templates (values-driven host,
