@@ -25,10 +25,16 @@ modelFile: qwen3_8_27b_nvfp4.ninfer
 apiKeySecret: ninfer-api-key
 
 inference:
-  # Public OpenAI model id advertised by ninfer-serve and matched by
-  # inference.ninfer.modelName in helm/airgap-stack/values.yaml -- keep these
-  # two in sync.
-  servedModelName: ninfer-qwen38
+  # Public OpenAI model id advertised by ninfer-serve (--model-id) and
+  # matched by inference.ninfer.modelName in helm/airgap-stack/values.yaml --
+  # keep these two in sync. Deliberately the same canonical name vLLM/SGLang
+  # use (qwen-3.8-27b), not a ninfer-specific one: when
+  # inference.ninfer.live is true, the shared AIGatewayRoute rule for this
+  # name points at ninfer instead of EPP, so a client's `model` field never
+  # changes across an engine swap. See helm/airgap-stack/values.yaml's
+  # ninfer.live comment for the swap's cost (no EPP fair-share, no JSON
+  # response_format) while this is live.
+  servedModelName: qwen-3.8-27b
   port: 18080
   # Sizing carried over from the pilot brief's manual comparison run (RTX
   # 5090, same NVFP4 checkpoint family as vllm/sglang). Re-tune against this

@@ -93,14 +93,33 @@ inference:
   # pilot brief: a host-run `docker run --gpus all` container is invisible to
   # k8s's own nvidia.com/gpu accounting and OOM-killed the live sglang pod
   # during testing. Requires the ninfer-api-key Secret from helm-up
-  # (NINFER_API_KEY in .env), same pattern as SGLANG_API_KEY. Always its own
-  # model name/route -- cannot join the shared qwen-3.8-27b EPP route (see
-  # inference-backends.yaml comment, ADR-0015 §6).
+  # (NINFER_API_KEY in .env), same pattern as SGLANG_API_KEY.
+  #
+  # modelName is the canonical inference.modelName (qwen-3.8-27b), not a
+  # ninfer-specific one -- `live: true` points that one shared
+  # openai-qwen38nvfp4 route rule (llmd.yaml) at ninfer's direct backend
+  # instead of llm-d EPP, so a client never sees the model name change when
+  # ninfer becomes the live engine, same as a vLLM<->SGLang swap. Cannot
+  # actually join EPP itself, still -- see inference-backends.yaml comment,
+  # ADR-0015 §6. `enabled` alone (live: false) only deploys the backend
+  # objects without routing the canonical name to them (matches
+  # sglang.enabled's "wired but not necessarily dispatched" shape).
+  #
+  # Known, accepted cost while live: true -- not just losing EPP fair-share
+  # (already true for llamacpp/externalApi): ninfer rejects every
+  # `response_format` except `{"type":"text"}` (no constrained/JSON-schema
+  # decoding at all, confirmed against upstream docs/serving.md). Any client
+  # feature that depends on JSON-mode responses breaks or degrades while
+  # ninfer is live under this name -- observed 2026-09-19: Hermes agent's
+  # auxiliary title generation, HTTP 400 "this response_format requires
+  # constrained output, which NInfer cannot guarantee". See
+  # deploy/ninfer/README.md.
   ninfer:
     enabled: true
+    live: true
     host: ninfer-qwen38.airgap-ai-stack.svc.cluster.local
     port: 18080
-    modelName: ninfer-qwen38
+    modelName: qwen-3.8-27b
   # bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Unlike
   # llamacpp/externalApi above, this flag also controls a second
   # AIGatewayRoute (templates/embeddings.yaml), not just a rule inside

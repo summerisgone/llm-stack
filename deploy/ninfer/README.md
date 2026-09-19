@@ -9,18 +9,28 @@ and
 Task brief: `~/agent/ninfer-pilot-task.md`.
 
 **Pilot status, not a replacement for vLLM/SGLang.** Deployed as its own
-in-cluster Deployment (`helm/ninfer-inference`), reached through the AI
-Gateway under its own model name, bypassing llm-d's EPP fair-share queue.
-This is not a limitation this pilot can lift -- see "EPP / fair-share" below.
+in-cluster Deployment (`helm/ninfer-inference`), bypassing llm-d's EPP
+fair-share queue -- it cannot join EPP itself, see "EPP / fair-share" below.
 
-**Live on this cluster as of 2026-09-19.** `ninfer-qwen38` is `Running` (2/2:
-engine + `jsonl_exporter` sidecar), `usage.prompt_tokens`/`completion_tokens`
-confirmed non-zero on a direct `POST /v1/chat/completions` (MTP speculative
-decoding active: `draft_n_accepted` 21/27 on that request), `up{job="ninfer"}`
-is `1` in Prometheus, the ninfer AIGatewayRoute rule/Backend/AIServiceBackend
-all report `Accepted: True`, and scaling `sglang-qwen38` to `replicas: 1`
-alongside it left sglang `Pending` on `Insufficient nvidia.com/gpu` -- not an
-OOM crash. Risk 1 verified mitigated for real, not just by chart inspection.
+**Seamless swap under the canonical model name, not its own.** Unlike
+llama.cpp/externalApi, ninfer does not advertise a `ninfer-*` model id.
+`inference.ninfer.live` (`helm/airgap-stack/values.yaml`) toggles whether
+the one shared `openai-qwen38nvfp4` route rule (`llmd.yaml`) points at
+ninfer's direct backend or at llm-d EPP (vLLM/SGLang) -- clients keep
+sending `model: qwen-3.8-27b` unchanged across the swap, same as a
+vLLM<->SGLang engine change. The cost of that seamlessness is real, not
+free: see "Compatibility gaps" below, in addition to losing EPP fair-share.
+
+**Live on this cluster as of 2026-09-19** (`inference.ninfer.live: true`).
+`ninfer-qwen38` is `Running` (2/2: engine + `jsonl_exporter` sidecar),
+`usage.prompt_tokens`/`completion_tokens` confirmed non-zero on
+`POST /v1/chat/completions` with `model: qwen-3.8-27b` (MTP speculative
+decoding active: `draft_n_accepted` 21/27 on one sample request),
+`up{job="ninfer"}` is `1` in Prometheus, the shared route rule's
+`backendRefs` resolves to `ninfer-openai`, and scaling `sglang-qwen38` to
+`replicas: 1` alongside it left sglang `Pending` on
+`Insufficient nvidia.com/gpu` -- not an OOM crash. Risk 1 verified mitigated
+for real, not just by chart inspection.
 
 Unlike `deploy/llamacpp` and `deploy/sglang-qwen38`, there is no `run`/`smoke`
 script here: ninfer runs only as the `helm/ninfer-inference` k8s Deployment
@@ -75,21 +85,30 @@ make helm-up      # creates the ninfer-api-key Secret + BackendSecurityPolicy
 make ninfer-up    # helm/ninfer-inference
 ```
 
-`inference.ninfer.enabled` in `helm/airgap-stack/values.yaml` defaults to
-`false`. Flip it (and set `NINFER_API_KEY`) to wire the AI Gateway route:
+`inference.ninfer.enabled` wires the Backend/AIServiceBackend and the
+`ninfer-api-key` Secret (deployed, reachable, but not yet the one clients
+hit). `inference.ninfer.live` is the separate switch that actually points
+the canonical `qwen-3.8-27b` route rule at it:
 
 ```sh
 helm upgrade --install airgap-stack helm/airgap-stack \
   --namespace airgap-ai-stack --values helm/airgap-stack/values.yaml \
-  --set inference.ninfer.enabled=true
+  --set inference.ninfer.enabled=true --set inference.ninfer.live=true
 ```
 
-The model becomes selectable as `ninfer-qwen38`
-(`inference.ninfer.modelName`) through the gateway's `/v1` route, alongside
-(not instead of) whichever of vLLM/SGLang is live.
+`inference.ninfer.modelName` in `helm/airgap-stack/values.yaml` and
+`inference.servedModelName` in `helm/ninfer-inference/values.yaml` are both
+`qwen-3.8-27b` -- the same name vLLM/SGLang use, not a ninfer-specific one.
+Keep the two in sync (ninfer's own `--model-id` must equal the route's
+match value or requests get rejected as a model-id mismatch, per upstream
+`docs/serving.md`).
 
 **Only one GPU on this node.** Do not run `ninfer-up` at the same time as
-`vllm-up`/`sglang-up` at `replicas: 1` each -- see Risk 1.
+`vllm-up`/`sglang-up` at `replicas: 1` each -- see Risk 1. Because
+`live: true` also makes ninfer the thing `qwen-3.8-27b` clients actually
+hit, treat flipping it the same as the vLLM<->SGLang swap procedure in
+[docs/operations/inference-backends.md](../../docs/operations/inference-backends.md):
+an explicit, deliberate step, not a background toggle.
 
 ## Verifying inference works
 
@@ -100,7 +119,7 @@ curl -s http://127.0.0.1:18080/health
 curl -s http://127.0.0.1:18080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $NINFER_API_KEY" \
-  -d '{"model":"ninfer-qwen38","messages":[{"role":"user","content":"Say hi in five words."}],"max_tokens":32}' \
+  -d '{"model":"qwen-3.8-27b","messages":[{"role":"user","content":"Say hi in five words."}],"max_tokens":32}' \
   | python3 -m json.tool
 ```
 
@@ -227,13 +246,65 @@ neither closes the gap, an admission-priority request has been filed
 upstream ([github.com/Neroued/ninfer](https://github.com/Neroued/ninfer)).
 Track this decision here, not by rediscovering it from a latency spike.
 
-## EPP / fair-share (explicit non-goal)
+## Compatibility gaps (not just EPP fair-share)
+
+`inference.ninfer.live: true` makes ninfer answer for the same model name
+real clients already use, so gaps here are user-visible the moment it is
+flipped, not scoped to a `ninfer-*` opt-in name anymore.
+
+### No constrained/JSON-mode output at all
+
+ninfer accepts only `response_format: {"type":"text"}` (or the field
+omitted). Confirmed directly against upstream `docs/serving.md`: *"NInfer
+does not apply defaults, enforce required properties, perform recursive
+JSON Schema validation, or use constrained decoding."* Any
+`{"type":"json_object"}` or `{"type":"json_schema", ...}` request gets an
+explicit HTTP 400 identifying the field, e.g.:
+
+```
+this response_format requires constrained output, which NInfer cannot
+guarantee; only {"type":"text"} is available
+```
+
+**Observed 2026-09-19:** Hermes agent's auxiliary title generation hit this
+exact error while ninfer was live. vLLM and SGLang both support guided/
+constrained decoding, so this specific failure mode did not exist before
+ninfer became reachable under `qwen-3.8-27b`. Whether a given client feature
+degrades gracefully (as Hermes agent's title generation appears to, per the
+"Auxiliary" framing in its own warning) or hard-fails is up to that client,
+not something this deployment controls. **No fix available on ninfer's
+side** -- this is a binary capability gap, not a missing flag. Before
+`live: true` is treated as more than a pilot toggle, inventory which
+production clients rely on JSON-mode `response_format` and decide whether
+that is acceptable while ninfer is the live engine.
+
+Also rejected outright by ninfer (same source, same reason -- no code fix
+possible): nonzero `logit_bias`, requested `logprobs`, `strict: true`,
+required/named tool choice, and non-empty legacy `functions`. Most
+coding-agent traffic does not use these; `response_format` json-mode is the
+one confirmed to actually bite in practice so far.
+
+## EPP / fair-share (explicit non-goal, and not just unverified)
 
 `core-metrics-extractor.defaultEngine` (`config/llmd/router-nvfp4-values.yaml`)
-is **not** set to `ninfer`, and ninfer is **not** routed through llm-d's EPP.
-Whether the installed llm-d chart recognizes any engine type besides
-`sglang`/`vllm` is unverified; per ADR-0015, that requires probing the
-running EPP pod's accepted config directly (the way ADR-0012 probed
-`allow-experimental-plugins`), not assuming a value is safe. Until then
-ninfer's traffic does not get ADR-0008/ADR-0012's fair-share or
-priority-band guarantees -- same as llama.cpp today.
+is **not** set to `ninfer`, and ninfer is **not** routed through llm-d's EPP
+-- `inference.ninfer.live` only retargets the AI Gateway route rule
+(`llmd.yaml`), never the EPP `modelServers` block. Two independent reasons,
+not one:
+
+- Whether the installed llm-d chart recognizes any `defaultEngine` value
+  besides `sglang`/`vllm` is unverified; per ADR-0015, that requires probing
+  the running EPP pod's accepted config directly (the way ADR-0012 probed
+  `allow-experimental-plugins`), not assuming a value is safe.
+- Even a recognized value would not make EPP's scoring meaningful for
+  ninfer: `router-nvfp4-values.yaml`'s `metrics-data-source` plugin polls
+  the live engine's `/metrics` to feed `queue-scorer`,
+  `kv-cache-utilization-scorer`, and `utilization-detector`. ninfer has no
+  `/metrics` route at all (see `deploy/ninfer/README.md`'s Tier 2 section) --
+  EPP would have zero real telemetry to score or queue against it, not just
+  an unrecognized engine-type string.
+
+Until llm-d's EPP itself grows a ninfer-compatible metrics path, ninfer's
+traffic (even while `live: true`) does not get ADR-0008/ADR-0012's
+fair-share or priority-band guarantees -- same as llama.cpp today, just
+under a name that used to imply otherwise.
