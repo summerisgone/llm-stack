@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ninfer-inference
+description: ninfer inference server pilot for Qwen3.8 27B NVFP4, alongside vllm-inference/sglang-inference
+version: 0.1.0
+appVersion: "0.1.0"
+type: application

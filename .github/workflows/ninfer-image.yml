@@ -1,0 +1,64 @@
+name: ninfer image
+
+# ninfer (github.com/Neroued/ninfer) publishes no image, tag, or release --
+# only a Dockerfile in its own repo. This builds that Dockerfile from a
+# pinned upstream commit (versions.lock.env NINFER_UPSTREAM_REF) instead of
+# vendoring the source, mirroring how this repo pins every other third-party
+# artifact it does not control. Manual trigger only: unlike pat-service-image.yml,
+# there is no path in *this* repo whose push should rebuild someone else's
+# source, and no upstream webhook to react to.
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "ninfer commit/tag to build (defaults to versions.lock.env NINFER_UPSTREAM_REF)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/summerisgone/ninfer
+  UPSTREAM_REPO: https://github.com/Neroued/ninfer.git
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve upstream ref
+        id: vars
+        run: |
+          ref="${{ inputs.upstream_ref }}"
+          if [ -z "$ref" ]; then
+            ref=$(grep -m1 '^NINFER_UPSTREAM_REF=' versions.lock.env | cut -d= -f2)
+          fi
+          if [ -z "$ref" ]; then
+            echo "NINFER_UPSTREAM_REF not set (input or versions.lock.env)" >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "short_ref=${ref:0:12}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          # Git context on the pinned commit -- builds ninfer's own Dockerfile
+          # directly from its repo, no local checkout of upstream source.
+          context: "${{ env.UPSTREAM_REPO }}#${{ steps.vars.outputs.ref }}"
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:ninfer-${{ steps.vars.outputs.short_ref }}

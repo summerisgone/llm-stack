@@ -217,6 +217,19 @@ spec:
       backendRefs:
         - name: external-api-openai
     {{- end }}
+    {{- if .Values.inference.ninfer.enabled }}
+    - name: openai-ninfer
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ .Values.inference.ninfer.modelName }}
+      timeouts:
+        request: 10m
+      streamIdleTimeout: 10m
+      backendRefs:
+        - name: ninfer-openai
+    {{- end }}
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy

@@ -1,0 +1,49 @@
+# ninfer needs its own `.ninfer` v3 artifact (built via ninfer's own weight-
+# conversion pipeline, see the upstream repo's docs/weight-conversion.md) --
+# it is not the same file as the safetensors checkpoint on
+# vllm-qwen38-nvfp4-model (model-volume.yaml). Unlike vllm/embeddings, this
+# is a single file, not a per-engine subdirectory: confirmed live on the
+# node (`kubectl debug node`, chroot /host) at
+# /var/lib/models/qwen3_8_27b_nvfp4.ninfer -- the flat file the operator
+# placed at /home/llm-stack/models/qwen3_8_27b_nvfp4.ninfer on the WSL2 host,
+# which the existing /var/lib/models bind mount already projects in as-is,
+# no extra mount step needed. hostPath type File, not Directory.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ninfer-qwen38-nvfp4-model
+  labels:
+    app.kubernetes.io/name: ninfer-qwen38-nvfp4
+spec:
+  capacity:
+    storage: 24Gi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  volumeMode: Filesystem
+  hostPath:
+    path: /var/lib/models/qwen3_8_27b_nvfp4.ninfer
+    type: File
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k3d-llm-stack-server-0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ninfer-qwen38-nvfp4-model
+  namespace: airgap-ai-stack
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 24Gi
+  storageClassName: ""
+  volumeName: ninfer-qwen38-nvfp4-model

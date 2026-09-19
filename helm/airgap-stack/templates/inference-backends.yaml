@@ -92,6 +92,72 @@ spec:
 {{- end }}
 {{- end }}
 ---
+# ninfer pilot (docs/adr/0015-third-party-engine-metrics-contract.md,
+# ~/agent/ninfer-pilot-task.md). Direct backend like llamacpp/externalApi
+# above, but ninfer runs as an in-cluster Deployment (helm/ninfer-inference,
+# make ninfer-up) requesting its own nvidia.com/gpu: "1" -- unlike llamacpp's
+# host-run container, its host/port is a k8s Service DNS name, not
+# host.k3d.internal. It cannot join the shared qwen-3.8-27b EPP route (own
+# model name, own exact-match rule in llmd.yaml, see ADR-0015 Instructions
+# §2/§6).
+{{- if .Values.inference.ninfer.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: ninfer
+  namespace: {{ .Values.namespace }}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: {{ .Values.inference.ninfer.host }}
+        port: {{ .Values.inference.ninfer.port }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: ninfer-openai
+  namespace: {{ .Values.namespace }}
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: ninfer
+  schema:
+    name: OpenAI
+    prefix: /v1
+{{- if .Values.runtimeEnvironment.NINFER_API_KEY }}
+---
+# ninfer-serve enforces --api-key like sglang does; unlike llamacpp (no
+# auth), the gateway must inject it on the way to ninfer's own AIServiceBackend.
+# Same secret name the ninfer-inference chart's apiKeySecret value expects,
+# so both the inbound (server --api-key) and outbound (gateway Authorization
+# header) sides read one value.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ninfer-api-key
+  namespace: {{ .Values.namespace }}
+type: Opaque
+stringData:
+  apiKey: {{ .Values.runtimeEnvironment.NINFER_API_KEY | quote }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: ninfer-api-key
+  namespace: {{ .Values.namespace }}
+spec:
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: ninfer-api-key
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: ninfer-openai
+{{- end }}
+{{- end }}
+---
 # bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Direct backend
 # like llamacpp/externalApi above, but its AIGatewayRoute is a separate
 # object (templates/embeddings.yaml), not a rule inside `llmd` -- see that

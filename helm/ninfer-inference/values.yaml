@@ -1,0 +1,70 @@
+name: ninfer-qwen38
+# Not published upstream (github.com/Neroued/ninfer ships only a Dockerfile,
+# no prebuilt image, tag, or release). On this cluster it was built directly
+# on the WSL2/k3d host from the commit pinned in versions.lock.env
+# NINFER_UPSTREAM_REF and loaded with `k3d image import` -- no registry round
+# trip (see deploy/ninfer/README.md "Deploying" step 1). imagePullPolicy:
+# IfNotPresent picks that up without a pull. .github/workflows/ninfer-image.yml
+# is the documented, reproducible alternative (push to this tag via GHCR) but
+# has not itself been exercised against this repo's real Actions permissions
+# yet. Also the NINFER_IMAGE value in versions.lock.env; keep the two in
+# step, same convention as SGLANG_IMAGE/helm/sglang-inference.
+image: ghcr.io/summerisgone/ninfer:latest
+replicas: 1
+runtimeClassName: nvidia
+nodeName: k3d-llm-stack-server-0
+# ninfer's own `.ninfer` v3 artifact, built via ninfer's weight-conversion
+# pipeline (upstream docs/weight-conversion.md) -- NOT the same file as the
+# safetensors checkpoint on vllm-qwen38-nvfp4-model. Separate PVC created by
+# k8s/overlays/remote-wsl-vllm-nvfp4/ninfer-model-volume.yaml (gpu-objects-up).
+modelClaim: ninfer-qwen38-nvfp4-model
+modelFile: qwen3_8_27b_nvfp4.ninfer
+# Secret containing the `apiKey` field; created by inference-backends.yaml
+# when NINFER_API_KEY is set in the airgap-stack release (same pattern as
+# sglang-api-key).
+apiKeySecret: ninfer-api-key
+
+inference:
+  # Public OpenAI model id advertised by ninfer-serve and matched by
+  # inference.ninfer.modelName in helm/airgap-stack/values.yaml -- keep these
+  # two in sync.
+  servedModelName: ninfer-qwen38
+  port: 18080
+  # Sizing carried over from the pilot brief's manual comparison run (RTX
+  # 5090, same NVFP4 checkpoint family as vllm/sglang). Re-tune against this
+  # deployment's actual traffic shape before calling it more than a pilot --
+  # see deploy/ninfer/README.md "Known risks", Risk 2.
+  maxContext: 180224
+  kvCapacity: auto
+  maxConcurrency: 3
+  kvDtype: fp8
+  # Positive multiple of 128 (enforced by ninfer-serve). Smaller values slice
+  # a large cold prefill into more, shorter admitted chunks -- the knob to
+  # try first against Risk 2 (cold-prefill head-of-line blocking). Unverified
+  # here: this repo has not load-tested a non-default value.
+  prefillChunk: 1024
+  pendingTimeoutMs: 180000
+  spec: mtp
+  draftTokens: 3
+  lmHeadDraft: true
+  requestLogPath: /var/log/ninfer/requests.jsonl
+
+# Tier 2/3 sidecar: tails inference.requestLogPath and re-exposes it as
+# Prometheus text format on :9400/metrics (helm/ninfer-inference/files/jsonl_exporter.py).
+# ninfer has no native /metrics route -- see docs/adr/0015-third-party-engine-metrics-contract.md
+# and deploy/ninfer/README.md. Plain python3 image: the exporter only reads a
+# shared emptyDir file, it needs no GPU access and no ninfer-specific runtime.
+metricsExporter:
+  enabled: true
+  image: python:3.12-slim
+  port: 9400
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 8Gi
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "8"
+    memory: 24Gi
+    nvidia.com/gpu: "1"
