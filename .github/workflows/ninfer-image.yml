@@ -4,11 +4,25 @@ name: ninfer image
 # only a Dockerfile in its own repo. This builds that Dockerfile from a
 # pinned upstream commit (versions.lock.env NINFER_UPSTREAM_REF) instead of
 # vendoring the source, mirroring how this repo pins every other third-party
-# artifact it does not control. Manual trigger only: unlike pat-service-image.yml,
-# there is no path in *this* repo whose push should rebuild someone else's
-# source, and no upstream webhook to react to.
+# artifact it does not control. Verified working: run 35439158747
+# (2026-09-19, workflow_dispatch, concluded success), published both
+# ghcr.io/summerisgone/ninfer:latest and :ninfer-9e163eee4b8a.
+#
+# Push trigger is scoped to versions.lock.env, the one file that can change
+# what gets built -- but that file pins every third-party image in this repo
+# (vllm, sglang, pat-service, embeddings, ...), so a path filter alone would
+# rebuild this multi-GB CUDA image on an unrelated version bump elsewhere in
+# it. The "Only continue if..." step below diffs the actual pushed commit
+# and skips the rest of the job unless NINFER_UPSTREAM_REF's line itself
+# changed (or this workflow file did, so an edit to the workflow always gets
+# validated). A manual workflow_dispatch run always builds, guard or not.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "versions.lock.env"
+      - ".github/workflows/ninfer-image.yml"
   workflow_dispatch:
     inputs:
       upstream_ref:
@@ -29,9 +43,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # HEAD~1 must exist for the guard step's diff, push-triggered only.
+          fetch-depth: 2
+
+      - name: Only continue if NINFER_UPSTREAM_REF (or this workflow) changed
+        id: guard
+        if: github.event_name == 'push'
+        run: |
+          changed_files=$(git diff --name-only HEAD~1 HEAD)
+          if grep -qxF '.github/workflows/ninfer-image.yml' <<<"$changed_files"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "workflow file itself changed -- building to validate it"
+          elif git diff -U0 HEAD~1 HEAD -- versions.lock.env | grep -q '^[+-]NINFER_UPSTREAM_REF='; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "NINFER_UPSTREAM_REF changed -- building the new pin"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "versions.lock.env changed, but not NINFER_UPSTREAM_REF -- skipping"
+          fi
 
       - name: Resolve upstream ref
         id: vars
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
         run: |
           ref="${{ inputs.upstream_ref }}"
           if [ -z "$ref" ]; then
@@ -45,14 +79,17 @@ jobs:
           echo "short_ref=${ref:0:12}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v3
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v3
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
 
       - uses: docker/build-push-action@v6
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
         with:
           # Git context on the pinned commit -- builds ninfer's own Dockerfile
           # directly from its repo, no local checkout of upstream source.

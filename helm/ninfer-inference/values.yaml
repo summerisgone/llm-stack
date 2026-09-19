@@ -1,15 +1,18 @@
 name: ninfer-qwen38
 # Not published upstream (github.com/Neroued/ninfer ships only a Dockerfile,
-# no prebuilt image, tag, or release). On this cluster it was built directly
-# on the WSL2/k3d host from the commit pinned in versions.lock.env
-# NINFER_UPSTREAM_REF and loaded with `k3d image import` -- no registry round
-# trip (see deploy/ninfer/README.md "Deploying" step 1). imagePullPolicy:
-# IfNotPresent picks that up without a pull. .github/workflows/ninfer-image.yml
-# is the documented, reproducible alternative (push to this tag via GHCR) but
-# has not itself been exercised against this repo's real Actions permissions
-# yet. Also the NINFER_IMAGE value in versions.lock.env; keep the two in
-# step, same convention as SGLANG_IMAGE/helm/sglang-inference.
-image: ghcr.io/summerisgone/ninfer:latest
+# no prebuilt image, tag, or release). Built and pushed by
+# .github/workflows/ninfer-image.yml (verified: run 35439158747, 2026-09-19,
+# concluded success) from the commit pinned in versions.lock.env
+# NINFER_UPSTREAM_REF. Pinned to the immutable ninfer-<short-ref> tag, not
+# :latest -- this node already had a *locally imported* image cached under
+# the :latest tag from an earlier manual `k3d image import` bring-up, and
+# imagePullPolicy: IfNotPresent would silently keep serving that stale copy
+# forever even after :latest gets overwritten in the registry. The immutable
+# tag forces a real pull the first time, and never silently goes stale
+# after. Also the NINFER_IMAGE value in versions.lock.env; keep the two in
+# step, same convention as SGLANG_IMAGE/helm/sglang-inference -- update both
+# together on a rebuild.
+image: ghcr.io/summerisgone/ninfer:ninfer-9e163eee4b8a
 replicas: 1
 runtimeClassName: nvidia
 nodeName: k3d-llm-stack-server-0
