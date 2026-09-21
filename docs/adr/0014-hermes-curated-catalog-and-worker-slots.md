@@ -13,6 +13,13 @@ It adds a second PAT issuance path next to the SSO one from
 this ADR relies on is listed as an assumption under stage V1 and must be
 confirmed against the pinned Hermes release before implementation.
 
+Revised on 2026-09-21: the broker's compute side is now an interface with
+two backends (section 10). Plain per-user pods (sections 5-7) stay the
+default; Agent Substrate (the runtime under Agent Executor / AX) is an
+experimental backend gated by stage VS. AX itself is evaluated and not
+adopted. Sections 1-4, 6 and 8 are unchanged in intent; sections 5 and 7
+gain backend notes.
+
 ## Context
 
 - The goal is a **curated catalog** of Hermes skills and settings, reached
@@ -57,6 +64,16 @@ confirmed against the pinned Hermes release before implementation.
     issue a token for a user today.
   - Air-gapped installs: everything the catalog needs ships as a pinned
     image in `versions.lock.env`; no runtime fetch from a skills hub.
+- Agent Substrate (Apache-2.0, `agent-substrate/substrate`) and Agent
+  Executor / AX (Apache-2.0, `google/ax`, agentexecutor.io) appeared as
+  open-source Kubernetes runtimes for exactly this workload shape: bursty,
+  mostly idle, stateful agents. Substrate suspends an agent's whole sandbox
+  (RAM + filesystem, gVisor checkpoint) to object storage and resumes it on
+  any warm worker in under a second, which is 0009's "free worker picks up
+  a user" done at the process level rather than by mounting a PVC. Both
+  are self-declared early development, not production-ready, with unstable
+  APIs, no actor versioning, no per-actor network policy and no user
+  authorization on the control plane yet.
 
 ## Decision
 
@@ -223,6 +240,12 @@ Rejected alternatives:
 - **All PVCs mounted into every worker.** Breaks user isolation: a tool
   call in one user's agent could read another user's memories.
 
+The mechanics above are the `pods` backend. Section 10 defines the same
+slots on Agent Substrate, where a slot is a warm worker and a user's agent
+is a suspended actor instead of a deleted pod; the MinIO alternative
+rejected above differs from it in the way that matters (Substrate
+snapshots a frozen sandbox, it does not copy files of a live process).
+
 ### 6. The broker: Open WebUI's only path to an agent
 
 A new component `hermes-broker` (single replica, Deployment in the agent
@@ -276,6 +299,9 @@ namespace) sits between Open WebUI and the agents.
    the chat stream so the user sees why; on timeout answer with an
    OpenAI-shaped 503 and `Retry-After`.
 
+Steps 3-5 call the execution backend (section 10): "Ready", "create the
+pod" and "evict" are `endpoint`, `ensureRunning` and `release` there.
+
 **State.** The broker keeps no database. Pod existence and phase come from
 the Kubernetes API (pods labelled `hermes.llm-stack/user-id=<id>`); last
 activity is written to a pod annotation at most once a minute, so a broker
@@ -300,6 +326,12 @@ busy agent is never evicted to make room; the waiting request queues
 instead. Independently of slot pressure, the broker stops agents idle for
 `idleShutdown` (default 30 min) so capacity is returned even when nobody is
 waiting, and stops stale agents (section 4) at their first idle moment.
+
+With the `substrate` backend (section 10) eviction is `SuspendActor`
+instead of `delete pod`: the agent's memory and running processes are
+kept in the snapshot, not killed, and the next request resumes it on any
+free worker. The idle rule, `idleTimeout` and `idleShutdown` are the same;
+only the cost of coming back changes.
 
 **Background agents are not supported.** An agent exists only to serve a
 user's requests; nothing runs without one. Hermes scheduler/cron features
@@ -371,6 +403,151 @@ independent of activity. PVCs are deleted only by
   `helm upgrade` never deletes a user's profile.
 - The repository owns the catalog content; the cluster only ever sees it
   through the pinned catalog image.
+- With the `substrate` backend (section 10): the Substrate Helm release in
+  `ate-system` owns its CRDs, control plane, Valkey and object storage;
+  `airgap-stack` owns the Hermes `Atespace`, `WorkerPool` and
+  `ActorTemplate` and their `NetworkPolicy`s; the broker owns actors,
+  snapshots and profile bundles at runtime (they are Substrate state, not
+  Kubernetes objects, so Helm cannot delete them) and needs no Pod or PVC
+  rights, only network access to `ateapi`.
+
+### 10. Execution backend: plain pods now, Agent Substrate as a gated option
+
+Sections 5-7 describe *what* the broker needs from compute: start one
+user's agent, route to it, give its capacity back when idle, never run two
+copies of one profile. [Agent Substrate](https://github.com/agent-substrate/substrate)
+(Apache-2.0, the runtime under Google's Agent Executor / AX,
+[agentexecutor.io](https://agentexecutor.io)) implements almost exactly
+0009's original picture -- many mostly-idle *actors* multiplexed onto a
+small pool of warm *worker* pods, with suspend/resume through gVisor (or
+Kata) checkpoint/restore and snapshots in object storage. It is evaluated
+here because it removes the cold-start cost that section 5 accepts, and it
+is **not adopted as the default** because of what it changes about state,
+catalog propagation and credentials (below) and because both projects
+describe themselves as early development with APIs "almost guaranteed to
+change".
+
+**Decision.** The broker talks to compute through a narrow interface with
+two implementations:
+
+| Broker operation | `pods` backend (default) | `substrate` backend (experimental) |
+| --- | --- | --- |
+| `ensureRunning(user)` | create PVC if absent, create pod, wait Ready | `CreateActor` from the Hermes `ActorTemplate` on first use, else `ResumeActor`; wait for `readyz` |
+| `endpoint(user)` | pod IP / per-user Service | `<actor>.<atespace>.actors.resources.substrate.ate.dev` via `atenet-router` |
+| `release(user)` (idle eviction, section 7) | `delete pod`, wait gone | `SuspendActor` (RAM + filesystem snapshot) |
+| `restart(user)` (selection change, stale catalog) | delete + create | rebase (see "Catalog propagation") |
+| `destroy(user)` (offboarding) | delete pod, Secret, PVC | `SuspendActor` if running, `DeleteActor`, delete snapshots and profile bundle |
+| Capacity `K` | `ResourceQuota` pods + broker count | `WorkerPool.replicas` + broker count; `ResourceQuota` stays as backstop on worker pods |
+
+`HERMES_BACKEND=pods|substrate` is broker config owned by the chart.
+Everything above the interface -- catalog, layering, `/skills`, identity,
+the broker as the only path, fair-share and Langfuse attribution -- is the
+same for both backends. The `substrate` backend may be switched on only
+after stage VS passes; until then it exists as code and a spike, not as a
+deployable option.
+
+**What Substrate changes, and how this ADR answers it.**
+
+- *Source of truth for the profile.* With `pods` it is the RWO PVC. A
+  Substrate actor moves between workers and its disk lives in snapshots,
+  so the truth becomes "last snapshot in object storage". Two consequences
+  are accepted and bounded:
+  - SQLite consistency is preserved: a checkpoint freezes the whole
+    sandbox, so `state.db` is never copied mid-write (unlike the rejected
+    MinIO sync in section 5, which copied files of a live process).
+  - Durability is "as of the last suspend": if a worker or node dies while
+    an actor runs, work since the previous snapshot is lost. The broker
+    therefore also suspends-and-resumes an actor that has been busy for
+    `snapshotInterval` (default 60 min) at its next idle moment, and the
+    single-node reference host keeps object storage on local disk with its
+    own backup, like other PVCs.
+- *Catalog propagation.* Section 4 relies on an init container at every
+  start; a resume restores a snapshot and runs no init step, and Substrate
+  has no actor versioning yet (roadmap). So a template change (new
+  `HERMES_CATALOG_IMAGE` or `HERMES_IMAGE`) is applied by **rebase**:
+  resume the actor on its old template, export the personal layer (the
+  "user" rows of the table in section 2) as a **profile bundle** through a
+  sidecar endpoint in the actor, `DeleteActor`, `CreateActor` from the new
+  template with `boot`, import the bundle, run the same sync logic as
+  section 4, and only then delete the old snapshots. The bundle is written
+  to object storage before the old actor is deleted, so a crash at any step
+  leaves either the old actor or the bundle. Selection changes (section 3)
+  do not need a rebase: they are applied by the same sidecar in place and
+  Hermes is reloaded inside the running actor. Rebase is the costly path,
+  so catalog rollouts are batched and rebases rate-limited (default one at
+  a time); the propagation bound of section 4 becomes idle timeout +
+  queue time for the rebase.
+- *Credentials.* `ActorTemplate` env from `secretKeyRef` is resolved once
+  per template, not per actor, so the per-user `hermes-cred-<id>` Secret of
+  section 8 cannot be mounted. The broker instead delivers the user's
+  broker-issued PAT to the actor's sidecar after every `ensureRunning`;
+  it is kept in memory only, never written to the profile. Because process
+  memory is part of the snapshot, the token *is* in snapshots at rest,
+  which the Substrate threat model itself calls out. Mitigations: token
+  lifetime for this backend is `HERMES_PAT_TTL_HOURS` (default 24, not 7
+  days) and re-minted on resume when less than half remains; only `atelet`
+  has credentials for the snapshot bucket; the bucket is encrypted at rest.
+  Target state, not assumed: credential injection by an egress proxy
+  outside the sandbox (Substrate roadmap; AX `Gateway`), at which point the
+  token leaves the sandbox entirely.
+- *Isolation.* Actors run under gVisor, which is stronger than the plain
+  runc sandbox of section 8 for skill scripts. Per-actor network policy is
+  roadmap, not available; since every Hermes actor has the same allowlist,
+  the section 8 egress `NetworkPolicy` is applied to the `WorkerPool` pods,
+  and ingress to worker pods is limited to `atenet` and the broker. The
+  Substrate control plane (`ateapi`) authenticates components with mTLS but
+  has no user authorization model yet; a `NetworkPolicy` admits only the
+  broker and Substrate's own components to it, and the broker is the only
+  caller that creates, resumes, suspends or deletes Hermes actors.
+- *Idle.* Substrate resumes on inbound traffic but documents no idle
+  auto-suspend. Section 7's idle definition stays with the broker, which
+  calls `SuspendActor`; nothing else suspends Hermes actors.
+- *Platform.* Substrate needs gVisor `runsc` with checkpoint/restore,
+  Valkey for actor state and S3-compatible object storage (its own install
+  uses rustfs), and all of it must run on k3d (single node, including the
+  Windows/WSL2 profile) and be air-gap installable. Images must be pinned
+  by digest, which matches `versions.lock.env`. Substrate is installed as
+  its own Helm release in `ate-system`, outside `airgap-stack`, in the same
+  way as inference engines ([ADR 0007](0007-inference-engines-as-helm-releases.md)).
+
+**Agent Executor (AX) is not adopted.** AX's `Task` / `Workspace` /
+`Gateway` / `Model` resources were compared with this design:
+
+- `Model` duplicates what the private AI Gateway and pat-service already
+  do (endpoint, credentials, per-user attribution); a second model registry
+  would split the source of truth.
+- `Workspace` skill registries overlap with the catalog of sections 1-2 but
+  have no notion of per-user selection, `required` skills or a personal
+  layer that survives updates.
+- `Task` is a disposable unit of isolated execution with an event log;
+  Hermes is an interactive agent behind an OpenAI-compatible API with its
+  own session store, and AX would need a custom `HarnessService` for it.
+- `Gateway` (egress allowlist plus credential injection outside the
+  sandbox) is the part that would help; it is the revisit trigger for the
+  credentials point above.
+
+AX is revisited, in a new ADR, if background or scheduled agents move into
+scope (section 7 excludes them): durable execution with an event log is
+what that would need, and it is what AX provides.
+
+**Adoption gate (stage VS) -- all must hold to enable `substrate`:**
+
+1. Substrate installs on the reference k3d host, air-gapped, and gVisor
+   checkpoint/restore works there (including WSL2 if that profile is used).
+2. Hermes runs under gVisor, passes `readyz`, and a suspend/resume cycle
+   keeps an open session, memories and `state.db` intact
+   (`PRAGMA integrity_check`) across 100 cycles.
+3. Resume p95 is at least 5x better than the `pods` cold start from V2;
+   snapshot size per actor and total object storage for `N` users fit the
+   node disk budget.
+4. Rebase with a catalog change preserves every personal-layer path and
+   selection; killing the broker at each rebase step loses nothing.
+5. The PAT is absent from the profile bundle and the filesystem part of
+   snapshots; a sandbox cannot reach the snapshot bucket, `ateapi` or
+   pat-service's internal listener.
+6. V3 and V4 pass unchanged with `HERMES_BACKEND=substrate`.
+7. The Substrate and AX release pinned in `versions.lock.env` is recorded
+   here, and this section is re-checked against it (APIs are unstable).
 
 ## Consequences
 
@@ -392,7 +569,8 @@ independent of activity. PVCs are deleted only by
   waits for an idle agent or gets a clear 503. Nobody holds a slot while
   not using it.
 - Every return after idle pays a cold start (pod create + catalog sync +
-  Hermes boot). This is the price of `K < N`; it is measured, not assumed.
+  Hermes boot). This is the price of `K < N` with the `pods` backend; it
+  is measured, not assumed. Reducing it is the reason section 10 exists.
 - No agent work happens without a user request. Scheduled tasks and
   long-running background jobs are not available through this platform.
 - pat-service gains a second issuance path. Whoever holds the broker's
@@ -401,6 +579,16 @@ independent of activity. PVCs are deleted only by
   is contained by network policy, fixed token shape and short lifetime.
 - `/skills` becomes a reserved prefix in the `hermes-agent` chat; a user
   message starting with it never reaches the model.
+- The broker is written against an execution-backend interface. Plain
+  pods ship first; Agent Substrate can replace them without touching the
+  catalog, identity or Open WebUI integration, but only after stage VS,
+  and at the cost of a snapshot-based profile truth, rebase on every
+  template change, a shorter-lived token that sits in snapshot memory, and
+  three more stateful components (Substrate control plane, Valkey, object
+  storage) to run air-gapped.
+- AX is not part of the stack. Its `Model` and `Workspace` overlap with the
+  gateway and the catalog; its `Gateway` credential injection and durable
+  `Task` are the reasons to revisit it.
 - Open WebUI remains a question-answer UI without tool progress (0009);
   this ADR does not change that, and the broker's contract lets the web
   dashboard be added later against the same agents.
@@ -426,6 +614,14 @@ independent of activity. PVCs are deleted only by
 | Broker restart loses in-flight counts | Busy agent evicted | All pods treated busy for one `idleTimeout` after restart |
 | PVC growth (sessions, logs) | Node disk pressure | Fixed PVC size, usage metric, alert at 80% |
 | Helm or `make` cleanup deletes runtime PVCs | Loss of all user profiles | Runtime objects outside Helm ownership; `hermes-profile-delete` is the only delete path; V4 checks `helm uninstall` leaves PVCs |
+| Substrate/AX APIs change or the projects stall (both early development) | `substrate` backend breaks on upgrade or is stranded | Backend interface; `pods` stays the default and is kept tested; versions pinned by digest; VS item 7 re-checked on every Substrate bump |
+| gVisor checkpoint/restore does not work on k3d (Docker-in-Docker, WSL2 kernel) | `substrate` backend unusable on the reference host | VS item 1 is the first gate; no work beyond the spike before it passes |
+| Hermes misbehaves under gVisor or after restore (sockets, timers, file locks on `state.db`) | Broken sessions after resume | VS item 2: 100 suspend/resume cycles with integrity check |
+| Node or worker dies while an actor runs (`substrate`) | Work since the last snapshot lost | `snapshotInterval` forced suspend at idle; object storage backed up; accepted and documented in user notes |
+| Rebase interrupted (`substrate`) | Personal layer lost | Bundle written before old actor deleted; old snapshots deleted last; VS item 4 kills the broker at each step |
+| PAT captured in snapshot memory (`substrate`) | Snapshot theft yields a user token | 24h TTL; bucket readable only by `atelet`; encryption at rest; move to proxy-side injection when available |
+| Substrate control plane has no user authorization | Anything that reaches `ateapi` can resume/delete any actor | NetworkPolicy: only broker and Substrate components reach `ateapi`; VS item 5 |
+| Snapshot storage growth (`N` users x RAM + disk image) | Node disk pressure | VS item 3 sizes it; per-actor snapshot size metric; delete superseded snapshots after rebase |
 
 ## Verification stages
 
@@ -511,6 +707,17 @@ Exit: `K`, resources and timeouts committed with the numbers.
 
 Exit: `scripts/hermes-smoke-test` covers V3-V4 and passes twice.
 
+### VS -- Agent Substrate backend spike (only after V4; blocks `HERMES_BACKEND=substrate`)
+
+Run the adoption gate of section 10 in order, items 1-7, on the reference
+host. Record per item: Substrate/AX commit or release, gVisor version,
+numbers. A failure on item 1 or 2 ends the spike and the `substrate`
+backend is removed from the broker rather than kept unused.
+
+Exit: section 10 updated with the recorded answers; `substrate` allowed
+as a documented opt-in, never as the default, by a follow-up change to
+this ADR.
+
 ## Implementation order
 
 1. V1 against the pinned Hermes release; adjust this ADR.
@@ -523,15 +730,20 @@ Exit: `scripts/hermes-smoke-test` covers V3-V4 and passes twice.
    `POST /internal/hermes-tokens`, dashboard label; tests.
 5. `hermes-broker`: request path, credential Secrets, slots, LRU eviction,
    idle shutdown, `/skills` commands, onboarding and "new in catalog"
-   notices.
+   notices -- with slot operations behind the backend interface of section
+   10 and only the `pods` backend implemented.
 6. Chart objects: namespace, RBAC, quota, network policies, internal
    listener Service, shared Secret; second Open WebUI connection in
    `k8s/base/applications.yaml`. `make verify`.
 7. V2-V4; broker metrics and Grafana panels; runbook in
    `docs/operations/hermes.md`; user notes (including `/skills`) in
    `docs/clients/README.md`.
-8. Status to Accepted.
+8. Status to Accepted (for the `pods` backend).
+9. Optional, afterwards: stage VS; `substrate` backend, profile-bundle
+   export/import sidecar, rebase, Substrate as its own Helm release in
+   `ate-system` with images in `versions.lock.env`.
 
-Out of scope: background and scheduled agents, a web settings page for
-skill selection, web dashboard front-end, messenger channel, RWX/NFS
-storage, the `local-mac` profile.
+Out of scope: background and scheduled agents (and with them AX `Task`),
+a web settings page for skill selection, web dashboard front-end,
+messenger channel, RWX/NFS storage, the `local-mac` profile, making
+`substrate` the default backend.

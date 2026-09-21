@@ -5,6 +5,12 @@
 Proposed (draft, discussion). No manifests or code written yet; this records
 the architecture direction agreed in review before implementation.
 
+Refined by [ADR 0014](0014-hermes-curated-catalog-and-worker-slots.md),
+which settles open items 1 and 2 below, replaces "mount a profile PVC onto
+a free worker" with per-user pods in `K` slots, and keeps the literal
+worker-pool form of this ADR as a gated option on Agent Substrate
+(0014 section 10).
+
 ## Context
 
 Every user today runs a local Hermes Agent install. Profiles, skills, memory
