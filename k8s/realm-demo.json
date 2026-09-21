@@ -48,7 +48,8 @@
       "attributes": {
         "post.logout.redirect.uris": "***REMOVED***/auth"
       },
-      "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
+      "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"],
+      "optionalClientScopes": ["offline_access"]
     },
     {
       "clientId": "llm-api",
@@ -171,6 +172,14 @@
           "config": { "full.path": "false", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true", "claim.name": "groups" }
         }
       ]
+    },
+    {
+      "name": "offline_access",
+      "protocol": "openid-connect",
+      "attributes": {
+        "consent.screen.text": "${offlineAccessScope}",
+        "display.on.consent.screen": "true"
+      }
     }
   ],
   "users": [

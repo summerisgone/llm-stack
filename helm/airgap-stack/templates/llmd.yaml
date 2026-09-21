@@ -159,18 +159,33 @@ spec:
       kind: Gateway
       sectionName: private
   rules:
+    # Catch-all: any request whose model name isn't an exact match on
+    # inference.modelName (below) lands here -- e.g. a client sending its
+    # own model string instead of the canonical `qwen-3.8-27b` (observed
+    # 2026-09-19: QwenCode PAT traffic hanging because this rule ignored
+    # inference.ninfer.live and always dispatched into llm-d EPP's pool,
+    # which is empty whenever ninfer -- not sglang/vLLM -- is the live
+    # engine). Mirrors the live-engine conditional the named rule below
+    # already had, so neither rule can point at an empty EPP pool while
+    # ninfer is live.
     - name: openai
       timeouts:
         request: 10m
       streamIdleTimeout: 10m
       backendRefs:
+        {{- if .Values.inference.ninfer.live }}
+        - name: ninfer-openai
+        {{- else }}
         - name: llmd-qwen-test-openai
+        {{- end }}
     # Declare the model to the EAG OpenAI model router under its single
     # canonical name. EAG only advertises models in /v1/models that it sees
     # in an exact-match rule on the x-ai-eg-model header (the model parsed
     # from the request body); this rule makes the model dropdown show
     # `qwen-3.8-27b` while the catch-all rule above still forwards any other
-    # model name. By default this always goes through llm-d EPP -- vLLM and
+    # model name (both rules now share the same ninfer.live conditional, so
+    # neither depends on the client sending this exact model string). By
+    # default this always goes through llm-d EPP -- vLLM and
     # SGLang are both reached this way, selected by
     # config/llmd/router-nvfp4-values.yaml's modelServers block, never by
     # this route. A direct AIServiceBackend per engine (the previous shape

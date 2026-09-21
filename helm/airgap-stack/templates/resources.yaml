@@ -912,7 +912,7 @@ spec:
         - name: OAUTH_PROVIDER_NAME
           value: Keycloak
         - name: OAUTH_SCOPES
-          value: openid profile email
+          value: openid profile email offline_access
         - name: OAUTH_ROLES_CLAIM
           value: realm_access.roles
         - name: ENABLE_OAUTH_ROLE_MANAGEMENT
@@ -1405,7 +1405,8 @@ data:
           "attributes": {
             "post.logout.redirect.uris": "***REMOVED***/auth"
           },
-          "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
+          "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"],
+          "optionalClientScopes": ["offline_access"]
         },
         {
           "clientId": "llm-api",
@@ -1528,6 +1529,14 @@ data:
               "config": { "full.path": "false", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true", "claim.name": "groups" }
             }
           ]
+        },
+        {
+          "name": "offline_access",
+          "protocol": "openid-connect",
+          "attributes": {
+            "consent.screen.text": "${offlineAccessScope}",
+            "display.on.consent.screen": "true"
+          }
         }
       ],
       "users": [

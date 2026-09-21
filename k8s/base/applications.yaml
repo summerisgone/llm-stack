@@ -356,8 +356,15 @@ spec:
               value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/.well-known/openid-configuration
             - name: OPENID_REDIRECT_URI
               value: ***REMOVED***/oauth/oidc/callback
+            # offline_access: Keycloak issues an offline refresh token, which
+            # outlives the browser SSO session (offline session idle default
+            # 30d, vs. the realm's ~30min SSO idle timeout). Without it, an
+            # idle user's oauth_session row is dropped on the next failed
+            # refresh and system_oauth chat requests silently go out with no
+            # Authorization header -- see docs/adr/0003 and the openwebui
+            # oauth_session bug.
             - name: OAUTH_SCOPES
-              value: openid profile email
+              value: openid profile email offline_access
             - name: OAUTH_ROLES_CLAIM
               value: realm_access.roles
             - name: ENABLE_OAUTH_ROLE_MANAGEMENT

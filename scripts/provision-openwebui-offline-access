@@ -1,0 +1,85 @@
+#!/usr/bin/env sh
+set -eu
+
+# Grant the open-webui Keycloak client the offline_access scope on an
+# existing deployment. This is required because --import-realm skips realms
+# that already exist (see scripts/provision-realm-security); the realm JSON
+# is the source of truth only for fresh installs. Run this after helm-up
+# whenever OAuth scope settings change.
+#
+# Why: Open WebUI's system_oauth auth forwards the signed-in user's Keycloak
+# access token on every inference request, keyed by a per-user oauth_session
+# row it stores itself. That row is refreshed only within 5 minutes of the
+# access token's expiry and is deleted outright if a refresh fails. Without
+# offline_access, the refresh token dies with the browser's SSO session
+# (realm SSO idle timeout, ~30min default) even though the WebUI login
+# cookie survives for weeks (JWT_EXPIRES_IN default 4w) -- so any user idle
+# past the SSO timeout loses inference access with a silent
+# "Jwt is missing" 401, until they log out and back in. offline_access
+# scopes the refresh token to Keycloak's offline-session lifetime (30d
+# default, independent of SSO idle/max), so routine refreshes keep
+# succeeding across normal idle gaps.
+#
+# Settings applied:
+#   offline_access client-scope created on the realm if missing
+#   offline_access added to the open-webui client's optional client scopes
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+
+kc_pf_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); p=s.getsockname()[1]; s.close(); print(p)')
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_pf_port:8080" &
+kc_pf_pid=$!
+trap 'kill "$kc_pf_pid" 2>/dev/null; wait "$kc_pf_pid" 2>/dev/null || true' EXIT INT TERM
+
+attempt=0
+until curl -fsS "http://127.0.0.1:$kc_pf_port/sso/realms/ai-stack/.well-known/openid-configuration" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 15 ]; then
+    printf '%s\n' "Keycloak port-forward did not become ready" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+admin_token=$(curl -fsS -X POST \
+  "http://127.0.0.1:$kc_pf_port/sso/realms/master/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+admin_api="http://127.0.0.1:$kc_pf_port/sso/admin/realms/ai-stack"
+
+# Ensure the realm has an offline_access client scope. Keycloak treats it
+# specially by name (no protocol mappers needed) once it exists and is
+# attached to a client's default/optional scopes and requested at login.
+scope_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/client-scopes" | \
+  python3 -c 'import json,sys; scopes=json.load(sys.stdin); print(next((s["id"] for s in scopes if s["name"]=="offline_access"), ""))')
+
+if [ -z "$scope_id" ]; then
+  curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+    "$admin_api/client-scopes" \
+    -d '{"name":"offline_access","protocol":"openid-connect","attributes":{"consent.screen.text":"${offlineAccessScope}","display.on.consent.screen":"true"}}'
+  scope_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/client-scopes" | \
+    python3 -c 'import json,sys; scopes=json.load(sys.stdin); print(next(s["id"] for s in scopes if s["name"]=="offline_access"))')
+fi
+
+client_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients?clientId=open-webui" | \
+  python3 -c 'import json,sys; clients=json.load(sys.stdin); print(clients[0]["id"] if clients else "")')
+
+if [ -z "$client_id" ]; then
+  printf '%s\n' "open-webui client not found in realm ai-stack" >&2
+  exit 1
+fi
+
+already_optional=$(curl -fsS -H "Authorization: Bearer $admin_token" \
+  "$admin_api/clients/$client_id/optional-client-scopes" | \
+  python3 -c 'import json,sys; scopes=json.load(sys.stdin); print("yes" if any(s["name"]=="offline_access" for s in scopes) else "")')
+
+if [ -z "$already_optional" ]; then
+  curl -fsS -X PUT -H "Authorization: Bearer $admin_token" \
+    "$admin_api/clients/$client_id/optional-client-scopes/$scope_id"
+fi
+
+printf '%s\n' 'open-webui Keycloak client has offline_access available; restart openwebui (or wait for its next OAUTH_SCOPES-carrying pod) to start requesting it.'

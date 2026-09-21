@@ -12,7 +12,7 @@ include versions.lock.env
 # Local/site-specific overrides (gitignored). Not required to exist.
 -include .env
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -85,6 +85,7 @@ up: gateway-up operators-up pat-image
 	$(MAKE) provision-grafana-oidc
 	$(MAKE) provision-pat-oidc
 	$(MAKE) provision-realm-security
+	$(MAKE) provision-openwebui-offline-access
 
 provision-grafana-oidc:
 	./scripts/provision-grafana-oidc
@@ -94,6 +95,9 @@ provision-pat-oidc:
 
 provision-realm-security:
 	./scripts/provision-realm-security
+
+provision-openwebui-offline-access:
+	./scripts/provision-openwebui-offline-access
 
 # Scales the application Deployments to zero without deleting PVCs. The LM
 # Studio upstream exists only in the local-mac profile, so its absence on the
@@ -294,6 +298,7 @@ stack-up: gateway-up operators-up
 	$(MAKE) provision-grafana-oidc
 	$(MAKE) provision-pat-oidc
 	$(MAKE) provision-realm-security
+	$(MAKE) provision-openwebui-offline-access
 
 # Compatibility aliases for the previous target names.
 nvfp4-up: stack-up
@@ -346,6 +351,7 @@ helm-up: helm-render helm-env-values
 	$(MAKE) provision-grafana-oidc
 	$(MAKE) provision-pat-oidc
 	$(MAKE) provision-realm-security
+	$(MAKE) provision-openwebui-offline-access
 
 helm-diff: helm-render helm-env-values
 	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
