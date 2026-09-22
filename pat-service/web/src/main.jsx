@@ -25,6 +25,97 @@ function Icon({ children, className = '' }) {
   return <span aria-hidden="true" className={`icon ${className}`}>{children}</span>
 }
 
+// heatmapDays is how far back the calendar heatmap reaches -- 182 days is
+// about 26 weeks, the same span GitHub's own contribution graph shows by
+// default, and matches the /api/usage/daily?days= default's spirit without
+// asking the API for a full year on every dashboard load.
+const heatmapDays = 182
+
+// buildHeatmapWeeks turns the sparse `daily` rows (only days with activity)
+// into a dense grid of every day in the window, grouped into Sunday-start
+// weeks so the grid always renders complete columns -- same layout GitHub's
+// heatmap uses. Returns the grid plus the window's max day total, which the
+// caller buckets colors against.
+function buildHeatmapWeeks(daily) {
+  const byDate = new Map(daily.map((d) => [d.date, d]))
+  const today = new Date()
+  today.setUTCHours(0, 0, 0, 0)
+  const start = new Date(today)
+  start.setUTCDate(start.getUTCDate() - (heatmapDays - 1))
+  start.setUTCDate(start.getUTCDate() - start.getUTCDay())
+
+  const cells = []
+  let max = 0
+  for (const d = new Date(start); d <= today; d.setUTCDate(d.getUTCDate() + 1)) {
+    const key = d.toISOString().slice(0, 10)
+    const entry = byDate.get(key)
+    const tokens = entry ? entry.prompt_tokens + entry.completion_tokens : 0
+    max = Math.max(max, tokens)
+    cells.push({ date: key, tokens, cost: entry?.cost_amount || 0 })
+  }
+  const weeks = []
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7))
+  return { weeks, max }
+}
+
+function heatmapLevel(tokens, max) {
+  if (tokens <= 0 || max <= 0) return 0
+  const ratio = tokens / max
+  if (ratio > 0.75) return 4
+  if (ratio > 0.5) return 3
+  if (ratio > 0.25) return 2
+  return 1
+}
+
+function Heatmap({ daily }) {
+  const { weeks, max } = buildHeatmapWeeks(daily)
+  return <div className="heatmap" role="img" aria-label={`Daily token usage over the last ${heatmapDays} days`}>
+    {weeks.map((week, i) => <div className="heatmap-week" key={i}>
+      {week.map((day) => <div key={day.date} className="heatmap-day" data-level={heatmapLevel(day.tokens, max)}
+        title={`${day.date}: ${day.tokens.toLocaleString()} tokens`} />)}
+    </div>)}
+  </div>
+}
+
+function formatDuration(startedAt, endedAt) {
+  const ms = new Date(endedAt) - new Date(startedAt)
+  if (ms < 60000) return '<1m'
+  const minutes = Math.round(ms / 60000)
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+function SessionsTable({ sessions, currency }) {
+  if (sessions.length === 0) {
+    return <div className="empty"><Icon>⌁</Icon><strong>No sessions yet</strong><span>Agent sessions show up here once you send some traffic.</span></div>
+  }
+  return <div className="table-wrap"><table><thead><tr><th>Model</th><th>Started</th><th>Duration</th><th>Steps</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>
+    {sessions.map((s) => <tr key={s.session_id}>
+      <td><strong>{s.model}</strong></td>
+      <td>{date(s.started_at)}</td>
+      <td>{formatDuration(s.started_at, s.ended_at)}</td>
+      <td>{s.steps}</td>
+      <td>{(s.prompt_tokens + s.completion_tokens).toLocaleString()}</td>
+      <td>{s.cost_amount ? `${s.cost_amount.toFixed(2)} ${currency}` : '—'}</td>
+    </tr>)}
+  </tbody></table></div>
+}
+
+function LimitWidget({ limit }) {
+  if (!limit) return null
+  const hasLimit = limit.limit > 0
+  const pct = hasLimit ? Math.min(100, (limit.spent / limit.limit) * 100) : 0
+  const over = hasLimit && limit.spent > limit.limit
+  return <div className="panel limit-panel">
+    <div className="panel-heading"><div><p className="eyebrow">THIS MONTH</p><h2>Spend vs. limit</h2></div></div>
+    {hasLimit
+      ? <>
+        <div className="limit-bar-track"><div className={`limit-bar-fill${over ? ' over' : ''}`} style={{ width: `${pct}%` }} /></div>
+        <div className="limit-meta"><span>{limit.spent.toFixed(2)} {limit.currency}</span><span>limit {limit.limit.toFixed(2)} {limit.currency}</span></div>
+      </>
+      : <div className="limit-meta"><span>{limit.spent.toFixed(2)} {limit.currency} spent</span><span className="muted">No limit configured yet</span></div>}
+  </div>
+}
+
 function App() {
   const [tokens, setTokens] = useState([])
   const [loading, setLoading] = useState(true)
@@ -33,6 +124,10 @@ function App() {
   const [newToken, setNewToken] = useState(null)
   const [copied, setCopied] = useState(false)
   const [form, setForm] = useState({ name: '', days: 90 })
+  const [daily, setDaily] = useState([])
+  const [sessions, setSessions] = useState([])
+  const [limit, setLimit] = useState(null)
+  const [usageLoading, setUsageLoading] = useState(true)
 
   async function load() {
     setLoading(true)
@@ -48,7 +143,26 @@ function App() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  async function loadUsage() {
+    setUsageLoading(true)
+    try {
+      const [dailyRes, sessionsRes, limitRes] = await Promise.all([
+        fetch(`${base}/api/usage/daily?days=${heatmapDays}`),
+        fetch(`${base}/api/usage/sessions?limit=20`),
+        fetch(`${base}/api/usage/limit`),
+      ])
+      if (dailyRes.ok) setDaily((await dailyRes.json()).days || [])
+      if (sessionsRes.ok) setSessions((await sessionsRes.json()).sessions || [])
+      if (limitRes.ok) setLimit(await limitRes.json())
+    } catch {
+      // Usage is a secondary panel; a failed fetch just leaves it empty
+      // rather than surfacing a notice over the primary token workflow.
+    } finally {
+      setUsageLoading(false)
+    }
+  }
+
+  useEffect(() => { load(); loadUsage() }, [])
 
   async function create(event) {
     event.preventDefault()
@@ -152,6 +266,23 @@ function App() {
         {loading ? <div className="empty"><span className="loader"></span>Loading tokens…</div> : tokens.length === 0 ? <div className="empty"><Icon>⌁</Icon><strong>No tokens yet</strong><span>Create one to start making API requests.</span></div> : <div className="table-wrap"><table><thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>{tokens.map((token) => <tr key={token.id} className={token.revoked_at ? 'revoked' : ''}><td><strong>{token.name}</strong>{token.revoked_at && <span className="revoked-label">Revoked</span>}</td><td><code>{token.prefix}…</code></td><td>{date(token.created_at)}</td><td>{date(token.last_used_at)}</td><td>{token.revoked_at ? <span className="muted">Unavailable</span> : <button className="revoke" onClick={() => revoke(token)}>Revoke</button>}</td></tr>)}</tbody></table></div>}
       </div>
     </section>
+
+    <section className="workspace usage-section">
+      <LimitWidget limit={limit} />
+      <div className="panel heatmap-panel">
+        <div className="panel-heading"><div><p className="eyebrow">LAST {heatmapDays} DAYS</p><h2>Daily tokens</h2></div></div>
+        {usageLoading ? <div className="empty"><span className="loader"></span>Loading usage…</div> : <>
+          <Heatmap daily={daily} />
+          <div className="heatmap-legend"><span>Less</span>{[0, 1, 2, 3, 4].map((level) => <span key={level} className="heatmap-day" data-level={level} />)}<span>More</span></div>
+        </>}
+      </div>
+    </section>
+
+    <section className="panel sessions-panel">
+      <div className="panel-heading"><div><p className="eyebrow">AGENT ACTIVITY</p><h2>Recent sessions</h2></div></div>
+      {usageLoading ? <div className="empty"><span className="loader"></span>Loading sessions…</div> : <SessionsTable sessions={sessions} currency={limit?.currency || ''} />}
+    </section>
+
     <footer><span>Protected by Keycloak SSO</span><span>•</span><span>Tokens are validated on every request</span></footer>
   </main>
 }

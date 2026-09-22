@@ -3,6 +3,7 @@ kind	name	kindline
 ConfigMap	gpu-exporter-script	apiVersion: v1
 ConfigMap	grafana-provisioning	apiVersion: v1
 ConfigMap	otel-collector-config	apiVersion: v1
+ConfigMap	pat-service-pricing	apiVersion: v1
 ConfigMap	prometheus-config	apiVersion: v1
 Secret	minio-configuration	apiVersion: v1
 Service	envoy-ratelimit-valkey	apiVersion: v1

@@ -123,6 +123,26 @@ type config struct {
 	// proxied unaffected, just without a spend update -- degradation, not
 	// a failure, same rule as the request-body fingerprint cap.
 	qosUsageMaxBody int64
+	// qosEventTimeout bounds the qos_events insert (and, for streaming
+	// responses, the RecordCost call alongside it) so a slow Postgres
+	// degrades that one usage record instead of adding to response
+	// latency. Separate from qosFingerprintTimeout: this writes to
+	// pat-db, not Valkey, and runs after the response has already been
+	// fully proxied, so it can afford a looser budget.
+	qosEventTimeout time.Duration
+	// pricingFile is an optional path to a JSON file mapping model name
+	// to price per 1K prompt/completion tokens (see pricing.go). Empty or
+	// unreadable: pricing stays empty and every qos_events row is costed
+	// at 0, same degrade-don't-fail rule as everything else here.
+	pricingFile string
+	// qosMonthlyLimit is the /api/usage/limit preview's budget for the
+	// current calendar month, in pricing.json's currency. Zero means no
+	// limit is configured yet. This is display-only -- nothing in this
+	// service enforces it (TASK-qos-fair-share.md Stage 3 step 5's hard
+	// per-user ceiling remains out of scope); it exists so the /platform
+	// dashboard can show spend-vs-limit ahead of that policy being
+	// decided.
+	qosMonthlyLimit float64
 }
 
 type app struct {
@@ -133,6 +153,7 @@ type app struct {
 	keys      keySet
 	gateway   gatewayToken
 	qos       *qos.Tracker
+	pricing   pricing
 }
 
 type session struct {
@@ -210,6 +231,7 @@ func main() {
 		http:      &http.Client{Timeout: 30 * time.Second},
 		proxyHTTP: &http.Client{},
 		qos:       qos.NewTracker(qosStore, qosMetrics, cfg.qosSessionTTL, cfg.qosWarmTTL, cfg.qosDemoteAfterSteps, cfg.qosCostAlpha, cfg.qosCostBeta, cfg.qosSpendDemoteThreshold, cfg.qosSpendWindow),
+		pricing:   loadPricing(cfg.pricingFile),
 	}
 	if err := a.migrate(ctx); err != nil {
 		log.Fatal(err)
@@ -243,6 +265,9 @@ func newMux(a *app) *http.ServeMux {
 	mux.HandleFunc("GET /api/tokens", a.listTokens)
 	mux.HandleFunc("POST /api/tokens", a.createToken)
 	mux.HandleFunc("POST /api/tokens/", a.revokeToken)
+	mux.HandleFunc("GET /api/usage/daily", a.usageDaily)
+	mux.HandleFunc("GET /api/usage/sessions", a.usageSessions)
+	mux.HandleFunc("GET /api/usage/limit", a.usageLimit)
 	// ServeMux rejects a method-agnostic /v1/ route alongside GET /. OpenAI
 	// uses these methods; explicit registrations also make the public surface
 	// intentionally narrow.
@@ -320,7 +345,10 @@ func loadConfig() (config, error) {
 	qosSpendWindow := time.Duration(readIntEnv("QOS_SPEND_WINDOW_SECONDS", 600)) * time.Second
 	qosSpendDemoteThreshold := readFloatEnv("QOS_SPEND_DEMOTE_THRESHOLD", 5.0)
 	qosUsageMaxBody := int64(readIntEnv("QOS_USAGE_MAX_BODY_BYTES", 1<<20))
-	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody}, nil
+	qosEventTimeout := time.Duration(readIntEnv("QOS_EVENT_TIMEOUT_MS", 1000)) * time.Millisecond
+	pricingFile := os.Getenv("QOS_PRICING_FILE")
+	qosMonthlyLimit := readFloatEnv("QOS_MONTHLY_LIMIT", 0)
+	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit}, nil
 }
 
 // readIntEnv reads an optional integer threshold, falling back to def when
@@ -360,7 +388,14 @@ func (a *app) migrate(ctx context.Context) error {
  expires_at timestamptz, revoked_at timestamptz, last_used_at timestamptz);
  ALTER TABLE personal_access_tokens ADD COLUMN IF NOT EXISTS owner_name text NOT NULL DEFAULT '';
  CREATE INDEX IF NOT EXISTS personal_access_tokens_owner_active_idx
- ON personal_access_tokens (owner_subject, created_at DESC) WHERE revoked_at IS NULL;`)
+ ON personal_access_tokens (owner_subject, created_at DESC) WHERE revoked_at IS NULL;
+ CREATE TABLE IF NOT EXISTS qos_events (
+ id bigserial PRIMARY KEY, owner_subject text NOT NULL, owner_name text NOT NULL DEFAULT '',
+ session_id text NOT NULL DEFAULT '', model text NOT NULL, band text NOT NULL,
+ prompt_tokens bigint NOT NULL DEFAULT 0, cached_tokens bigint NOT NULL DEFAULT 0, completion_tokens bigint NOT NULL DEFAULT 0,
+ cost_amount numeric(12,4) NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now());
+ CREATE INDEX IF NOT EXISTS qos_events_owner_day_idx ON qos_events (owner_subject, created_at);
+ CREATE INDEX IF NOT EXISTS qos_events_owner_session_idx ON qos_events (owner_subject, session_id, created_at);`)
 	return err
 }
 
@@ -630,7 +665,7 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		model = "unknown"
 	}
-	resp.Body = a.recordUsage(r, resp, owner, model, sessionResult.Band)
+	resp.Body = a.recordUsage(r, resp, owner, ownerName, sessionResult.SessionID, model, sessionResult.Band)
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
@@ -657,7 +692,14 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 // literal "embeddings" band, since embeddings never goes through
 // observeSession's chat-only session/band assignment (band is always
 // qos.BandNormal there for this path, which would be misleading here).
-func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, model string, band qos.Band) io.ReadCloser {
+//
+// It also writes one qos_events row per completed chat or embeddings
+// response (usage.go) for the /platform usage panel -- pricing.cost, not
+// qos.RecordCost's alpha/beta units, since the panel shows real currency.
+// Embeddings get a row (band "embeddings", cost only) but never
+// qos.RecordCost, matching the reasoning above: embeddings carry no QoS
+// cost unit, only a real price.
+func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName, sessionID, model string, band qos.Band) io.ReadCloser {
 	isChat := strings.Contains(r.URL.Path, "/chat/completions")
 	isEmbeddings := strings.Contains(r.URL.Path, "/embeddings")
 	if !isChat && !isEmbeddings {
@@ -677,7 +719,22 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, model str
 	a.qos.Metrics().RequestsTotal.WithLabelValues(owner, string(recordBand), outcome).Inc()
 
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return resp.Body
+		// Embeddings never stream, and a non-200 stream (rare, but the
+		// gateway can emit an SSE error frame) never carries a usage
+		// chunk worth waiting for.
+		if !isChat || outcome != "dispatched" {
+			return resp.Body
+		}
+		ctx := r.Context()
+		return newSSEUsageReader(resp.Body, func(usageModel string, promptTokens, cachedTokens, completionTokens int64) {
+			if usageModel == "" {
+				usageModel = model
+			}
+			recordCtx, cancel := context.WithTimeout(ctx, a.cfg.qosEventTimeout)
+			defer cancel()
+			a.qos.RecordCost(recordCtx, owner, usageModel, promptTokens, cachedTokens, completionTokens)
+			a.recordQosEvent(recordCtx, owner, ownerName, sessionID, usageModel, string(recordBand), promptTokens, cachedTokens, completionTokens)
+		})
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, a.cfg.qosUsageMaxBody+1))
 	if err != nil {
@@ -700,20 +757,26 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, model str
 	if json.Unmarshal(body, &parsed) != nil {
 		return restored
 	}
+	usageModel := model
+	if parsed.Model != "" {
+		usageModel = parsed.Model
+	}
 	if isEmbeddings {
-		usageModel := model
-		if parsed.Model != "" {
-			usageModel = parsed.Model
-		}
 		if parsed.Usage.PromptTokens > 0 {
 			a.qos.Metrics().EmbeddingTokensTotal.WithLabelValues(owner, usageModel).Add(float64(parsed.Usage.PromptTokens))
+			ctx, cancel := context.WithTimeout(r.Context(), a.cfg.qosEventTimeout)
+			defer cancel()
+			a.recordQosEvent(ctx, owner, ownerName, "", usageModel, string(recordBand), parsed.Usage.PromptTokens, 0, 0)
 		}
 		return restored
 	}
 	if parsed.Usage.PromptTokens > 0 || parsed.Usage.CompletionTokens > 0 {
 		ctx, cancel := context.WithTimeout(r.Context(), a.cfg.qosFingerprintTimeout)
-		defer cancel()
-		a.qos.RecordCost(ctx, owner, model, parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens)
+		a.qos.RecordCost(ctx, owner, usageModel, parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens)
+		cancel()
+		eventCtx, eventCancel := context.WithTimeout(r.Context(), a.cfg.qosEventTimeout)
+		defer eventCancel()
+		a.recordQosEvent(eventCtx, owner, ownerName, sessionID, usageModel, string(recordBand), parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens)
 	}
 	return restored
 }
@@ -780,10 +843,17 @@ func (a *app) observeSession(r *http.Request, owner string) (io.ReadCloser, qos.
 	if err != nil {
 		return r.Body, degraded
 	}
-	restored := io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body))
 	if int64(len(head)) > a.cfg.qosFingerprintMaxBody {
-		return restored, degraded
+		return io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body)), degraded
 	}
+	// Usage panel needs a final usage chunk out of streamed chat
+	// completions (main draw of TASK-*-usage-panel.md); vLLM/SGLang only
+	// emit one when the request asks for it. Only touches the body when
+	// stream=true and the client hasn't already set it -- see usage.go.
+	if mutated, ok := ensureStreamUsage(head); ok {
+		head = mutated
+	}
+	restored := io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body))
 	ctx, cancel := context.WithTimeout(r.Context(), a.cfg.qosFingerprintTimeout)
 	defer cancel()
 	result := a.qos.Observe(ctx, owner, head)

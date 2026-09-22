@@ -23,7 +23,7 @@ func testApp() *app {
 	store := qos.NewRedisStore("127.0.0.1:1")
 	tracker := qos.NewTracker(store, qos.NewMetrics(prometheus.NewRegistry()), 30*time.Minute, 120*time.Second, 8, 9.4e-5, 0.0149, 5.0, 10*time.Minute)
 	return &app{
-		cfg: config{qosUsageMaxBody: 1 << 20, qosFingerprintTimeout: 50 * time.Millisecond},
+		cfg: config{qosUsageMaxBody: 1 << 20, qosFingerprintTimeout: 50 * time.Millisecond, qosEventTimeout: 50 * time.Millisecond},
 		qos: tracker,
 	}
 }
@@ -117,7 +117,7 @@ func TestRecordUsageIgnoresNonChatPaths(t *testing.T) {
 	body := `{"data":[]}`
 	resp := &http.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "m", qos.BandNormal))
+	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "m", qos.BandNormal))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestRecordUsageNeverBuffersAStreamingResponse(t *testing.T) {
 	body := "data: {\"choices\":[]}\n\ndata: [DONE]\n\n"
 	resp := &http.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "m", qos.BandNormal))
+	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "m", qos.BandNormal))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRecordUsagePreservesNonStreamingChatCompletionBody(t *testing.T) {
 	body := `{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":20}}}`
 	resp := &http.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "m", qos.BandNormal))
+	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "m", qos.BandNormal))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestRecordUsagePassesThroughOversizedResponses(t *testing.T) {
 	body := `{"usage":{"prompt_tokens":1}}`
 	resp := &http.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "m", qos.BandNormal))
+	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "m", qos.BandNormal))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestRecordUsageIncrementsRequestsTotalByOutcome(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		resp := &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`))}
 
-		_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "m", qos.BandWarm))
+		_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "m", qos.BandWarm))
 
 		if got := testutil.ToFloat64(a.qos.Metrics().RequestsTotal.WithLabelValues("alice", "warm", tc.outcome)); got != 1 {
 			t.Fatalf("status %d: patsvc_requests_total{outcome=%s} = %v, want 1", tc.status, tc.outcome, got)
@@ -199,7 +199,7 @@ func TestRecordUsageIgnoresNonChatPathsForRequestsTotal(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`))}
 
-	_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "m", qos.BandNormal))
+	_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "m", qos.BandNormal))
 
 	if got := testutil.ToFloat64(a.qos.Metrics().RequestsTotal.WithLabelValues("alice", "normal", "dispatched")); got != 0 {
 		t.Fatalf("patsvc_requests_total for a non-chat path = %v, want 0", got)
@@ -212,7 +212,7 @@ func TestRecordUsageFeedsTokenAndCostCounters(t *testing.T) {
 	body := `{"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":20}}}`
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "qwen-3.8-27b", qos.BandNormal))
+	_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "qwen-3.8-27b", qos.BandNormal))
 
 	metrics := a.qos.Metrics()
 	if got := testutil.ToFloat64(metrics.PromptTokensTotal.WithLabelValues("alice", "qwen-3.8-27b")); got != 100 {
@@ -238,7 +238,7 @@ func TestRecordUsageEmbeddingsIncrementsRequestsTotalWithEmbeddingsBand(t *testi
 	body := `{"model":"bge-m3","data":[{"embedding":[0.1]}],"usage":{"prompt_tokens":42}}`
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "bge-m3", qos.BandNormal))
+	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "bge-m3", qos.BandNormal))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestRecordUsageEmbeddingsFeedsEmbeddingTokensNotCost(t *testing.T) {
 	body := `{"model":"bge-m3","usage":{"prompt_tokens":42}}`
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "bge-m3", qos.BandNormal))
+	_, _ = io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "", "bge-m3", qos.BandNormal))
 
 	metrics := a.qos.Metrics()
 	if got := testutil.ToFloat64(metrics.EmbeddingTokensTotal.WithLabelValues("alice", "bge-m3")); got != 42 {

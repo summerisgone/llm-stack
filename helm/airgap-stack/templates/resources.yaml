@@ -184,6 +184,21 @@ metadata:
 ---
 apiVersion: v1
 data:
+  pricing.json: |
+    {
+      "currency": "USD",
+      "models": {
+        "_default": { "prompt_per_1k": 1.0, "cached_per_1k": 1.0, "completion_per_1k": 3.0 },
+        "qwen-3.8-27b": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 }
+      }
+    }
+kind: ConfigMap
+metadata:
+  name: pat-service-pricing
+  namespace: airgap-ai-stack
+---
+apiVersion: v1
+data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
@@ -903,6 +918,22 @@ spec:
           value: "false"
         - name: DEFAULT_USER_ROLE
           value: pending
+        - name: USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS
+          value: "true"
+        - name: USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS
+          value: "true"
+        - name: USER_PERMISSIONS_WORKSPACE_PROMPTS_ACCESS
+          value: "true"
+        - name: USER_PERMISSIONS_WORKSPACE_TOOLS_ACCESS
+          value: "true"
+        - name: USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS
+          value: "true"
+        - name: USER_PERMISSIONS_FEATURES_WEB_SEARCH
+          value: "true"
+        - name: USER_PERMISSIONS_FEATURES_API_KEYS
+          value: "true"
+        - name: USER_PERMISSIONS_FEATURES_AUTOMATIONS
+          value: "true"
         - name: OAUTH_MERGE_ACCOUNTS_BY_EMAIL
           value: "true"
         - name: OAUTH_CLIENT_ID
@@ -1102,6 +1133,10 @@ spec:
           value: "4194304"
         - name: QOS_FINGERPRINT_TIMEOUT_MS
           value: "200"
+        - name: QOS_PRICING_FILE
+          value: /etc/pat-service/pricing.json
+        - name: QOS_MONTHLY_LIMIT
+          value: "0"
         image: ghcr.io/summerisgone/pat-service:latest
         imagePullPolicy: Always
         name: pat-service
@@ -1122,6 +1157,14 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /etc/pat-service
+          name: pricing
+          readOnly: true
+      volumes:
+      - configMap:
+          name: pat-service-pricing
+        name: pricing
 ---
 apiVersion: apps/v1
 kind: Deployment

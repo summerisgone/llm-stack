@@ -106,6 +106,35 @@ spec:
       storage: 5Gi
 ---
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pat-service-pricing
+  namespace: airgap-ai-stack
+data:
+  # Price per 1000 tokens, by model id, for the /platform usage panel's real
+  # currency figures (pat-service/cmd/pat-service/usage.go's pricing type) --
+  # separate from QOS_COST_ALPHA_PER_TOKEN/_BETA_PER_TOKEN below, which price
+  # the fair-share scheduler's abstract cost units, not money. "_default"
+  # prices any model with no entry of its own, so a newly added model never
+  # silently costs 0. cached_per_1k prices the cached share of prompt_tokens
+  # (a discount vs. prompt_per_1k); "_default" assumes no discount until a
+  # real one is known for that model.
+  #
+  # qwen-3.8-27b (RadixArk-Qwen3.8-27B-NVFP4, docs/operations/vllm-inference.md)
+  # is a self-hosted checkpoint with no vendor-sold API, so there is no real
+  # market price to look up for it. These rates ($0.10/$2.475/$0.0495 per 1M
+  # in/out/cached) are chargeback figures set by the team, not fetched from a
+  # provider -- update this entry directly if that figure changes.
+  pricing.json: |
+    {
+      "currency": "USD",
+      "models": {
+        "_default": { "prompt_per_1k": 1.0, "cached_per_1k": 1.0, "completion_per_1k": 3.0 },
+        "qwen-3.8-27b": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 }
+      }
+    }
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: pat-service
@@ -227,6 +256,19 @@ spec:
               value: "4194304"
             - name: QOS_FINGERPRINT_TIMEOUT_MS
               value: "200"
+            # /platform usage panel: pricing.go's real-currency cost, mounted
+            # below from pat-service-pricing. Monthly limit is a display-only
+            # preview (usage.go's usageLimit) -- 0 means none configured yet;
+            # nothing in this service enforces it (Stage 3 step 5's hard
+            # per-user ceiling remains out of scope, TASK-qos-fair-share.md).
+            - name: QOS_PRICING_FILE
+              value: /etc/pat-service/pricing.json
+            - name: QOS_MONTHLY_LIMIT
+              value: "0"
+          volumeMounts:
+            - name: pricing
+              mountPath: /etc/pat-service
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /healthz
@@ -238,6 +280,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+      volumes:
+        - name: pricing
+          configMap:
+            name: pat-service-pricing
 ---
 apiVersion: v1
 kind: Service
@@ -344,6 +390,26 @@ spec:
               value: "false"
             - name: DEFAULT_USER_ROLE
               value: pending
+            # Default role permissions. ENABLE_PERSISTENT_CONFIG=false means
+            # anything toggled in Admin > Settings > Users > Default
+            # permissions lives only in the running process's memory and is
+            # lost on the next restart -- these must be set here instead.
+            - name: USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS
+              value: "true"
+            - name: USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS
+              value: "true"
+            - name: USER_PERMISSIONS_WORKSPACE_PROMPTS_ACCESS
+              value: "true"
+            - name: USER_PERMISSIONS_WORKSPACE_TOOLS_ACCESS
+              value: "true"
+            - name: USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS
+              value: "true"
+            - name: USER_PERMISSIONS_FEATURES_WEB_SEARCH
+              value: "true"
+            - name: USER_PERMISSIONS_FEATURES_API_KEYS
+              value: "true"
+            - name: USER_PERMISSIONS_FEATURES_AUTOMATIONS
+              value: "true"
             - name: OAUTH_MERGE_ACCOUNTS_BY_EMAIL
               value: "true"
             - name: OAUTH_CLIENT_ID
