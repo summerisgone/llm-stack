@@ -272,7 +272,7 @@ spec:
       # evaluated solely from its Keycloak roles.
       initContainers:
         - name: sso-role-bootstrap
-          image: ghcr.io/open-webui/open-webui:v0.11.3
+          image: ghcr.io/open-webui/open-webui:v0.11.4
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -316,7 +316,7 @@ spec:
               mountPath: /app/backend/data
       containers:
         - name: openwebui
-          image: ghcr.io/open-webui/open-webui:v0.11.3
+          image: ghcr.io/open-webui/open-webui:v0.11.4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -535,7 +535,7 @@ spec:
     spec:
       containers:
         - name: langfuse
-          image: docker.langfuse.com/langfuse/langfuse:4.35.0
+          image: docker.langfuse.com/langfuse/langfuse:4.41.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -610,7 +610,7 @@ spec:
     spec:
       containers:
         - name: langfuse-worker
-          image: docker.langfuse.com/langfuse/langfuse-worker:4.35.0
+          image: docker.langfuse.com/langfuse/langfuse-worker:4.41.0
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:

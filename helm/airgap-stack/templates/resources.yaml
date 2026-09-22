@@ -790,7 +790,7 @@ spec:
         envFrom:
         - secretRef:
             name: airgap-runtime
-        image: docker.langfuse.com/langfuse/langfuse:4.35.0
+        image: docker.langfuse.com/langfuse/langfuse:4.41.0
         imagePullPolicy: IfNotPresent
         name: langfuse
         ports:
@@ -857,7 +857,7 @@ spec:
         envFrom:
         - secretRef:
             name: airgap-runtime
-        image: docker.langfuse.com/langfuse/langfuse-worker:4.35.0
+        image: docker.langfuse.com/langfuse/langfuse-worker:4.41.0
         imagePullPolicy: IfNotPresent
         name: langfuse-worker
 ---
@@ -931,7 +931,7 @@ spec:
           value: X-User-Id
         - name: BYPASS_MODEL_ACCESS_CONTROL
           value: "true"
-        image: ghcr.io/open-webui/open-webui:v0.11.3
+        image: ghcr.io/open-webui/open-webui:v0.11.4
         imagePullPolicy: IfNotPresent
         name: openwebui
         ports:
@@ -984,7 +984,7 @@ spec:
                   ),
               )
           PY
-        image: ghcr.io/open-webui/open-webui:v0.11.3
+        image: ghcr.io/open-webui/open-webui:v0.11.4
         imagePullPolicy: IfNotPresent
         name: sso-role-bootstrap
         volumeMounts:
