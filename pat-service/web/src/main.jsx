@@ -88,9 +88,10 @@ function SessionsTable({ sessions, currency }) {
   if (sessions.length === 0) {
     return <div className="empty"><Icon>⌁</Icon><strong>No sessions yet</strong><span>Agent sessions show up here once you send some traffic.</span></div>
   }
-  return <div className="table-wrap"><table><thead><tr><th>Model</th><th>Started</th><th>Duration</th><th>Steps</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>
+  return <div className="table-wrap"><table><thead><tr><th>Model</th><th>Key</th><th>Started</th><th>Duration</th><th>Steps</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>
     {sessions.map((s) => <tr key={s.session_id}>
       <td><strong>{s.model}</strong></td>
+      <td>{s.token_name || <span className="muted">—</span>}</td>
       <td>{date(s.started_at)}</td>
       <td>{formatDuration(s.started_at, s.ended_at)}</td>
       <td>{s.steps}</td>
@@ -118,6 +119,7 @@ function LimitWidget({ limit }) {
 
 function App() {
   const [tokens, setTokens] = useState([])
+  const [tokensCurrency, setTokensCurrency] = useState('')
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [notice, setNotice] = useState(null)
@@ -136,6 +138,7 @@ function App() {
       if (!response.ok) throw new Error('Could not load tokens')
       const data = await response.json()
       setTokens(data.tokens || [])
+      setTokensCurrency(data.currency || '')
     } catch (error) {
       setNotice({ kind: 'error', text: error.message })
     } finally {
@@ -263,7 +266,7 @@ function App() {
 
       <div className="panel token-panel">
         <div className="panel-heading"><div><p className="eyebrow">ACTIVE INVENTORY</p><h2>Your tokens <span className="count">{activeCount}</span></h2></div><button className="refresh" onClick={load} disabled={loading} aria-label="Refresh tokens"><Icon className={loading ? 'spin' : ''}>↻</Icon></button></div>
-        {loading ? <div className="empty"><span className="loader"></span>Loading tokens…</div> : tokens.length === 0 ? <div className="empty"><Icon>⌁</Icon><strong>No tokens yet</strong><span>Create one to start making API requests.</span></div> : <div className="table-wrap"><table><thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>{tokens.map((token) => <tr key={token.id} className={token.revoked_at ? 'revoked' : ''}><td><strong>{token.name}</strong>{token.revoked_at && <span className="revoked-label">Revoked</span>}</td><td><code>{token.prefix}…</code></td><td>{date(token.created_at)}</td><td>{date(token.last_used_at)}</td><td>{token.revoked_at ? <span className="muted">Unavailable</span> : <button className="revoke" onClick={() => revoke(token)}>Revoke</button>}</td></tr>)}</tbody></table></div>}
+        {loading ? <div className="empty"><span className="loader"></span>Loading tokens…</div> : tokens.length === 0 ? <div className="empty"><Icon>⌁</Icon><strong>No tokens yet</strong><span>Create one to start making API requests.</span></div> : <div className="table-wrap"><table><thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th>Usage</th><th></th></tr></thead><tbody>{tokens.map((token) => <tr key={token.id} className={token.revoked_at ? 'revoked' : ''}><td><strong>{token.name}</strong>{token.revoked_at && <span className="revoked-label">Revoked</span>}</td><td><code>{token.prefix}…</code></td><td>{date(token.created_at)}</td><td>{date(token.last_used_at)}</td><td>{token.cost_amount ? `${token.cost_amount.toFixed(2)} ${tokensCurrency}` : '—'}</td><td>{token.revoked_at ? <span className="muted">Unavailable</span> : <button className="revoke" onClick={() => revoke(token)}>Revoke</button>}</td></tr>)}</tbody></table></div>}
       </div>
     </section>
 

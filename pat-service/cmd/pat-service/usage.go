@@ -213,15 +213,15 @@ func parseSSEUsageTail(tail []byte) (model string, promptTokens, cachedTokens, c
 // is logged and otherwise ignored: this always runs after the proxied
 // response has already been delivered, so there is nothing left to degrade
 // except the usage panel's own completeness.
-func (a *app) recordQosEvent(ctx context.Context, owner, ownerName, sessionID, model, band string, promptTokens, cachedTokens, completionTokens int64) {
+func (a *app) recordQosEvent(ctx context.Context, owner, ownerName, tokenID, tokenName, sessionID, model, band string, promptTokens, cachedTokens, completionTokens int64) {
 	if a.db == nil { // unit tests construct an app with no live pat-db
 		return
 	}
 	cost := a.pricing.cost(model, promptTokens, cachedTokens, completionTokens)
 	_, err := a.db.Exec(ctx, `INSERT INTO qos_events
-		(owner_subject, owner_name, session_id, model, band, prompt_tokens, cached_tokens, completion_tokens, cost_amount)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		owner, ownerName, sessionID, model, band, promptTokens, cachedTokens, completionTokens, cost)
+		(owner_subject, owner_name, token_id, token_name, session_id, model, band, prompt_tokens, cached_tokens, completion_tokens, cost_amount)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		owner, ownerName, tokenID, tokenName, sessionID, model, band, promptTokens, cachedTokens, completionTokens, cost)
 	if err != nil {
 		log.Printf("qos event insert: %v", err)
 	}
@@ -270,6 +270,7 @@ func (a *app) usageDaily(w http.ResponseWriter, r *http.Request) {
 type sessionUsage struct {
 	SessionID        string  `json:"session_id"`
 	Model            string  `json:"model"`
+	TokenName        string  `json:"token_name"`
 	StartedAt        string  `json:"started_at"`
 	EndedAt          string  `json:"ended_at"`
 	Steps            int64   `json:"steps"`
@@ -288,7 +289,7 @@ func (a *app) usageSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := clampIntQuery(r, "limit", 50, 1, 200)
 	rows, err := a.db.Query(r.Context(), `
-		SELECT session_id, max(model), min(created_at), max(created_at), count(*),
+		SELECT session_id, max(model), max(token_name), min(created_at), max(created_at), count(*),
 		       COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost_amount),0)
 		FROM qos_events
 		WHERE owner_subject=$1 AND session_id <> ''
@@ -302,7 +303,7 @@ func (a *app) usageSessions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var started, ended time.Time
 		var d sessionUsage
-		if err := rows.Scan(&d.SessionID, &d.Model, &started, &ended, &d.Steps, &d.PromptTokens, &d.CompletionTokens, &d.CostAmount); err != nil {
+		if err := rows.Scan(&d.SessionID, &d.Model, &d.TokenName, &started, &ended, &d.Steps, &d.PromptTokens, &d.CompletionTokens, &d.CostAmount); err != nil {
 			http.Error(w, "database error", 500)
 			return
 		}

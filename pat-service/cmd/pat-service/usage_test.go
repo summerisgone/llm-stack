@@ -114,7 +114,7 @@ func TestRecordUsageStreamingFeedsTokenAndCostCounters(t *testing.T) {
 		"data: [DONE]\n\n"
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "sess-1", "unknown", qos.BandNormal))
+	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "tok-1", "test token", "sess-1", "unknown", qos.BandNormal))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

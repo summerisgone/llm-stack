@@ -206,6 +206,10 @@ type tokenRecord struct {
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	// CostAmount is this token's lifetime spend (sum of qos_events.cost_amount
+	// for requests authenticated with it), in a.pricing.Currency -- the
+	// /platform token table's per-key usage total.
+	CostAmount float64 `json:"cost_amount"`
 }
 
 func main() {
@@ -395,7 +399,10 @@ func (a *app) migrate(ctx context.Context) error {
  prompt_tokens bigint NOT NULL DEFAULT 0, cached_tokens bigint NOT NULL DEFAULT 0, completion_tokens bigint NOT NULL DEFAULT 0,
  cost_amount numeric(12,4) NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now());
  CREATE INDEX IF NOT EXISTS qos_events_owner_day_idx ON qos_events (owner_subject, created_at);
- CREATE INDEX IF NOT EXISTS qos_events_owner_session_idx ON qos_events (owner_subject, session_id, created_at);`)
+ CREATE INDEX IF NOT EXISTS qos_events_owner_session_idx ON qos_events (owner_subject, session_id, created_at);
+ ALTER TABLE qos_events ADD COLUMN IF NOT EXISTS token_id text NOT NULL DEFAULT '';
+ ALTER TABLE qos_events ADD COLUMN IF NOT EXISTS token_name text NOT NULL DEFAULT '';
+ CREATE INDEX IF NOT EXISTS qos_events_token_idx ON qos_events (token_id);`)
 	return err
 }
 
@@ -507,7 +514,14 @@ func (a *app) listTokens(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := a.db.Query(r.Context(), `SELECT id,name,token_prefix,created_at,expires_at,revoked_at,last_used_at FROM personal_access_tokens WHERE owner_subject=$1 ORDER BY created_at DESC`, s.Subject)
+	rows, err := a.db.Query(r.Context(), `
+		SELECT t.id, t.name, t.token_prefix, t.created_at, t.expires_at, t.revoked_at, t.last_used_at,
+		       COALESCE(SUM(e.cost_amount), 0)
+		FROM personal_access_tokens t
+		LEFT JOIN qos_events e ON e.token_id = t.id
+		WHERE t.owner_subject=$1
+		GROUP BY t.id
+		ORDER BY t.created_at DESC`, s.Subject)
 	if err != nil {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -516,13 +530,13 @@ func (a *app) listTokens(w http.ResponseWriter, r *http.Request) {
 	items := []tokenRecord{}
 	for rows.Next() {
 		var item tokenRecord
-		if err := rows.Scan(&item.ID, &item.Name, &item.Prefix, &item.CreatedAt, &item.ExpiresAt, &item.RevokedAt, &item.LastUsedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Prefix, &item.CreatedAt, &item.ExpiresAt, &item.RevokedAt, &item.LastUsedAt, &item.CostAmount); err != nil {
 			http.Error(w, "database error", 500)
 			return
 		}
 		items = append(items, item)
 	}
-	writeJSON(w, 200, map[string]any{"tokens": items})
+	writeJSON(w, 200, map[string]any{"currency": a.pricing.Currency, "tokens": items})
 }
 
 func (a *app) createToken(w http.ResponseWriter, r *http.Request) {
@@ -606,8 +620,8 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 		openAIError(w, 401, "Invalid authentication credentials")
 		return
 	}
-	var id, owner, ownerName string
-	err := a.db.QueryRow(r.Context(), `SELECT id,owner_subject,owner_name FROM personal_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()`, a.tokenHash(token)).Scan(&id, &owner, &ownerName)
+	var id, owner, ownerName, tokenName string
+	err := a.db.QueryRow(r.Context(), `SELECT id,owner_subject,owner_name,name FROM personal_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()`, a.tokenHash(token)).Scan(&id, &owner, &ownerName, &tokenName)
 	if err != nil {
 		openAIError(w, 401, "Invalid authentication credentials")
 		return
@@ -665,7 +679,7 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		model = "unknown"
 	}
-	resp.Body = a.recordUsage(r, resp, owner, ownerName, sessionResult.SessionID, model, sessionResult.Band)
+	resp.Body = a.recordUsage(r, resp, owner, ownerName, id, tokenName, sessionResult.SessionID, model, sessionResult.Band)
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
@@ -699,7 +713,7 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 // Embeddings get a row (band "embeddings", cost only) but never
 // qos.RecordCost, matching the reasoning above: embeddings carry no QoS
 // cost unit, only a real price.
-func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName, sessionID, model string, band qos.Band) io.ReadCloser {
+func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName, tokenID, tokenName, sessionID, model string, band qos.Band) io.ReadCloser {
 	isChat := strings.Contains(r.URL.Path, "/chat/completions")
 	isEmbeddings := strings.Contains(r.URL.Path, "/embeddings")
 	if !isChat && !isEmbeddings {
@@ -733,7 +747,7 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName
 			recordCtx, cancel := context.WithTimeout(ctx, a.cfg.qosEventTimeout)
 			defer cancel()
 			a.qos.RecordCost(recordCtx, owner, usageModel, promptTokens, cachedTokens, completionTokens)
-			a.recordQosEvent(recordCtx, owner, ownerName, sessionID, usageModel, string(recordBand), promptTokens, cachedTokens, completionTokens)
+			a.recordQosEvent(recordCtx, owner, ownerName, tokenID, tokenName, sessionID, usageModel, string(recordBand), promptTokens, cachedTokens, completionTokens)
 		})
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, a.cfg.qosUsageMaxBody+1))
@@ -766,7 +780,7 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName
 			a.qos.Metrics().EmbeddingTokensTotal.WithLabelValues(owner, usageModel).Add(float64(parsed.Usage.PromptTokens))
 			ctx, cancel := context.WithTimeout(r.Context(), a.cfg.qosEventTimeout)
 			defer cancel()
-			a.recordQosEvent(ctx, owner, ownerName, "", usageModel, string(recordBand), parsed.Usage.PromptTokens, 0, 0)
+			a.recordQosEvent(ctx, owner, ownerName, tokenID, tokenName, "", usageModel, string(recordBand), parsed.Usage.PromptTokens, 0, 0)
 		}
 		return restored
 	}
@@ -776,7 +790,7 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName
 		cancel()
 		eventCtx, eventCancel := context.WithTimeout(r.Context(), a.cfg.qosEventTimeout)
 		defer eventCancel()
-		a.recordQosEvent(eventCtx, owner, ownerName, sessionID, usageModel, string(recordBand), parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens)
+		a.recordQosEvent(eventCtx, owner, ownerName, tokenID, tokenName, sessionID, usageModel, string(recordBand), parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens)
 	}
 	return restored
 }
