@@ -243,10 +243,10 @@ func (a *app) usageDaily(w http.ResponseWriter, r *http.Request) {
 	}
 	days := clampIntQuery(r, "days", 90, 1, 365)
 	rows, err := a.db.Query(r.Context(), `
-		SELECT date_trunc('day', created_at) AS day,
+		SELECT date_trunc('day', created_at AT TIME ZONE 'UTC') AS day,
 		       COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost_amount),0)
 		FROM qos_events
-		WHERE owner_subject=$1 AND created_at >= now() - ($2 || ' days')::interval
+		WHERE owner_subject=$1 AND created_at >= now() - make_interval(days => $2)
 		GROUP BY day ORDER BY day`, s.Subject, days)
 	if err != nil {
 		http.Error(w, "database unavailable", 503)
@@ -281,19 +281,25 @@ type sessionUsage struct {
 
 // usageSessions backs the /platform session table: one row per session_id
 // (excluding the empty session_id embeddings rows record), most recent
-// first, limited (default 50, capped 1-200).
+// first, paged by limit (default 50, capped 1-200) and offset.
 func (a *app) usageSessions(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.requireSession(w, r)
 	if !ok {
 		return
 	}
 	limit := clampIntQuery(r, "limit", 50, 1, 200)
+	offset := clampIntQuery(r, "offset", 0, 0, 1<<30)
+	var total int64
+	if err := a.db.QueryRow(r.Context(), `SELECT count(DISTINCT session_id) FROM qos_events WHERE owner_subject=$1 AND session_id <> ''`, s.Subject).Scan(&total); err != nil {
+		http.Error(w, "database unavailable", 503)
+		return
+	}
 	rows, err := a.db.Query(r.Context(), `
 		SELECT session_id, max(model), max(token_name), min(created_at), max(created_at), count(*),
 		       COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost_amount),0)
 		FROM qos_events
 		WHERE owner_subject=$1 AND session_id <> ''
-		GROUP BY session_id ORDER BY max(created_at) DESC LIMIT $2`, s.Subject, limit)
+		GROUP BY session_id ORDER BY max(created_at) DESC LIMIT $2 OFFSET $3`, s.Subject, limit, offset)
 	if err != nil {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -310,11 +316,18 @@ func (a *app) usageSessions(w http.ResponseWriter, r *http.Request) {
 		d.StartedAt, d.EndedAt = started.Format(time.RFC3339), ended.Format(time.RFC3339)
 		out = append(out, d)
 	}
-	writeJSON(w, 200, map[string]any{"currency": a.pricing.Currency, "sessions": out})
+	writeJSON(w, 200, map[string]any{"currency": a.pricing.Currency, "sessions": out, "total": total})
 }
 
-// usageLimit backs the /platform spend-vs-limit widget: this month's spend
-// so far against QOS_MONTHLY_LIMIT. Read-only preview -- nothing here
+type usageWindow struct {
+	Key    string  `json:"key"`
+	Spent  float64 `json:"spent"`
+	Tokens int64   `json:"tokens"`
+}
+
+// usageLimit backs the /platform usage widget: spend and tokens over the
+// last hour, 24 hours, 7 days and this calendar month, plus this month's
+// spend against QOS_MONTHLY_LIMIT. Read-only preview -- nothing here
 // enforces the limit (see config.qosMonthlyLimit's doc comment).
 func (a *app) usageLimit(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.requireSession(w, r)
@@ -324,9 +337,20 @@ func (a *app) usageLimit(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
-	var spent float64
-	err := a.db.QueryRow(r.Context(), `SELECT COALESCE(SUM(cost_amount),0) FROM qos_events WHERE owner_subject=$1 AND created_at >= $2`,
-		s.Subject, periodStart).Scan(&spent)
+	windows := []usageWindow{{Key: "hour"}, {Key: "day"}, {Key: "week"}, {Key: "month"}}
+	err := a.db.QueryRow(r.Context(), `
+		SELECT COALESCE(SUM(cost_amount) FILTER (WHERE created_at >= now() - interval '1 hour'),0),
+		       COALESCE(SUM(prompt_tokens+completion_tokens) FILTER (WHERE created_at >= now() - interval '1 hour'),0),
+		       COALESCE(SUM(cost_amount) FILTER (WHERE created_at >= now() - interval '1 day'),0),
+		       COALESCE(SUM(prompt_tokens+completion_tokens) FILTER (WHERE created_at >= now() - interval '1 day'),0),
+		       COALESCE(SUM(cost_amount) FILTER (WHERE created_at >= now() - interval '7 days'),0),
+		       COALESCE(SUM(prompt_tokens+completion_tokens) FILTER (WHERE created_at >= now() - interval '7 days'),0),
+		       COALESCE(SUM(cost_amount) FILTER (WHERE created_at >= $2),0),
+		       COALESCE(SUM(prompt_tokens+completion_tokens) FILTER (WHERE created_at >= $2),0)
+		FROM qos_events
+		WHERE owner_subject=$1 AND created_at >= LEAST($2, now() - interval '7 days')`,
+		s.Subject, periodStart).Scan(&windows[0].Spent, &windows[0].Tokens, &windows[1].Spent, &windows[1].Tokens,
+		&windows[2].Spent, &windows[2].Tokens, &windows[3].Spent, &windows[3].Tokens)
 	if err != nil {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -335,8 +359,9 @@ func (a *app) usageLimit(w http.ResponseWriter, r *http.Request) {
 		"currency":     a.pricing.Currency,
 		"period_start": periodStart.Format("2006-01-02"),
 		"period_end":   periodEnd.Format("2006-01-02"),
-		"spent":        spent,
+		"spent":        windows[3].Spent,
 		"limit":        a.cfg.qosMonthlyLimit,
+		"windows":      windows,
 	})
 }
 

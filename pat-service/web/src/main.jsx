@@ -31,6 +31,8 @@ function Icon({ children, className = '' }) {
 // asking the API for a full year on every dashboard load.
 const heatmapDays = 182
 
+const sessionsPageSize = 20
+
 // buildHeatmapWeeks turns the sparse `daily` rows (only days with activity)
 // into a dense grid of every day in the window, grouped into Sunday-start
 // weeks so the grid always renders complete columns -- same layout GitHub's
@@ -101,19 +103,28 @@ function SessionsTable({ sessions, currency }) {
   </tbody></table></div>
 }
 
+const usageWindowLabels = { hour: 'Last hour', day: 'Last 24 hours', week: 'Last 7 days', month: 'This month' }
+
 function LimitWidget({ limit }) {
   if (!limit) return null
   const hasLimit = limit.limit > 0
   const pct = hasLimit ? Math.min(100, (limit.spent / limit.limit) * 100) : 0
   const over = hasLimit && limit.spent > limit.limit
   return <div className="panel limit-panel">
-    <div className="panel-heading"><div><p className="eyebrow">THIS MONTH</p><h2>Spend vs. limit</h2></div></div>
+    <div className="panel-heading"><div><p className="eyebrow">USAGE</p><h2>Spend and tokens</h2></div></div>
+    <div className="usage-windows">
+      {(limit.windows || []).map((w) => <div className="usage-window" key={w.key}>
+        <span>{usageWindowLabels[w.key] || w.key}</span>
+        <span className="muted">{w.tokens.toLocaleString()} tokens</span>
+        <strong>{w.spent.toFixed(2)} {limit.currency}</strong>
+      </div>)}
+    </div>
     {hasLimit
       ? <>
         <div className="limit-bar-track"><div className={`limit-bar-fill${over ? ' over' : ''}`} style={{ width: `${pct}%` }} /></div>
-        <div className="limit-meta"><span>{limit.spent.toFixed(2)} {limit.currency}</span><span>limit {limit.limit.toFixed(2)} {limit.currency}</span></div>
+        <div className="limit-meta"><span>{limit.spent.toFixed(2)} {limit.currency} this month</span><span>limit {limit.limit.toFixed(2)} {limit.currency}</span></div>
       </>
-      : <div className="limit-meta"><span>{limit.spent.toFixed(2)} {limit.currency} spent</span><span className="muted">No limit configured yet</span></div>}
+      : <div className="limit-meta"><span className="muted">No monthly limit configured yet</span></div>}
   </div>
 }
 
@@ -160,6 +171,9 @@ function App() {
   const [form, setForm] = useState({ name: '', days: 90 })
   const [daily, setDaily] = useState([])
   const [sessions, setSessions] = useState([])
+  const [sessionsTotal, setSessionsTotal] = useState(0)
+  const [sessionsPage, setSessionsPage] = useState(0)
+  const [sessionsLoading, setSessionsLoading] = useState(true)
   const [limit, setLimit] = useState(null)
   const [usageLoading, setUsageLoading] = useState(true)
 
@@ -181,13 +195,11 @@ function App() {
   async function loadUsage() {
     setUsageLoading(true)
     try {
-      const [dailyRes, sessionsRes, limitRes] = await Promise.all([
+      const [dailyRes, limitRes] = await Promise.all([
         fetch(`${base}/api/usage/daily?days=${heatmapDays}`),
-        fetch(`${base}/api/usage/sessions?limit=20`),
         fetch(`${base}/api/usage/limit`),
       ])
       if (dailyRes.ok) setDaily((await dailyRes.json()).days || [])
-      if (sessionsRes.ok) setSessions((await sessionsRes.json()).sessions || [])
       if (limitRes.ok) setLimit(await limitRes.json())
     } catch {
       // Usage is a secondary panel; a failed fetch just leaves it empty
@@ -197,7 +209,24 @@ function App() {
     }
   }
 
+  async function loadSessions(page) {
+    setSessionsLoading(true)
+    try {
+      const response = await fetch(`${base}/api/usage/sessions?limit=${sessionsPageSize}&offset=${page * sessionsPageSize}`)
+      if (response.ok) {
+        const data = await response.json()
+        setSessions(data.sessions || [])
+        setSessionsTotal(data.total || 0)
+      }
+    } catch {
+      // Same as loadUsage: a secondary panel stays empty on failure.
+    } finally {
+      setSessionsLoading(false)
+    }
+  }
+
   useEffect(() => { load(); loadUsage() }, [])
+  useEffect(() => { loadSessions(sessionsPage) }, [sessionsPage])
 
   async function create(event) {
     event.preventDefault()
@@ -250,6 +279,7 @@ function App() {
     window.location.assign(`${base}/`)
   }
 
+  const sessionsPages = Math.max(1, Math.ceil(sessionsTotal / sessionsPageSize))
   const activeCount = tokens.filter((token) => !token.revoked_at).length
   const hermesToken = tokens.find((token) => token.issued_by === 'hermes' && !token.revoked_at && new Date(token.expires_at) > new Date())
 
@@ -317,8 +347,14 @@ function App() {
     </section>
 
     <section className="panel sessions-panel">
-      <div className="panel-heading"><div><p className="eyebrow">AGENT ACTIVITY</p><h2>Recent sessions</h2></div></div>
-      {usageLoading ? <div className="empty"><span className="loader"></span>Loading sessions…</div> : <SessionsTable sessions={sessions} currency={limit?.currency || ''} />}
+      <div className="panel-heading"><div><p className="eyebrow">AGENT ACTIVITY</p><h2>Recent sessions <span className="count">{sessionsTotal}</span></h2></div>
+        {sessionsPages > 1 && <div className="pager">
+          <button className="refresh" onClick={() => setSessionsPage(sessionsPage - 1)} disabled={sessionsLoading || sessionsPage === 0} aria-label="Previous page"><Icon>←</Icon></button>
+          <span className="muted">{sessionsPage + 1} / {sessionsPages}</span>
+          <button className="refresh" onClick={() => setSessionsPage(sessionsPage + 1)} disabled={sessionsLoading || sessionsPage + 1 >= sessionsPages} aria-label="Next page"><Icon>→</Icon></button>
+        </div>}
+      </div>
+      {sessionsLoading ? <div className="empty"><span className="loader"></span>Loading sessions…</div> : <SessionsTable sessions={sessions} currency={limit?.currency || ''} />}
     </section>
 
     <footer><span>Protected by Keycloak SSO</span><span>•</span><span>Tokens are validated on every request</span></footer>
