@@ -1,0 +1,12 @@
+# Dotted config keys a user's config.user.yaml cannot override. hermes-sync
+# always writes the catalog value (or removes the key if the catalog has none).
+- model.provider
+- model.base_url
+- model.api_key
+- terminal.backend
+- terminal.cwd
+- skills.external_dirs
+- agent.disabled_toolsets
+- curator.enabled
+- updates.check
+- telemetry

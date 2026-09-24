@@ -21,5 +21,36 @@ spec:
             # qwen-3.8-27b is the single canonical model name both engines
             # serve (helm/airgap-stack/values.yaml inference.modelName) --
             # add/remove entries here in step with which backends are enabled.
+            #
+            # Index 1 is a second connection, reached through pat-service
+            # rather than the private gateway directly -- the PAT below is
+            # opaque, not a JWT, so it must go through pat-service's
+            # swap-and-forward proxy, never straight to ai-gateway-private
+            # (see docs/adr/0003, scripts/kc-pat-issue). It exists because
+            # index 0 is system_oauth: Automations run with no browser
+            # cookie to forward, so a scheduled run can never reach a model
+            # through it (structural, confirmed live via the empty-reply /
+            # knowledge_search-only signature). model_ids is left unset so
+            # it discovers pat-service's catalogue dynamically, matching
+            # what an admin adding this connection by hand in the UI gets --
+            # ENABLE_PERSISTENT_CONFIG=false means that UI-added connection
+            # only lives in the running pod's memory and is lost on the next
+            # restart, so it has to be declared here to persist. prefix_id
+            # must stay "automations" -- model presets (e.g.
+            # hacker-news-model) reference "automations.<model>" as their
+            # base_model_id.
             - name: OPENAI_API_CONFIGS
-              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]}}'
+              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"}}'
+            - name: OPENAI_API_BASE_URLS
+              value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
+            # Issued for ***REMOVED*** specifically (not a shared service
+            # account), so per-user rate limits and usage stay attributed
+            # correctly. Index 0 has no static key (system_oauth), hence the
+            # leading empty entry before the semicolon.
+            - name: OPENWEBUI_AUTOMATIONS_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: OPENWEBUI_AUTOMATIONS_PAT
+            - name: OPENAI_API_KEYS
+              value: ;$(OPENWEBUI_AUTOMATIONS_PAT)

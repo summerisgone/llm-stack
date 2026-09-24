@@ -408,6 +408,11 @@ spec:
               value: "true"
             - name: USER_PERMISSIONS_FEATURES_API_KEYS
               value: "true"
+            # Global gate on top of the per-role permission above -- without
+            # this, every API-key request is rejected with "Use of API key
+            # is not enabled in the environment" regardless of role.
+            - name: ENABLE_API_KEYS
+              value: "true"
             - name: USER_PERMISSIONS_FEATURES_AUTOMATIONS
               value: "true"
             - name: OAUTH_MERGE_ACCOUNTS_BY_EMAIL

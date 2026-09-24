@@ -10,4 +10,8 @@ kubectl kustomize k8s/overlays/remote-wsl-vllm-nvfp4 >/dev/null
 kubectl apply --dry-run=client -k k8s/overlays/remote-wsl-vllm-nvfp4 >/dev/null
 kubectl kustomize k8s/overlays/remote-wsl-device-plugin >/dev/null
 kubectl apply --dry-run=client -k k8s/overlays/remote-wsl-device-plugin >/dev/null
+kubectl kustomize k8s/hermes >/dev/null
+kubectl apply --dry-run=client -k k8s/hermes >/dev/null
+kubectl kustomize k8s/overlays/remote-wsl-hermes >/dev/null
+kubectl apply --dry-run=client -k k8s/overlays/remote-wsl-hermes >/dev/null
 printf '%s\n' 'Kubernetes configurations are valid.'

@@ -1,0 +1,16 @@
+# Backstop for K (AGENT_SLOTS in broker.yaml) if the broker miscounts:
+# pods = K agents + 1 broker. CPU/memory totals are K x the agent limits plus
+# the broker's. Change together with AGENT_SLOTS and the AGENT_* resources.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: hermes-agents
+spec:
+  hard:
+    pods: "4"
+    requests.cpu: "1"
+    requests.memory: 2Gi
+    limits.cpu: "4"
+    limits.memory: 4Gi
+    persistentvolumeclaims: "50"
+    requests.storage: 100Gi

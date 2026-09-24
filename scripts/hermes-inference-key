@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+set -eu
+
+# Interim for docs/adr/0014 section 8 until pat-service mints Hermes tokens:
+# store a user's own pat-service PAT (scripts/kc-pat-issue) as INFERENCE_KEY
+# in hermes-cred-<id>. A running agent is stopped so its next start reads it.
+#
+#   scripts/kc-pat-issue <user> <password> hermes | awk '/^token:/{print $2}' |
+#     scripts/hermes-inference-key <keycloak-sub | 16-hex profile id>
+
+namespace=${HERMES_NAMESPACE:-hermes-agents}
+
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "usage: $0 <keycloak-sub | profile-id> < pat" >&2
+  exit 2
+fi
+
+case "$1" in
+  *[!0-9a-f]* | "") id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16) ;;
+  *) if [ "${#1}" -eq 16 ]; then id=$1; else id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16); fi ;;
+esac
+
+IFS= read -r pat || true
+if [ -z "$pat" ]; then
+  printf '%s\n' "no PAT on stdin" >&2
+  exit 2
+fi
+
+key=$(printf '%s' "$pat" | base64 | tr -d '\n')
+if kubectl -n "$namespace" get secret "hermes-cred-$id" >/dev/null 2>&1; then
+  kubectl -n "$namespace" patch secret "hermes-cred-$id" --type=merge \
+    -p "{\"data\":{\"INFERENCE_KEY\":\"$key\"}}" >/dev/null
+else
+  kubectl -n "$namespace" create secret generic "hermes-cred-$id" \
+    --from-literal="INFERENCE_KEY=$pat" >/dev/null
+  kubectl -n "$namespace" label secret "hermes-cred-$id" \
+    app.kubernetes.io/managed-by=hermes-broker "hermes.llm-stack/user-id=$id" app.kubernetes.io/name=hermes >/dev/null
+fi
+kubectl -n "$namespace" delete pod "hermes-agent-$id" --ignore-not-found --wait=true >/dev/null
+printf 'Inference key set for Hermes profile %s.\n' "$id"

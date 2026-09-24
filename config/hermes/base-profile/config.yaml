@@ -1,0 +1,50 @@
+# Base Hermes settings for every cloud agent (docs/adr/0014 section 2).
+# hermes-sync deep-merges config.user.yaml from the user's profile over this
+# file, then re-applies every key listed in locked-keys.yaml from here.
+# No secrets: credentials reach the pod through env (hermes-cred-<id>).
+model:
+  provider: custom
+  # pat-service public /v1 with the user's own PAT (ADR 0014 section 8),
+  # from INFERENCE_KEY in hermes-cred-<id>.
+  base_url: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
+  api_key: ${HERMES_INFERENCE_KEY}
+  default: qwen-3.8-27b
+
+terminal:
+  backend: local
+  # emptyDir scratch space; the profile PVC is not a work tree.
+  cwd: /work
+  timeout: 180
+
+skills:
+  # hermes-sync copies the user's enabled catalog skills here. The directory
+  # is owned by the sync uid, so the agent can read but not patch it.
+  external_dirs:
+    - ${HERMES_HOME}/catalog-enabled
+  creation_nudge_interval: 15
+
+agent:
+  # Background and scheduled work is out of scope (ADR 0014 section 7);
+  # browser/desktop toolsets have nothing to drive inside the sandbox.
+  disabled_toolsets:
+    - cronjob
+    - kanban
+    - browser
+    - computer_use
+    - desktop_ui
+    - image_gen
+    - video_gen
+    - tts
+    - spotify
+    - homeassistant
+
+curator:
+  enabled: false
+
+updates:
+  check: false
+
+telemetry:
+  shared_metrics:
+    enabled: false
+    send: false

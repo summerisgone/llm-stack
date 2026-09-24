@@ -1,0 +1,21 @@
+# Remote single-GPU profile (k3d on WSL2): k8s/hermes with the issuer the
+# browser reaches Keycloak under, Keycloak's /sso relative path, and agents
+# under gVisor.
+# Deployed by `make hermes-up HERMES_OVERLAY=k8s/overlays/remote-wsl-hermes`.
+resources:
+  - ../../hermes
+  - runtimeclass.yaml
+patches:
+  - target:
+      kind: ConfigMap
+      name: hermes-broker
+    patch: |-
+      - op: replace
+        path: /data/OIDC_ISSUER
+        value: ***REMOVED***/sso/realms/ai-stack
+      - op: replace
+        path: /data/OIDC_JWKS_URL
+        value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+      - op: replace
+        path: /data/AGENT_RUNTIME_CLASS
+        value: gvisor

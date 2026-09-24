@@ -1,0 +1,137 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-broker
+data:
+  HERMES_BACKEND: pods
+  # K: at most this many agents run at once (docs/adr/0014 section 5). Keep
+  # quota.yaml in step.
+  AGENT_SLOTS: "3"
+  IDLE_TIMEOUT: 15m
+  IDLE_SHUTDOWN: 30m
+  MAX_AGENT_LIFETIME: 8h
+  SLOT_WAIT_TIMEOUT: 60s
+  AGENT_START_TIMEOUT: 180s
+  AGENT_STOP_GRACE_SECONDS: "30"
+  # Hermes idles at ~190Mi RSS (measured on v2026.9.14).
+  AGENT_CPU_REQUEST: 100m
+  AGENT_CPU_LIMIT: "1"
+  AGENT_MEMORY_REQUEST: 384Mi
+  AGENT_MEMORY_LIMIT: 1Gi
+  AGENT_WORK_SIZE: 2Gi
+  PROFILE_SIZE: 2Gi
+  # Empty = cluster default runc. Set to a gVisor RuntimeClass (e.g. gvisor)
+  # where the node has runsc; not available on OrbStack.
+  AGENT_RUNTIME_CLASS: ""
+  PROFILE_STORAGE_CLASS: ""
+  # The token Open WebUI forwards (system_oauth) carries the issuer Keycloak
+  # was reached under by the browser; JWKS is fetched in-cluster.
+  OIDC_ISSUER: http://sso.ai.localhost:8080/realms/ai-stack
+  OIDC_JWKS_URL: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/realms/ai-stack/protocol/openid-connect/certs
+  ALLOWED_ROLES: ai-user,ai-admin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-broker
+  labels:
+    app.kubernetes.io/name: hermes-broker
+spec:
+  # Single replica by design: slot accounting is in this process's memory.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hermes-broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hermes-broker
+    spec:
+      serviceAccountName: hermes-broker
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # The broker's own read-only copy of the catalog (for /skills and
+        # onboarding). The image is set by `make hermes-up` to
+        # HERMES_CATALOG_IMAGE; the placeholder below is never pulled.
+        - name: catalog-index
+          image: hermes-catalog
+          imagePullPolicy: IfNotPresent
+          command: [cp, /catalog/catalog.json, /index/catalog.json]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+          securityContext:
+            runAsUser: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: index
+              mountPath: /index
+      containers:
+        - name: broker
+          image: llm-stack/hermes-broker:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: hermes-broker
+            - configMapRef:
+                name: hermes-images
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CATALOG_INDEX
+              value: /index/catalog.json
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsUser: 10002
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: index
+              mountPath: /index
+              readOnly: true
+      volumes:
+        - name: index
+          emptyDir:
+            sizeLimit: 1Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-broker
+spec:
+  selector:
+    app.kubernetes.io/name: hermes-broker
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -898,7 +898,16 @@ spec:
         - name: OPENID_REDIRECT_URI
           value: ***REMOVED***/oauth/oidc/callback
         - name: OPENAI_API_CONFIGS
-          value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]}}'
+          value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"}}'
+        - name: OPENAI_API_BASE_URLS
+          value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
+        - name: OPENWEBUI_AUTOMATIONS_PAT
+          valueFrom:
+            secretKeyRef:
+              key: OPENWEBUI_AUTOMATIONS_PAT
+              name: airgap-runtime
+        - name: OPENAI_API_KEYS
+          value: ;$(OPENWEBUI_AUTOMATIONS_PAT)
         - name: WEBUI_SECRET_KEY
           valueFrom:
             secretKeyRef:
@@ -931,6 +940,8 @@ spec:
         - name: USER_PERMISSIONS_FEATURES_WEB_SEARCH
           value: "true"
         - name: USER_PERMISSIONS_FEATURES_API_KEYS
+          value: "true"
+        - name: ENABLE_API_KEYS
           value: "true"
         - name: USER_PERMISSIONS_FEATURES_AUTOMATIONS
           value: "true"

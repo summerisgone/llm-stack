@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hermes-agents
+  labels:
+    app.kubernetes.io/part-of: airgap-ai-stack
+    # Agent pods run non-root, no privilege escalation, all capabilities
+    # dropped, RuntimeDefault seccomp.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

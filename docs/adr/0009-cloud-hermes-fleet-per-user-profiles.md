@@ -9,7 +9,8 @@ Refined by [ADR 0014](0014-hermes-curated-catalog-and-worker-slots.md),
 which settles open items 1 and 2 below, replaces "mount a profile PVC onto
 a free worker" with per-user pods in `K` slots, and keeps the literal
 worker-pool form of this ADR as a gated option on Agent Substrate
-(0014 section 10).
+(0014 section 10). A first implementation of 0014 (`pods` backend, no
+inference yet) is in `hermes-broker/` and `k8s/hermes`.
 
 ## Context
 

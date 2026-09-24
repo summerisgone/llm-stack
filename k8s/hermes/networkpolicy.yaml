@@ -1,0 +1,95 @@
+# Default deny in the agent namespace, then: Open WebUI -> broker -> agents,
+# agents -> pat-service only (inference, ADR 0014 section 8; GitLab is added
+# here when the repo-reader skill gets a real target). Enforcement depends on
+# the cluster CNI; see docs/operations/hermes.md.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hermes-broker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: hermes-broker
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: airgap-ai-stack
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openwebui
+      ports:
+        - port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    # Kubernetes API (pod/PVC/Secret management). Policies match the
+    # endpoint port after Service DNAT: 6443 on k3s/k3d, 26443 on OrbStack.
+    - ports:
+        - port: 443
+        - port: 6443
+        - port: 26443
+    # Keycloak JWKS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: airgap-ai-stack
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: hermes-agent
+      ports:
+        - port: 8642
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hermes-agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: hermes-agent
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: hermes-broker
+      ports:
+        - port: 8642
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: airgap-ai-stack
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pat-service
+      ports:
+        - port: 8080

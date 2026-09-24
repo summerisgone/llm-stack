@@ -1,0 +1,36 @@
+# The broker may manage agent Pods and create profile PVCs and hermes-cred-*
+# Secrets in this namespace only. It cannot delete PVCs: profiles are
+# removed only by scripts/hermes-profile-delete.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hermes-broker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hermes-broker
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete, patch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, create, patch]
+  # RBAC cannot restrict `create` by name; the broker only ever creates
+  # hermes-cred-<id>.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hermes-broker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hermes-broker
+subjects:
+  - kind: ServiceAccount
+    name: hermes-broker

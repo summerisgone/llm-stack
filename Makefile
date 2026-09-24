@@ -12,7 +12,7 @@ include versions.lock.env
 # Local/site-specific overrides (gitignored). Not required to exist.
 -include .env
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up hermes-catalog hermes-broker-image hermes-k3d-load hermes-up hermes-down hermes-smoke hermes-test
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -381,3 +381,53 @@ render-check:
 	git diff --quiet -- $(HELM_CHART)/templates/resources.yaml $(HELM_CHART)/manifest.yaml \
 		|| { printf '%s\n' 'helm-render output differs from the committed chart; commit the regenerated files.' >&2; \
 		     git --no-pager diff --stat -- $(HELM_CHART)/templates/resources.yaml $(HELM_CHART)/manifest.yaml >&2; exit 1; }
+
+# --- Cloud Hermes fleet (docs/adr/0009, docs/adr/0014) ----------------------
+# Catalog image tag = content hash of the base profile and the sync code, so
+# the same catalog always has the same tag. Records it in versions.lock.env.
+HERMES_CATALOG_SRC = config/hermes/base-profile hermes-catalog/Dockerfile hermes-catalog/hermes_sync.py
+# Remote profile: HERMES_OVERLAY=k8s/overlays/remote-wsl-hermes and
+# HERMES_PLATFORM=linux/amd64, then `make hermes-k3d-load` before hermes-up.
+HERMES_OVERLAY ?= k8s/hermes
+HERMES_PLATFORM ?=
+HERMES_BUILD_FLAGS = $(if $(HERMES_PLATFORM),--platform $(HERMES_PLATFORM))
+hermes-catalog:
+	python3 -m unittest discover -s hermes-catalog -p 'test_*.py'
+	tag=$$(find $(HERMES_CATALOG_SRC) -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -c1-12); \
+	image=llm-stack/hermes-catalog:$$tag; \
+	docker buildx build --load $(HERMES_BUILD_FLAGS) --build-context profile=config/hermes/base-profile --tag $$image hermes-catalog && \
+	perl -pi -e "s|^HERMES_CATALOG_IMAGE=.*|HERMES_CATALOG_IMAGE=$$image|" versions.lock.env && \
+	printf 'HERMES_CATALOG_IMAGE=%s\n' "$$image"
+
+hermes-broker-image:
+	docker buildx build --load $(HERMES_BUILD_FLAGS) --tag $(HERMES_BROKER_IMAGE) hermes-broker
+
+hermes-k3d-load:
+	WSL_SSH_HOST=$(WSL_SSH_HOST) WSL_SSH_PORT=$(WSL_SSH_PORT) ./scripts/hermes-k3d-load $(HERMES_CATALOG_IMAGE) $(HERMES_BROKER_IMAGE)
+
+hermes-test:
+	python3 -m unittest discover -s hermes-catalog -p 'test_*.py'
+	cd hermes-broker && go vet ./... && go test ./...
+
+# Applies k8s/hermes, then the two values it cannot hold itself because they
+# come from versions.lock.env. Restarts the broker so it picks up a new
+# catalog; running agents move to it at their next idle point.
+hermes-up:
+	$(KUBECTL) apply -k $(HERMES_OVERLAY)
+	$(KUBECTL) -n hermes-agents create configmap hermes-images \
+		--from-literal=HERMES_IMAGE=$(HERMES_IMAGE) \
+		--from-literal=HERMES_CATALOG_IMAGE=$(HERMES_CATALOG_IMAGE) \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) -n hermes-agents set image deployment/hermes-broker catalog-index=$(HERMES_CATALOG_IMAGE) broker=$(HERMES_BROKER_IMAGE)
+	$(KUBECTL) -n hermes-agents rollout restart deployment/hermes-broker
+	$(KUBECTL) -n hermes-agents rollout status deployment/hermes-broker --timeout=120s
+
+# Stops the broker and every running agent. Profiles (PVCs) and credentials
+# stay; hermes-up brings everything back.
+hermes-down:
+	-$(KUBECTL) -n hermes-agents scale deployment/hermes-broker --replicas=0
+	-$(KUBECTL) -n hermes-agents delete pod -l app.kubernetes.io/component=hermes-agent --wait=true
+
+hermes-smoke:
+	./scripts/hermes-smoke-test
+

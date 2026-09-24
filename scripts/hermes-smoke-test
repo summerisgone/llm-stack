@@ -1,0 +1,276 @@
+#!/usr/bin/env sh
+set -eu
+
+# Cloud Hermes fleet acceptance (docs/adr/0014 stages V3/V4, the parts that do
+# not need inference or Open WebUI): identity at the broker, per-user profile
+# and agent pod, /skills selection applied by the catalog sync, catalog layer
+# read-only to the agent, pod sandbox, network isolation between agents, and
+# agents surviving a broker restart.
+#
+# Needs Keycloak and the hermes-agents namespace (`make hermes-up`). Creates
+# three temporary Keycloak users and deletes them, with their profiles, on
+# exit. A chat turn is checked to reach Hermes; with HERMES_SMOKE_INFERENCE=true
+# user A also gets a PAT (scripts/kc-pat-issue over STACK_BASE_URL, expires in
+# a day) and the agent must answer from the model.
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+hns=${HERMES_NAMESPACE:-hermes-agents}
+realm=${STACK_REALM:-ai-stack}
+keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
+keycloak_admin_password=${KEYCLOAK_ADMIN_PASSWORD:-admin-demo-only}
+check_inference=${HERMES_SMOKE_INFERENCE:-false}
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+pass() { printf 'ok   %s\n' "$*"; }
+
+free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+
+json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+
+kubectl -n "$hns" rollout status deployment/hermes-broker --timeout=60s >/dev/null
+kubectl -n "$namespace" rollout status deployment/keycloak --timeout=60s >/dev/null
+
+kc_port=$(free_port)
+br_port=$(free_port)
+kubectl -n "$namespace" port-forward svc/keycloak "$kc_port:8080" >/dev/null 2>&1 &
+kc_pid=$!
+kubectl -n "$hns" port-forward svc/hermes-broker "$br_port:8080" >/dev/null 2>&1 &
+br_pid=$!
+users=""
+admin_token=""
+client_uuid=""
+cleanup() {
+  [ -n "$client_uuid" ] && curl -fsS -X DELETE -H "Authorization: Bearer $admin_token" \
+    "$kc/admin/realms/$realm/clients/$client_uuid" >/dev/null 2>&1 || true
+  for u in $users; do
+    uid=${u%%:*}
+    sub=${u#*:}
+    [ -n "$admin_token" ] && curl -fsS -X DELETE -H "Authorization: Bearer $admin_token" \
+      "$kc/admin/realms/$realm/users/$uid" >/dev/null 2>&1 || true
+    "$(dirname "$0")/hermes-profile-delete" "$sub" >/dev/null 2>&1 || true
+  done
+  kill "$kc_pid" "$br_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# Keycloak runs with or without the /sso relative path depending on the
+# profile's age; find the realm either way.
+kc=""
+attempt=0
+while [ -z "$kc" ]; do
+  for prefix in /sso ""; do
+    if curl -fsS "http://127.0.0.1:$kc_port$prefix/realms/$realm" >/dev/null 2>&1; then
+      kc="http://127.0.0.1:$kc_port$prefix"
+      break
+    fi
+  done
+  attempt=$((attempt + 1))
+  [ "$attempt" -gt 20 ] && fail "Keycloak port-forward not ready"
+  [ -n "$kc" ] || sleep 1
+done
+attempt=0
+until curl -fsS "http://127.0.0.1:$br_port/healthz" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -gt 20 ] && fail "broker port-forward not ready"
+  sleep 1
+done
+broker="http://127.0.0.1:$br_port"
+
+admin_token=$(curl -fsS -X POST "$kc/realms/master/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d "username=$keycloak_admin_user" -d "password=$keycloak_admin_password" | json 'd["access_token"]')
+
+# The broker sees tokens minted for Open WebUI (client open-webui, default
+# scopes basic/roles/profile, k8s/realm-demo.json). A temporary confidential client with the same
+# default scopes and direct grants gives the test tokens of that shape
+# without touching the real clients; it is deleted on exit.
+suffix=$(date +%s)
+client_id="hermes-smoke-$suffix"
+client_secret=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  "$kc/admin/realms/$realm/clients" \
+  -d "{\"clientId\":\"$client_id\",\"enabled\":true,\"publicClient\":false,\"secret\":\"$client_secret\",\"directAccessGrantsEnabled\":true,\"standardFlowEnabled\":false,\"defaultClientScopes\":[\"basic\",\"roles\",\"profile\",\"email\"]}"
+client_uuid=$(curl -fsS -H "Authorization: Bearer $admin_token" \
+  "$kc/admin/realms/$realm/clients?clientId=$client_id" | json 'd[0]["id"]')
+
+# new_user <name> <role|none>: prints an access token for a fresh user.
+new_user() {
+  name="hermes-smoke-$1-$suffix"
+  password="Hermes-smoke-$suffix-Pw!"
+  curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+    "$kc/admin/realms/$realm/users" \
+    -d "{\"username\":\"$name\",\"email\":\"$name@example.test\",\"firstName\":\"Hermes\",\"lastName\":\"Smoke\",\"enabled\":true,\"emailVerified\":true,\"requiredActions\":[]}"
+  uid=$(curl -fsS -H "Authorization: Bearer $admin_token" \
+    "$kc/admin/realms/$realm/users?username=$name&exact=true" | json 'd[0]["id"]')
+  if [ "$2" != none ]; then
+    role=$(curl -fsS -H "Authorization: Bearer $admin_token" "$kc/admin/realms/$realm/roles/$2")
+    curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+      "$kc/admin/realms/$realm/users/$uid/role-mappings/realm" -d "[$role]"
+  fi
+  curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+    "$kc/admin/realms/$realm/users/$uid/reset-password" \
+    -d "{\"type\":\"password\",\"value\":\"$password\",\"temporary\":false}"
+  curl -fsS -X PUT -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+    "$kc/admin/realms/$realm/users/$uid" -d '{"requiredActions":[]}'
+  token=$(curl -fsS -X POST "$kc/realms/$realm/protocol/openid-connect/token" \
+    -d grant_type=password -d "client_id=$client_id" -d "client_secret=$client_secret" \
+    -d "username=$name" -d "password=$password" |
+    json 'd["access_token"]')
+  sub=$(printf '%s' "$token" | python3 -c 'import base64,json,sys; p=sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4)))["sub"])')
+  printf '%s %s %s\n' "$uid" "$sub" "$token"
+}
+
+set -- $(new_user a ai-user)
+users="$users $1:$2"
+sub_a=$2
+tok_a=$3
+set -- $(new_user b ai-user)
+users="$users $1:$2"
+sub_b=$2
+tok_b=$3
+set -- $(new_user norole none)
+users="$users $1:$2"
+tok_norole=$3
+id_a=$(printf '%s' "$sub_a" | shasum -a 256 | cut -c1-16)
+id_b=$(printf '%s' "$sub_b" | shasum -a 256 | cut -c1-16)
+pass "created temporary users (profiles $id_a, $id_b)"
+
+code() { curl -sS -o /dev/null -w '%{http_code}' "$@"; }
+
+# chat <token> <text> [stream]: prints the assistant text of one turn.
+chat() {
+  body=$(TEXT="$2" STREAM="${3:-false}" python3 -c 'import json,os; print(json.dumps({"model":"hermes-agent","stream":os.environ["STREAM"]=="true","messages":[{"role":"user","content":os.environ["TEXT"]}]}))')
+  if [ "${3:-false}" = true ]; then
+    curl -fsS -N --max-time 240 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+      -d "$body" "$broker/v1/chat/completions" | python3 -c '
+import json, sys
+out = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith("data: ") or line == "data: [DONE]":
+        continue
+    chunk = json.loads(line[6:])
+    for ch in chunk.get("choices", []):
+        out.append((ch.get("delta") or {}).get("content") or "")
+    # Hermes reports a failed turn (e.g. no inference) in the final chunk.
+    if chunk.get("error"):
+        out.append("[agent error: %s]" % chunk["error"].get("message"))
+print("".join(out))'
+  else
+    curl -sS --max-time 240 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+      -d "$body" "$broker/v1/chat/completions" |
+      python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["choices"][0]["message"]["content"] if "choices" in d else "ERROR " + json.dumps(d))'
+  fi
+}
+
+# --- identity at the broker (V3) -------------------------------------------
+[ "$(code "$broker/v1/models")" = 401 ] || fail "no token must be 401"
+[ "$(code -H 'X-User-Id: someone' -H 'X-User-Name: someone' "$broker/v1/models")" = 401 ] ||
+  fail "forged X-User-Id without token must be 401"
+tampered=$(printf '%s' "$tok_a" | python3 -c 'import sys; h,p,s=sys.stdin.read().split("."); i=len(s)//2; print(".".join([h,p,s[:i]+("A" if s[i]!="A" else "B")+s[i+1:]]))')
+[ "$(code -H "Authorization: Bearer $tampered" "$broker/v1/models")" = 401 ] ||
+  fail "tampered token must be 401"
+[ "$(code -H "Authorization: Bearer $tok_norole" "$broker/v1/models")" = 403 ] ||
+  fail "token without ai-user/ai-admin must be 403"
+models=$(curl -fsS -H "Authorization: Bearer $tok_a" "$broker/v1/models" | json '",".join(m["id"] for m in d["data"])')
+[ "$models" = hermes-agent ] || fail "models: $models"
+pass "broker: 401 without/forged/tampered token, 403 without role, lists hermes-agent"
+
+# --- profile creation and /skills (V4) -------------------------------------
+reply=$(chat "$tok_a" "hello")
+printf '%s' "$reply" | grep -q "Your personal Hermes agent has been created" || fail "onboarding: $reply"
+kubectl -n "$hns" get pvc "hermes-profile-$id_a" >/dev/null || fail "profile PVC not created"
+kubectl -n "$hns" get pod "hermes-agent-$id_a" >/dev/null 2>&1 && fail "onboarding must not start an agent"
+pass "first message: onboarding answered by the broker, PVC created, no pod"
+
+reply=$(chat "$tok_a" "/skills off platform-guide repo-reader")
+printf '%s' "$reply" | grep -q "platform-guide (required)" || fail "required skill not refused: $reply"
+reply=$(chat "$tok_a" "/skills on change-summary" true)
+printf '%s' "$reply" | grep -q '`change-summary` | on' || fail "/skills on (stream): $reply"
+pass "/skills: required refused, optional switched, streamed and non-streamed"
+
+# --- agent start, catalog sync, sandbox ------------------------------------
+reply=$(chat "$tok_a" "Say OK." true)
+[ -n "$reply" ] || fail "empty reply from agent"
+kubectl -n "$hns" wait --for=condition=Ready "pod/hermes-agent-$id_a" --timeout=10s >/dev/null ||
+  fail "agent pod not ready"
+pass "agent started on demand and answered through the broker: $(printf '%s' "$reply" | head -c 100 | tr '\n' ' ')"
+
+if [ "$check_inference" = true ]; then
+  "$(dirname "$0")/kc-pat-issue" "hermes-smoke-a-$suffix" "Hermes-smoke-$suffix-Pw!" hermes-smoke 1 |
+    awk '/^token:/{print $2}' | "$(dirname "$0")/hermes-inference-key" "$sub_a" >/dev/null
+  reply=$(chat "$tok_a" "Reply with exactly the word PONG and nothing else." true)
+  printf '%s' "$reply" | grep -q "agent error" && fail "inference: $reply"
+  printf '%s' "$reply" | grep -q PONG || fail "inference: $reply"
+  pass "inference: agent answered from the model with the user's own PAT: $(printf '%s' "$reply" | head -c 100 | tr '\n' ' ')"
+fi
+
+report=$(kubectl -n "$hns" get pvc "hermes-profile-$id_a" -o jsonpath='{.metadata.annotations.hermes\.llm-stack/sync-report}')
+on=$(printf '%s' "$report" | json '",".join(d["on"])')
+[ "$on" = "change-summary,platform-guide" ] || fail "enabled after sync: $on (report $report)"
+ex() { kubectl -n "$hns" exec "hermes-agent-$1" -c hermes -- sh -c "$2" 2>/dev/null; }
+listed=$(ex "$id_a" 'ls /opt/data/home/catalog-enabled | tr "\n" ","')
+[ "$listed" = "change-summary,platform-guide," ] || fail "catalog-enabled: $listed"
+seen=$(kubectl -n "$hns" exec -i "hermes-agent-$id_a" -c hermes -- /opt/hermes/.venv/bin/python - 2>/dev/null <<'PY' | tail -n 1
+from tools.skills_tool import _find_all_skills
+print(",".join(sorted(s["name"] for s in _find_all_skills())))
+PY
+)
+[ "$seen" = "change-summary,platform-guide" ] || fail "skills Hermes loads: $seen"
+ex "$id_a" 'grep -q "external_dirs" /opt/data/home/config.yaml && grep -q cronjob /opt/data/home/config.yaml' ||
+  fail "merged config lacks locked keys"
+ex "$id_a" 'touch /opt/data/home/catalog-enabled/x 2>/dev/null || touch /opt/data/home/catalog/skills/platform-guide/SKILL.md 2>/dev/null || mv /opt/data/home/catalog /opt/data/home/c2 2>/dev/null || mv /opt/data/home/config.yaml /opt/data/home/c.yaml 2>/dev/null' &&
+  fail "agent can modify the catalog layer"
+ex "$id_a" 'echo note > /opt/data/home/memories/smoke.md && test -z "$(ls /opt/data/home/skills)"' ||
+  fail "personal layer not writable or bundled skills were seeded"
+ex "$id_a" '[ "$(id -u)" = 10000 ] && [ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ] && ! touch /opt/x 2>/dev/null' ||
+  fail "agent sandbox: uid, SA token or read-only root"
+runtime=$(kubectl -n "$hns" get pod "hermes-agent-$id_a" -o jsonpath='{.spec.runtimeClassName}')
+kernel=$(ex "$id_a" 'uname -r')
+if [ -n "$runtime" ]; then
+  case "$kernel" in *gvisor*) ;; *) fail "runtimeClassName $runtime but kernel $kernel" ;; esac
+fi
+ex "$id_a" 'env | grep -q API_SERVER_KEY' && key_in_env=yes || key_in_env=no
+kubectl -n "$hns" get pod "hermes-agent-$id_a" -o yaml | grep -q "$(ex "$id_a" 'printf %s "$API_SERVER_KEY"')" &&
+  fail "agent API key appears in the pod spec"
+pass "sync applied the selection and Hermes loads exactly those skills; catalog read-only to the agent; non-root, no SA token, read-only root, key not in spec (env: $key_in_env); runtime ${runtime:-default}, kernel $kernel"
+
+# --- second user: own pod, own PVC, no lateral access (V3) -----------------
+chat "$tok_b" "hello" >/dev/null
+chat "$tok_b" "Say OK." >/dev/null
+kubectl -n "$hns" wait --for=condition=Ready "pod/hermes-agent-$id_b" --timeout=10s >/dev/null ||
+  fail "second agent not ready"
+ex "$id_b" 'test ! -e /opt/data/home/memories/smoke.md' || fail "user B sees user A's memory"
+ip_a=$(kubectl -n "$hns" get pod "hermes-agent-$id_a" -o jsonpath='{.status.podIP}')
+ex "$id_b" "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://$ip_a:8642/health\", timeout=3)' 2>/dev/null" &&
+  fail "agent B reached agent A directly"
+ex "$id_b" "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://keycloak.$namespace.svc.cluster.local:8080/\", timeout=3)' 2>/dev/null" &&
+  fail "agent reached Keycloak (egress must be pat-service only)"
+pass "user B has a separate pod and profile; agent-to-agent and agent-to-Keycloak traffic refused"
+
+# --- broker restart keeps running agents (V4) ------------------------------
+uid_before=$(kubectl -n "$hns" get pod "hermes-agent-$id_a" -o jsonpath='{.metadata.uid}')
+kubectl -n "$hns" rollout restart deployment/hermes-broker >/dev/null
+kubectl -n "$hns" rollout status deployment/hermes-broker --timeout=120s >/dev/null
+kill "$br_pid" 2>/dev/null || true
+kubectl -n "$hns" port-forward svc/hermes-broker "$br_port:8080" >/dev/null 2>&1 &
+br_pid=$!
+attempt=0
+until curl -fsS "$broker/healthz" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -gt 20 ] && fail "broker not back after restart"
+  sleep 1
+done
+running=$(curl -fsS "$broker/healthz" | json 'd["running"]')
+[ "$running" -ge 2 ] || fail "restarted broker recovered $running agents"
+chat "$tok_a" "Say OK again." >/dev/null
+uid_after=$(kubectl -n "$hns" get pod "hermes-agent-$id_a" -o jsonpath='{.metadata.uid}')
+[ "$uid_before" = "$uid_after" ] || fail "agent pod replaced across broker restart"
+pass "broker restart: agents recovered and reused, not restarted"
+
+printf '%s\n' "Hermes smoke test passed."

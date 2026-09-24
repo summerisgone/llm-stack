@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+set -eu
+
+# Offboarding for the cloud Hermes fleet (docs/adr/0014 section 8): the only
+# path that deletes a user's agent profile. Removes the user's agent pod,
+# credential Secret and profile PVC. The broker never deletes PVCs.
+#
+#   scripts/hermes-profile-delete <keycloak-sub | 16-hex profile id>
+
+namespace=${HERMES_NAMESPACE:-hermes-agents}
+
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "usage: $0 <keycloak-sub | profile-id>" >&2
+  exit 2
+fi
+
+case "$1" in
+  *[!0-9a-f]* | "") id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16) ;;
+  *) if [ "${#1}" -eq 16 ]; then id=$1; else id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16); fi ;;
+esac
+
+kubectl -n "$namespace" delete pod "hermes-agent-$id" --ignore-not-found --wait=true
+kubectl -n "$namespace" delete secret "hermes-cred-$id" --ignore-not-found
+kubectl -n "$namespace" delete pvc "hermes-profile-$id" --ignore-not-found --wait=true
+printf 'Deleted Hermes profile %s.\n' "$id"

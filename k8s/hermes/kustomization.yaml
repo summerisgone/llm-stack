@@ -1,0 +1,17 @@
+# Cloud Hermes fleet (docs/adr/0009, docs/adr/0014): the broker and the
+# namespace, RBAC, quota and network policy its per-user agents run under.
+# Deployed by `make hermes-up`, which also writes the `hermes-images`
+# ConfigMap and the broker's catalog image from versions.lock.env -- apply it
+# through make, not with a bare `kubectl apply -k`.
+#
+# Agent Pods, profile PVCs and hermes-cred-* Secrets are created at runtime
+# by the broker (app.kubernetes.io/managed-by: hermes-broker) and are not
+# owned here, so deleting or re-applying this kustomization never touches a
+# user's profile.
+namespace: hermes-agents
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - quota.yaml
+  - broker.yaml
+  - networkpolicy.yaml

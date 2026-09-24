@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+set -eu
+
+# Copies locally built Hermes images (make hermes-catalog / hermes-broker-image
+# with HERMES_PLATFORM=linux/amd64) into the remote k3d node's containerd over
+# SSH. The pods use IfNotPresent, so no registry is needed.
+#
+#   scripts/hermes-k3d-load <image>...
+
+ssh_host=${WSL_SSH_HOST:-llmstack@gpu-host.local}
+ssh_port=${WSL_SSH_PORT:-2222}
+node=k3d-${K3D_CLUSTER:-llm-stack}-server-0
+
+for image in "$@"; do
+  arch=$(docker image inspect -f '{{.Architecture}}' "$image")
+  if [ "$arch" != amd64 ]; then
+    printf '%s\n' "$image is $arch; rebuild with HERMES_PLATFORM=linux/amd64" >&2
+    exit 1
+  fi
+  docker save "$image" | ssh -p "$ssh_port" "$ssh_host" \
+    "docker exec -i $node ctr -n k8s.io images import -" >/dev/null
+  printf 'Imported %s into %s.\n' "$image" "$node"
+done

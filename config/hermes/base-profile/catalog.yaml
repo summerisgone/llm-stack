@@ -1,0 +1,10 @@
+# Per-skill catalog metadata (docs/adr/0014 section 1). A skill under skills/
+# that is not listed here is optional and enabled by default. Listing a skill
+# that does not exist fails the catalog build.
+skills:
+  platform-guide:
+    required: true
+  repo-reader:
+    default_enabled: true
+  change-summary:
+    default_enabled: false

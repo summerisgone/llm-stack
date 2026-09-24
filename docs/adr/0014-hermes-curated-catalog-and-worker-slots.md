@@ -20,6 +20,28 @@ experimental backend gated by stage VS. AX itself is evaluated and not
 adopted. Sections 1-4, 6 and 8 are unchanged in intent; sections 5 and 7
 gain backend notes.
 
+Implemented on 2026-09-24 for the `pods` backend on the local-mac profile
+(OrbStack), without inference: catalog and `hermes-sync`
+(`config/hermes/base-profile/`, `hermes-catalog/`), `hermes-broker`,
+`k8s/hermes`, `scripts/hermes-smoke-test` (passes twice; covers the V3/V4
+items that need neither inference nor Open WebUI). V1 answers are recorded
+under stage V1; the runbook is
+[docs/operations/hermes.md](../operations/hermes.md). Differences from the
+text below, kept deliberately:
+
+- Catalog image tag is a content hash of the catalog and sync code, not the
+  git sha, so a dirty tree and a commit of the same content get one tag.
+- `k8s/hermes` is its own kustomization applied by `make hermes-up`, not
+  part of the `airgap-stack` chart yet (section 9); still one owner.
+- The sync report reaches the broker through the init container's
+  termination message (agents have no ServiceAccount token to annotate their
+  pod) and is kept as a PVC annotation, so `/skills` works while no agent
+  runs.
+- A `/skills` change restarts the agent before the user's next message
+  rather than immediately.
+- `hermes-cred-<id>` currently holds only the broker's key for the agent's
+  API server; the per-user PAT (section 8) is not implemented.
+
 ## Context
 
 - The goal is a **curated catalog** of Hermes skills and settings, reached
@@ -647,6 +669,47 @@ Confirm, and record the answers here:
 
 Exit: each item answered with the Hermes version; sections 2, 3, 4 and 7
 adjusted if an answer differs.
+
+Results on Hermes 0.21.3 (`nousresearch/hermes-agent:v2026.9.14`,
+upstream `7c6f21a5`), 2026-09-24:
+
+- Profile path: `HERMES_HOME`. The image's s6 `/init` needs root; running
+  `hermes gateway run` directly as uid 10000 with a read-only root
+  filesystem works and needs no bootstrap beyond the sync step.
+- Skill directories: `skills.external_dirs` (with `${VAR}` expansion) is
+  supported, so no symlinks. Hermes prefers the **local** copy on a name
+  collision, the opposite of section 2; the sync step therefore moves a
+  shadowed personal skill into `skills/.archive/` (not scanned). External
+  dirs are writable if the filesystem allows it; the catalog layer is owned
+  by another uid. Description comes from `SKILL.md` frontmatter.
+- Runtime skill changes: `skill_manage` creates skills in the local dir
+  (personal layer, allowed). Hermes seeds its bundled skills into the local
+  dir at every gateway start; `HERMES_BUNDLED_SKILLS=/nonexistent` turns
+  that off.
+- Config: `config.yaml` in `HERMES_HOME`, not rewritten by the gateway at
+  runtime (checked after start). No override layering; the merged file is
+  generated.
+- API server: `API_SERVER_ENABLED/HOST/PORT/KEY/MODEL_NAME`, `GET /health`,
+  SSE streaming with a final error chunk on a failed turn.
+  `X-Hermes-Session-Id` makes Hermes load history from `state.db` and
+  ignore the request's history, which breaks Open WebUI edit/regenerate;
+  without it Hermes derives a stable session id from the system prompt and
+  first user message, which is what the broker relies on.
+- SIGTERM on an idle agent exits in 0.3s; under an active tool call not
+  measured yet.
+- Scheduler: the cron ticker always runs in the gateway and cannot be
+  switched off by config. Jobs cannot be created because `cronjob` and
+  `kanban` are in the locked `agent.disabled_toolsets`, and `/api/jobs` is
+  behind the API key only the broker holds. Curator is off (locked).
+- Resources: ~190Mi RSS idle. Cold start (PVC bind + sync + Hermes to
+  `/health`) was about 8-10s on OrbStack.
+- gVisor (2026-09-24, reference k3d/WSL2 host, `release-20260921.0`,
+  `systrap`): `runsc` registers as a containerd drop-in handler, and the
+  full smoke test passes with agents under the `gvisor` RuntimeClass,
+  including a model answer through pat-service with the user's own PAT and
+  NetworkPolicy isolation. This covers the "runs under gVisor" half of VS
+  items 1-2; checkpoint/restore was not tried. Setup in
+  `docs/operations/hermes.md`.
 
 ### V2 -- capacity and cold start
 
