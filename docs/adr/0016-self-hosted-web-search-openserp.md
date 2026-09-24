@@ -2,6 +2,10 @@
 
 ## Status
 
+Superseded by [ADR 0017](0017-web-search-mcp-openserp-kagent.md) on
+2026-09-25, before deployment. The search workload below is kept by 0017;
+the Open WebUI native-provider path is not used.
+
 Proposed on 2026-09-21. Not deployed. Written from the repository and from
 the upstream sources of Open WebUI `v0.11.3` (the pinned
 `OPENWEBUI_VERSION`) and OpenSERP `v0.8.12` (`main` at `29c7b0f`,

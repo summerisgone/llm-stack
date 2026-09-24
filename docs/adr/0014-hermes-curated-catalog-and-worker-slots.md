@@ -2,6 +2,9 @@
 
 ## Status
 
+Refined by [ADR 0017](0017-web-search-mcp-openserp-kagent.md) (kagent
+backend, web-search MCP tools).
+
 Proposed on 2026-09-15. Not implemented. Refines
 [ADR 0009](0009-cloud-hermes-fleet-per-user-profiles.md) (also Proposed):
 it settles 0009's open items 1 and 2 (SQLite placement, adapter contract)
