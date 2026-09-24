@@ -3,6 +3,12 @@
 
 ---
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pat-service
+  namespace: airgap-ai-stack
+---
+apiVersion: v1
 data:
   gpu_metrics.py: |
     #!/usr/bin/env python3
@@ -898,16 +904,18 @@ spec:
         - name: OPENID_REDIRECT_URI
           value: ***REMOVED***/oauth/oidc/callback
         - name: OPENAI_API_CONFIGS
-          value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"}}'
+          value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent"]}}'
         - name: OPENAI_API_BASE_URLS
-          value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
+          value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://hermes-broker.hermes-agents.svc.cluster.local:8080/v1
         - name: OPENWEBUI_AUTOMATIONS_PAT
           valueFrom:
             secretKeyRef:
               key: OPENWEBUI_AUTOMATIONS_PAT
               name: airgap-runtime
         - name: OPENAI_API_KEYS
-          value: ;$(OPENWEBUI_AUTOMATIONS_PAT)
+          value: ;$(OPENWEBUI_AUTOMATIONS_PAT);
+        - name: TASK_MODEL_EXTERNAL
+          value: qwen-3.8-27b
         - name: WEBUI_SECRET_KEY
           valueFrom:
             secretKeyRef:
@@ -1172,6 +1180,7 @@ spec:
         - mountPath: /etc/pat-service
           name: pricing
           readOnly: true
+      serviceAccountName: pat-service
       volumes:
       - configMap:
           name: pat-service-pricing

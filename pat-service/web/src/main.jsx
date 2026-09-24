@@ -117,6 +117,38 @@ function LimitWidget({ limit }) {
   </div>
 }
 
+// HermesPanel issues the Hermes agent's inference key (POST /api/hermes-token).
+// The key goes straight into the agent's credential Secret and is never
+// shown; issuing again replaces it and restarts a running agent.
+function HermesPanel({ current, onIssued, setNotice }) {
+  const [issuing, setIssuing] = useState(false)
+
+  async function issue() {
+    if (current && !window.confirm('Replace the current Hermes agent key? The old key is revoked and a running agent restarts.')) return
+    setIssuing(true)
+    setNotice(null)
+    try {
+      const response = await fetch(`${base}/api/hermes-token`, { method: 'POST' })
+      if (!response.ok) throw new Error((await response.text()).trim() || 'Could not issue Hermes key')
+      const data = await response.json()
+      setNotice({ kind: 'success', text: `Hermes agent key issued, valid until ${date(data.expires_at)}.${data.agent_restarted ? ' Your running agent was restarted.' : ''}` })
+      await onIssued()
+    } catch (error) {
+      setNotice({ kind: 'error', text: error.message })
+    } finally {
+      setIssuing(false)
+    }
+  }
+
+  return <div className="panel hermes-panel">
+    <div className="panel-heading"><div><p className="eyebrow">HERMES AGENT</p><h2>Agent inference key</h2></div></div>
+    <p className="muted">{current
+      ? <>Active key <code>{current.prefix}…</code>, expires {date(current.expires_at)}.</>
+      : 'No active key. Your Hermes agent cannot call models until you issue one.'}</p>
+    <button className="primary" onClick={issue} disabled={issuing}>{issuing ? 'Issuing key…' : <>{current ? 'Rotate Hermes key' : 'Issue Hermes key'} <Icon>→</Icon></>}</button>
+  </div>
+}
+
 function App() {
   const [tokens, setTokens] = useState([])
   const [tokensCurrency, setTokensCurrency] = useState('')
@@ -219,6 +251,7 @@ function App() {
   }
 
   const activeCount = tokens.filter((token) => !token.revoked_at).length
+  const hermesToken = tokens.find((token) => token.issued_by === 'hermes' && !token.revoked_at && new Date(token.expires_at) > new Date())
 
   return <main className="shell">
     <nav className="topbar">
@@ -266,9 +299,11 @@ function App() {
 
       <div className="panel token-panel">
         <div className="panel-heading"><div><p className="eyebrow">ACTIVE INVENTORY</p><h2>Your tokens <span className="count">{activeCount}</span></h2></div><button className="refresh" onClick={load} disabled={loading} aria-label="Refresh tokens"><Icon className={loading ? 'spin' : ''}>↻</Icon></button></div>
-        {loading ? <div className="empty"><span className="loader"></span>Loading tokens…</div> : tokens.length === 0 ? <div className="empty"><Icon>⌁</Icon><strong>No tokens yet</strong><span>Create one to start making API requests.</span></div> : <div className="table-wrap"><table><thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th>Usage</th><th></th></tr></thead><tbody>{tokens.map((token) => <tr key={token.id} className={token.revoked_at ? 'revoked' : ''}><td><strong>{token.name}</strong>{token.revoked_at && <span className="revoked-label">Revoked</span>}</td><td><code>{token.prefix}…</code></td><td>{date(token.created_at)}</td><td>{date(token.last_used_at)}</td><td>{token.cost_amount ? `${token.cost_amount.toFixed(2)} ${tokensCurrency}` : '—'}</td><td>{token.revoked_at ? <span className="muted">Unavailable</span> : <button className="revoke" onClick={() => revoke(token)}>Revoke</button>}</td></tr>)}</tbody></table></div>}
+        {loading ? <div className="empty"><span className="loader"></span>Loading tokens…</div> : tokens.length === 0 ? <div className="empty"><Icon>⌁</Icon><strong>No tokens yet</strong><span>Create one to start making API requests.</span></div> : <div className="table-wrap"><table><thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th>Usage</th><th></th></tr></thead><tbody>{tokens.map((token) => <tr key={token.id} className={token.revoked_at ? 'revoked' : ''}><td><strong>{token.name}</strong>{token.issued_by === 'hermes' && <span className="hermes-label">Hermes</span>}{token.revoked_at && <span className="revoked-label">Revoked</span>}</td><td><code>{token.prefix}…</code></td><td>{date(token.created_at)}</td><td>{date(token.last_used_at)}</td><td>{token.cost_amount ? `${token.cost_amount.toFixed(2)} ${tokensCurrency}` : '—'}</td><td>{token.revoked_at ? <span className="muted">Unavailable</span> : <button className="revoke" onClick={() => revoke(token)}>Revoke</button>}</td></tr>)}</tbody></table></div>}
       </div>
     </section>
+
+    <HermesPanel current={hermesToken} onIssued={load} setNotice={setNotice} />
 
     <section className="workspace usage-section">
       <LimitWidget limit={limit} />

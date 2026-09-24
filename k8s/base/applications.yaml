@@ -153,6 +153,14 @@ spec:
       port: 9090
       targetPort: metrics
 ---
+# Writes hermes-cred-<id> and restarts the agent pod when a user issues a
+# Hermes key on /platform; its Role lives in k8s/hermes/rbac.yaml.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pat-service
+  namespace: airgap-ai-stack
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -168,6 +176,7 @@ spec:
       labels:
         app.kubernetes.io/name: pat-service
     spec:
+      serviceAccountName: pat-service
       containers:
         - name: pat-service
           # .github/workflows/pat-service-image.yml publishes this on every

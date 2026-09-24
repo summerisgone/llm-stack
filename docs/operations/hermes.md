@@ -145,11 +145,14 @@ test. Test through a Pod with `runtimeClassName: gvisor`.
 
 - Inference credentials: agents call pat-service `/v1` with
   `INFERENCE_KEY` from `hermes-cred-<id>` (`model.api_key:
-  ${HERMES_INFERENCE_KEY}`, a locked key). Until pat-service mints Hermes
-  tokens (ADR 0014 section 8, `POST /internal/hermes-tokens`), an operator
-  sets it by hand: `scripts/kc-pat-issue <user> <password> hermes | awk
-  '/^token:/{print $2}' | scripts/hermes-inference-key <sub>`. Without it a
-  turn ends with Hermes' `HTTP 401` error.
+  ${HERMES_INFERENCE_KEY}`, a locked key). The user issues it on `/platform`
+  ("Issue Hermes key", `POST /api/hermes-token`): pat-service mints a
+  `hermes-agent` PAT (`issued_by = hermes`, `HERMES_PAT_TTL_DAYS`, default
+  7), revokes the previous one, writes the Secret and deletes a running
+  agent pod. The broker does not mint or renew it yet (ADR 0014 section 8,
+  `POST /internal/hermes-tokens`); on expiry the user issues a new one.
+  `scripts/hermes-inference-key` remains as an operator fallback. Without a
+  key a turn ends with Hermes' `HTTP 401` error.
 - Open WebUI second connection (`OPENAI_API_BASE_URLS` + `system_oauth` on
   both). Not added because the remote overlay's connection list is being
   changed in the working tree; the broker already accepts Open WebUI's

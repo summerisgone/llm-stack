@@ -39,18 +39,30 @@ spec:
             # must stay "automations" -- model presets (e.g.
             # hacker-news-model) reference "automations.<model>" as their
             # base_model_id.
+            #
+            # Index 2 is the user's personal Hermes agent behind
+            # hermes-broker (docs/adr/0009, docs/operations/hermes.md).
+            # system_oauth forwards the user's Keycloak access token, which
+            # the broker verifies itself. model_ids is declared because the
+            # broker answers /v1/models only with a user token.
             - name: OPENAI_API_CONFIGS
-              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"}}'
+              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent"]}}'
             - name: OPENAI_API_BASE_URLS
-              value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
+              value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://hermes-broker.hermes-agents.svc.cluster.local:8080/v1
             # Issued for ***REMOVED*** specifically (not a shared service
             # account), so per-user rate limits and usage stay attributed
             # correctly. Index 0 has no static key (system_oauth), hence the
-            # leading empty entry before the semicolon.
+            # leading empty entry before the semicolon; index 2 (Hermes)
+            # has none either, hence the trailing one.
             - name: OPENWEBUI_AUTOMATIONS_PAT
               valueFrom:
                 secretKeyRef:
                   name: airgap-runtime
                   key: OPENWEBUI_AUTOMATIONS_PAT
             - name: OPENAI_API_KEYS
-              value: ;$(OPENWEBUI_AUTOMATIONS_PAT)
+              value: ;$(OPENWEBUI_AUTOMATIONS_PAT);
+            # Title, tag and follow-up generation go to the model, never to
+            # a Hermes agent: each would be a full agent turn in the user's
+            # sandbox.
+            - name: TASK_MODEL_EXTERNAL
+              value: qwen-3.8-27b

@@ -21,7 +21,7 @@ rules:
   # hermes-cred-<id>.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create, update]
+    verbs: [get, create, update, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -34,3 +34,31 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: hermes-broker
+---
+# pat-service issues a user's Hermes inference key from /platform
+# (pat-service/cmd/pat-service/hermes.go): it writes INFERENCE_KEY into
+# hermes-cred-<id> and deletes the agent pod so the next start reads it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pat-service-hermes-key
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pat-service-hermes-key
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pat-service-hermes-key
+subjects:
+  - kind: ServiceAccount
+    name: pat-service
+    namespace: airgap-ai-stack

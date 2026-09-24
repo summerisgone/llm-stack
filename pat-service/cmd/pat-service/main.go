@@ -143,6 +143,10 @@ type config struct {
 	// dashboard can show spend-vs-limit ahead of that policy being
 	// decided.
 	qosMonthlyLimit float64
+	// hermesNamespace and hermesTTLDays configure dashboard issuance of the
+	// Hermes agent's inference key (hermes.go, docs/adr/0014 section 8).
+	hermesNamespace string
+	hermesTTLDays   int
 }
 
 type app struct {
@@ -154,6 +158,7 @@ type app struct {
 	gateway   gatewayToken
 	qos       *qos.Tracker
 	pricing   pricing
+	hermes    *hermesKube
 }
 
 type session struct {
@@ -210,6 +215,8 @@ type tokenRecord struct {
 	// for requests authenticated with it), in a.pricing.Currency -- the
 	// /platform token table's per-key usage total.
 	CostAmount float64 `json:"cost_amount"`
+	// IssuedBy is "user" or "hermes" (the Hermes agent's key, hermes.go).
+	IssuedBy string `json:"issued_by"`
 }
 
 func main() {
@@ -236,6 +243,7 @@ func main() {
 		proxyHTTP: &http.Client{},
 		qos:       qos.NewTracker(qosStore, qosMetrics, cfg.qosSessionTTL, cfg.qosWarmTTL, cfg.qosDemoteAfterSteps, cfg.qosCostAlpha, cfg.qosCostBeta, cfg.qosSpendDemoteThreshold, cfg.qosSpendWindow),
 		pricing:   loadPricing(cfg.pricingFile),
+		hermes:    newHermesKube(cfg.hermesNamespace),
 	}
 	if err := a.migrate(ctx); err != nil {
 		log.Fatal(err)
@@ -269,6 +277,7 @@ func newMux(a *app) *http.ServeMux {
 	mux.HandleFunc("GET /api/tokens", a.listTokens)
 	mux.HandleFunc("POST /api/tokens", a.createToken)
 	mux.HandleFunc("POST /api/tokens/", a.revokeToken)
+	mux.HandleFunc("POST /api/hermes-token", a.issueHermesToken)
 	mux.HandleFunc("GET /api/usage/daily", a.usageDaily)
 	mux.HandleFunc("GET /api/usage/sessions", a.usageSessions)
 	mux.HandleFunc("GET /api/usage/limit", a.usageLimit)
@@ -352,7 +361,12 @@ func loadConfig() (config, error) {
 	qosEventTimeout := time.Duration(readIntEnv("QOS_EVENT_TIMEOUT_MS", 1000)) * time.Millisecond
 	pricingFile := os.Getenv("QOS_PRICING_FILE")
 	qosMonthlyLimit := readFloatEnv("QOS_MONTHLY_LIMIT", 0)
-	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit}, nil
+	hermesNamespace := os.Getenv("HERMES_NAMESPACE")
+	if hermesNamespace == "" {
+		hermesNamespace = "hermes-agents"
+	}
+	hermesTTLDays := readIntEnv("HERMES_PAT_TTL_DAYS", 7)
+	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, hermesNamespace, hermesTTLDays}, nil
 }
 
 // readIntEnv reads an optional integer threshold, falling back to def when
@@ -402,7 +416,8 @@ func (a *app) migrate(ctx context.Context) error {
  CREATE INDEX IF NOT EXISTS qos_events_owner_session_idx ON qos_events (owner_subject, session_id, created_at);
  ALTER TABLE qos_events ADD COLUMN IF NOT EXISTS token_id text NOT NULL DEFAULT '';
  ALTER TABLE qos_events ADD COLUMN IF NOT EXISTS token_name text NOT NULL DEFAULT '';
- CREATE INDEX IF NOT EXISTS qos_events_token_idx ON qos_events (token_id);`)
+ CREATE INDEX IF NOT EXISTS qos_events_token_idx ON qos_events (token_id);
+ ALTER TABLE personal_access_tokens ADD COLUMN IF NOT EXISTS issued_by text NOT NULL DEFAULT 'user';`)
 	return err
 }
 
@@ -516,7 +531,7 @@ func (a *app) listTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.db.Query(r.Context(), `
 		SELECT t.id, t.name, t.token_prefix, t.created_at, t.expires_at, t.revoked_at, t.last_used_at,
-		       COALESCE(SUM(e.cost_amount), 0)
+		       COALESCE(SUM(e.cost_amount), 0), t.issued_by
 		FROM personal_access_tokens t
 		LEFT JOIN qos_events e ON e.token_id = t.id
 		WHERE t.owner_subject=$1
@@ -530,7 +545,7 @@ func (a *app) listTokens(w http.ResponseWriter, r *http.Request) {
 	items := []tokenRecord{}
 	for rows.Next() {
 		var item tokenRecord
-		if err := rows.Scan(&item.ID, &item.Name, &item.Prefix, &item.CreatedAt, &item.ExpiresAt, &item.RevokedAt, &item.LastUsedAt, &item.CostAmount); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Prefix, &item.CreatedAt, &item.ExpiresAt, &item.RevokedAt, &item.LastUsedAt, &item.CostAmount, &item.IssuedBy); err != nil {
 			http.Error(w, "database error", 500)
 			return
 		}
