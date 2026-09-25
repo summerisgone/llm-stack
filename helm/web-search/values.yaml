@@ -60,9 +60,3 @@ egressExcept:
   - 169.254.0.0/16
   - 100.64.0.0/10
   - 127.0.0.0/8
-
-# Open WebUI MCP tool-server connection (ADR 0017 section 6). Rendered into
-# the ConfigMap openwebui-tool-servers, which the Open WebUI Deployment reads
-# with optional: true -- so it exists only while this release is installed.
-openwebui:
-  mcpURL: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/web-search/

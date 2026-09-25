@@ -90,6 +90,7 @@ func main() {
 			StartTimeout: envDuration("AGENT_START_TIMEOUT", "180s"),
 			StopGrace:    stopGrace,
 			WebSearch:    os.Getenv("WEB_SEARCH_ENABLED") == "true",
+			Repowise:     os.Getenv("REPOWISE_ENABLED") == "true",
 		})
 	default:
 		slog.Error("unsupported HERMES_BACKEND", "backend", b)

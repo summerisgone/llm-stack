@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Keycloak side of docs/adr/0018-repowise-codebase-intelligence.md section 4:
+the confidential client `repowise` used by the gateway's OIDC on the repowise
+host, and the realm role `repowise-admin`. Idempotent. The client secret is
+REPOWISE_OIDC_CLIENT_SECRET and the origin REPOWISE_PUBLIC_ORIGIN, from
+the environment or .env.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib_keycloak_admin import KeycloakAdmin  # noqa: E402
+
+
+def env_value(name, default=None):
+    if os.environ.get(name):
+        return os.environ[name]
+    if os.path.isfile(".env"):
+        with open(".env") as f:
+            for line in f:
+                if line.startswith(name + "="):
+                    return line.rstrip("\n").split("=", 1)[1]
+    return default
+
+
+def main():
+    secret = env_value("REPOWISE_OIDC_CLIENT_SECRET")
+    if not secret:
+        sys.exit("REPOWISE_OIDC_CLIENT_SECRET not set")
+    origin = (env_value("REPOWISE_PUBLIC_ORIGIN") or "").rstrip("/")
+    if not origin:
+        sys.exit("REPOWISE_PUBLIC_ORIGIN not set")
+
+    client = {
+        "clientId": "repowise",
+        "name": "Repowise",
+        "enabled": True,
+        "protocol": "openid-connect",
+        "publicClient": False,
+        "secret": secret,
+        "standardFlowEnabled": True,
+        "directAccessGrantsEnabled": False,
+        "redirectUris": [origin + "/oauth2/callback"],
+        "webOrigins": [origin],
+        "attributes": {"post.logout.redirect.uris": origin + "/*"},
+        "defaultClientScopes": ["basic", "profile", "email", "roles"],
+    }
+    with KeycloakAdmin() as kc:
+        if not any(r["name"] == "repowise-admin" for r in kc.request("GET", "/roles")):
+            kc.request("POST", "/roles", {
+                "name": "repowise-admin",
+                "description": "Repowise settings, repositories and re-index (ADR 0018)",
+            })
+        found = kc.request("GET", "/clients?clientId=repowise")
+        if found:
+            kc.request("PUT", f"/clients/{found[0]['id']}", client)
+        else:
+            kc.request("POST", "/clients", client)
+    print("Repowise Keycloak OIDC client and realm role repowise-admin are ready.")
+
+
+if __name__ == "__main__":
+    main()

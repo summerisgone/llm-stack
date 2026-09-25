@@ -1,0 +1,117 @@
+name: repowise image
+
+# repowise (docs/adr/0018-repowise-codebase-intelligence.md section 1). Built
+# from upstream's docker/Dockerfile at the pinned tag, source unmodified, with
+# one override: the Dockerfile sets NEXT_PUBLIC_REPOWISE_API_URL as an ENV
+# (not an ARG) to http://localhost:7337, and next build inlines it into the
+# browser bundle. It is set to "" so the UI calls /api/* on its own origin
+# (the Next middleware forwards to the API). The check step fails the build
+# if localhost:7337 is still the client's API base URL (ADR 0018 V0).
+#
+# Push trigger: same guard as ninfer-image.yml -- only a change to the
+# REPOWISE_UPSTREAM_REF line (or this file) builds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "versions.lock.env"
+      - ".github/workflows/repowise-image.yml"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "repowise tag/commit to build (defaults to versions.lock.env REPOWISE_UPSTREAM_REF)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/summerisgone/repowise
+  UPSTREAM_REPO: https://github.com/repowise-dev/repowise.git
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Only continue if REPOWISE_UPSTREAM_REF (or this workflow) changed
+        id: guard
+        if: github.event_name == 'push'
+        run: |
+          changed_files=$(git diff --name-only HEAD~1 HEAD)
+          if grep -qxF '.github/workflows/repowise-image.yml' <<<"$changed_files"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif git diff -U0 HEAD~1 HEAD -- versions.lock.env | grep -q '^[+-]REPOWISE_UPSTREAM_REF='; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve upstream ref and check out upstream
+        id: vars
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
+        run: |
+          ref="${{ inputs.upstream_ref }}"
+          if [ -z "$ref" ]; then
+            ref=$(grep -m1 '^REPOWISE_UPSTREAM_REF=' versions.lock.env | cut -d= -f2)
+          fi
+          [ -n "$ref" ] || { echo "REPOWISE_UPSTREAM_REF not set" >&2; exit 1; }
+          git clone --quiet "$UPSTREAM_REPO" upstream
+          git -C upstream checkout --quiet "$ref"
+          grep -q '^ENV NEXT_PUBLIC_REPOWISE_API_URL=http://localhost:7337$' upstream/docker/Dockerfile \
+            || { echo "upstream Dockerfile no longer has the expected NEXT_PUBLIC_REPOWISE_API_URL line" >&2; exit 1; }
+          sed -i 's|^ENV NEXT_PUBLIC_REPOWISE_API_URL=http://localhost:7337$|ENV NEXT_PUBLIC_REPOWISE_API_URL=""|' upstream/docker/Dockerfile
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
+
+      - uses: docker/build-push-action@v6
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
+        with:
+          context: upstream
+          file: upstream/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: repowise:check
+          cache-to: type=gha,mode=max
+
+      - name: No localhost:7337 in the client bundle
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
+        run: |
+          # The settings page keeps localhost:7337 as an input placeholder and
+          # as the webhook field's initial state (replaced by the page origin
+          # on mount); any other occurrence is the baked API base URL.
+          hits=$(docker run --rm --entrypoint sh repowise:check -c \
+            'grep -rhoE ".{24}\"http://localhost:7337\"" /app/web/packages/web/.next/static' \
+            | grep -v 'placeholder:' | grep -v 'useState)(' || true)
+          if [ -n "$hits" ]; then
+            printf 'localhost:7337 baked into the browser bundle:\n%s\n' "$hits" >&2
+            exit 1
+          fi
+
+      - uses: docker/build-push-action@v6
+        if: github.event_name == 'workflow_dispatch' || steps.guard.outputs.build == 'true'
+        with:
+          context: upstream
+          file: upstream/docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          # Same layers as the checked build above, from the GHA cache.
+          cache-from: type=gha
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.vars.outputs.ref }}

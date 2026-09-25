@@ -1,0 +1,138 @@
+# ADR 0018 sections 3-4. Host-matched route on the edge's external listener
+# (scoped exception to ADR 0001): edge-test-external has no hostnames, so the
+# repowise host is served by this route only and never by /sso, /platform,
+# /v1 or Open WebUI. Two named rules so each gets its own SecurityPolicy
+# (authorization matches methods, not paths).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: repowise
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      sectionName: {{ .Values.gateway.sectionName }}
+  hostnames:
+    - {{ include "repowise.publicHost" . | quote }}
+  rules:
+    - name: interactive
+      matches:
+        - path:
+            type: RegularExpression
+            value: {{ .Values.oidc.interactivePathRegex | quote }}
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.envoyproxy.io
+            kind: HTTPRouteFilter
+            name: repowise-api-key
+      backendRefs:
+        - name: repowise
+          port: 3000
+    - name: read
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.envoyproxy.io
+            kind: HTTPRouteFilter
+            name: repowise-api-key
+      backendRefs:
+        - name: repowise
+          port: 3000
+---
+# The shared REPOWISE_API_KEY as Authorization on every request after OIDC;
+# the browser never holds it, and whatever it sends is overwritten.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: HTTPRouteFilter
+metadata:
+  name: repowise-api-key
+  namespace: {{ .Release.Namespace }}
+spec:
+  credentialInjection:
+    header: Authorization
+    overwrite: true
+    credential:
+      valueRef:
+        name: repowise-credential
+---
+{{- range $rule := list "read" "interactive" }}
+# OIDC (client {{ $.Values.oidc.clientID }}, host-only cookies) plus realm-role
+# authorization from the access-token cookie, validated as a JWT.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: repowise-{{ $rule }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: repowise
+      sectionName: {{ $rule }}
+  oidc:
+    provider:
+      issuer: {{ include "repowise.issuer" $ | quote }}
+      authorizationEndpoint: {{ printf "%s/protocol/openid-connect/auth" (include "repowise.issuer" $) | quote }}
+      tokenEndpoint: {{ $.Values.oidc.tokenEndpoint | quote }}
+      endSessionEndpoint: {{ printf "%s/protocol/openid-connect/logout" (include "repowise.issuer" $) | quote }}
+    clientID: {{ $.Values.oidc.clientID | quote }}
+    clientSecret:
+      name: repowise-oidc
+    redirectURL: {{ printf "%s/oauth2/callback" (trimSuffix "/" $.Values.publicOrigin) | quote }}
+    logoutPath: /logout
+    # Plain JWT in the cookie so the jwt provider below can read the roles.
+    disableTokenEncryption: true
+    cookieNames:
+      accessToken: repowise-access-token
+      idToken: repowise-id-token
+    refreshToken: true
+    scopes: [openid, profile, roles]
+  jwt:
+    providers:
+      - name: keycloak
+        issuer: {{ include "repowise.issuer" $ | quote }}
+        remoteJWKS:
+          uri: {{ $.Values.oidc.jwksURI | quote }}
+          cacheDuration: 300s
+        extractFrom:
+          cookies: [repowise-access-token]
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: admin
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: realm_access.roles
+                valueType: StringArray
+                values: [{{ $.Values.oidc.adminRole | quote }}]
+      - name: readers
+        action: Allow
+        operation:
+          methods:
+            {{- if eq $rule "read" }}
+            - GET
+            - HEAD
+            {{- else }}
+            - GET
+            - HEAD
+            - POST
+            - PATCH
+            - DELETE
+            {{- end }}
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: realm_access.roles
+                valueType: StringArray
+                values:
+                  {{- toYaml $.Values.oidc.readRoles | nindent 18 }}
+---
+{{- end }}

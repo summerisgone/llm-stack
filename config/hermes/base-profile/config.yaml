@@ -51,6 +51,14 @@ mcp_servers:
     headers:
       Authorization: Bearer ${HERMES_INFERENCE_KEY}
     timeout: 60
+  # Codebase intelligence (docs/adr/0018 section 7), same path through
+  # pat-service; removed unless the sync container has REPOWISE_ENABLED=true.
+  # get_answer runs the LLM, hence the longer timeout.
+  repowise:
+    url: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/repowise/
+    headers:
+      Authorization: Bearer ${HERMES_INFERENCE_KEY}
+    timeout: 180
 
 curator:
   enabled: false

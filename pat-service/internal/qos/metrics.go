@@ -56,8 +56,9 @@ type Metrics struct {
 	// way as PromptTokensTotal but never RecordCost: embedding tokens do not
 	// consume the LLM's GPU slots or queue time, so they carry no cost unit.
 	EmbeddingTokensTotal *prometheus.CounterVec
-	// MCPCallsTotal{user,tool,status} counts /mcp/web-search/ requests
-	// (docs/adr/0017-web-search-mcp-openserp-kagent.md section 3). tool is
+	// MCPCallsTotal{user,server,tool,status} counts /mcp/<server>/ requests
+	// (docs/adr/0017-web-search-mcp-openserp-kagent.md section 3, docs/adr/0018
+	// section 5). tool is
 	// web_search|fetch_url|other for tools/call and "none" for the rest of
 	// the MCP protocol (initialize, tools/list); status is the HTTP status.
 	MCPCallsTotal *prometheus.CounterVec
@@ -115,8 +116,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}, []string{"user", "model"}),
 		MCPCallsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "patsvc_mcp_calls_total",
-			Help: "MCP requests proxied to web-search-mcp, per user, tool and HTTP status.",
-		}, []string{"user", "tool", "status"}),
+			Help: "MCP requests proxied to MCP servers, per user, server, tool and HTTP status.",
+		}, []string{"user", "server", "tool", "status"}),
 	}
 	reg.MustRegister(m.SessionMatchTotal, m.SessionsStartedTotal, m.SessionStepsTotal, m.SessionsActive, m.RotationsTotal,
 		m.RequestsTotal, m.PromptTokensTotal, m.CachedPromptTokensTotal, m.CompletionTokensTotal, m.CostUnitsTotal,

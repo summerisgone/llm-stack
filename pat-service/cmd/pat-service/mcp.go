@@ -16,15 +16,15 @@ import (
 	"time"
 )
 
-// mcpPrefix is the pat-service path of web-search-mcp
-// (docs/adr/0017-web-search-mcp-openserp-kagent.md section 3). Callers are
-// Hermes agents (their PAT) and Open WebUI (the chat user's Keycloak access
-// token, auth_type system_oauth). web-search-mcp trusts the identity
-// headers set here because its NetworkPolicy admits pat-service only.
-const mcpPrefix = "/mcp/web-search"
+// /mcp/<name>/ proxies to the MCP server cfg.mcpServers[name]
+// (docs/adr/0017-web-search-mcp-openserp-kagent.md section 3, docs/adr/0018
+// section 5). Callers are Hermes agents (their PAT) and Open WebUI (the chat
+// user's Keycloak access token, auth_type system_oauth). Upstreams trust the
+// identity headers set here because their NetworkPolicy admits pat-service
+// only.
 
 // mcpMaxInspectBody bounds how much of a request is read to find the tool
-// name; web-search-mcp's own request limit is larger, so a longer body is
+// name; the upstreams' own request limits are larger, so a longer body is
 // forwarded untouched and counted as tool "other".
 const mcpMaxInspectBody = 64 << 10
 
@@ -36,8 +36,15 @@ type mcpCaller struct {
 	subject, name, tokenID string
 }
 
+// mcpServer is one /mcp/<name>/ upstream.
+type mcpServer struct {
+	name, url string
+}
+
 func (a *app) mcpProxy(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.webSearchEnabled {
+	name, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/mcp/"), "/")
+	upstream, ok := a.cfg.mcpServers[name]
+	if !ok || !strings.HasPrefix(r.URL.Path, "/mcp/"+name+"/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -46,7 +53,7 @@ func (a *app) mcpProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(status), status)
 		return
 	}
-	a.forwardMCP(w, r, caller)
+	a.forwardMCP(w, r, mcpServer{name, upstream}, caller)
 }
 
 // mcpAuthenticate accepts a PAT (same lookup as /v1/) or a Keycloak access
@@ -77,35 +84,42 @@ func (a *app) mcpAuthenticate(r *http.Request) (mcpCaller, int) {
 	return mcpCaller{subject: cl.Subject, name: cl.PreferredUsername}, http.StatusOK
 }
 
-func (a *app) forwardMCP(w http.ResponseWriter, r *http.Request, caller mcpCaller) {
+func (a *app) forwardMCP(w http.ResponseWriter, r *http.Request, srv mcpServer, caller mcpCaller) {
 	var tool string
 	r.Body, tool = mcpToolName(r)
 	record := func(status int) {
-		a.qos.Metrics().MCPCallsTotal.WithLabelValues(caller.subject, tool, strconv.Itoa(status)).Inc()
+		a.qos.Metrics().MCPCallsTotal.WithLabelValues(caller.subject, srv.name, tool, strconv.Itoa(status)).Inc()
 	}
 	// Only tool calls count against the limit: initialize and tools/list are
 	// protocol overhead a client repeats on every reconnect.
-	if tool != "none" && a.mcpLimited(r.Context(), caller.subject) {
+	if tool != "none" && a.mcpLimited(r.Context(), srv.name, caller.subject) {
 		record(http.StatusTooManyRequests)
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "MCP call rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
-	target, err := url.Parse(a.cfg.webSearchMCPURL)
+	target, err := url.Parse(srv.url)
 	if err != nil {
-		http.Error(w, "web search unavailable", http.StatusBadGateway)
+		http.Error(w, srv.name+" unavailable", http.StatusBadGateway)
 		return
 	}
+	prefix := "/mcp/" + srv.name
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = target.Scheme
 			pr.Out.URL.Host = target.Host
-			pr.Out.URL.Path = target.Path + strings.TrimPrefix(pr.In.URL.Path, mcpPrefix)
+			rest := strings.TrimPrefix(pr.In.URL.Path, prefix)
+			pr.Out.URL.Path = target.Path + rest
+			// An upstream mounted at a path (repowise: /mcp) is reached at
+			// that exact path, not with a trailing slash it would redirect.
+			if target.Path != "" && rest == "/" {
+				pr.Out.URL.Path = target.Path
+			}
 			pr.Out.URL.RawPath = ""
 			pr.Out.Host = ""
 			pr.Out.Header = http.Header{}
 			copyRequestHeaders(pr.Out.Header, pr.In.Header)
-			// The pat-service dashboard session is not for web-search-mcp.
+			// The pat-service dashboard session is not for the upstream.
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Set("X-User-Id", caller.subject)
 			name := caller.name
@@ -125,23 +139,23 @@ func (a *app) forwardMCP(w http.ResponseWriter, r *http.Request, caller mcpCalle
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			log.Printf("web-search-mcp: %v", err)
+			log.Printf("mcp %s: %v", srv.name, err)
 			record(http.StatusBadGateway)
-			http.Error(w, "web search unavailable", http.StatusBadGateway)
+			http.Error(w, srv.name+" unavailable", http.StatusBadGateway)
 		},
 	}
 	rp.ServeHTTP(w, r)
 }
 
-// mcpLimited is a fixed one-minute window per user. Like the rest of qos it
-// fails open: an unreachable Valkey must not stop search.
-func (a *app) mcpLimited(ctx context.Context, subject string) bool {
+// mcpLimited is a fixed one-minute window per (server, user). Like the rest
+// of qos it fails open: an unreachable Valkey must not stop the tools.
+func (a *app) mcpLimited(ctx context.Context, server, subject string) bool {
 	if a.mcpLimiter == nil || a.cfg.mcpCallsPerMinute <= 0 {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.qosFingerprintTimeout)
 	defer cancel()
-	key := fmt.Sprintf("mcp:rl:%s:%d", subject, time.Now().Unix()/60)
+	key := fmt.Sprintf("mcp:rl:%s:%s:%d", server, subject, time.Now().Unix()/60)
 	n, err := a.mcpLimiter.IncrWindow(ctx, key, 2*time.Minute)
 	if err != nil {
 		return false

@@ -44,7 +44,12 @@ inference:
   # deployment's actual traffic shape before calling it more than a pilot --
   # see deploy/ninfer/README.md "Known risks", Risk 2.
   maxContext: 180224
-  kvCapacity: auto
+  # Explicit, not auto: ADR 0018 section 6a carves VRAM for GPU embeddings
+  # (helm/embeddings-inference gpu.gpuMemoryBudgetGiB). Unit is tokens
+  # (server_start kv_capacity; 64 tokens per page group, ~2.14 MiB each at
+  # fp8). auto gave 250304; 196608 frees ~1.75 GiB and still fits one
+  # maxContext request. Change together with gpuMemoryBudgetGiB, one commit.
+  kvCapacity: "196608"
   maxConcurrency: 3
   kvDtype: fp8
   # Positive multiple of 128 (enforced by ninfer-serve). Smaller values slice

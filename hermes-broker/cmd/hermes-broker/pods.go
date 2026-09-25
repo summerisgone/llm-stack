@@ -129,6 +129,8 @@ type PodsConfig struct {
 	// WebSearch keeps the web-search MCP entry in the synced config.yaml
 	// (hermes-sync, docs/adr/0017 section 5).
 	WebSearch bool
+	// Repowise keeps the repowise MCP entry (docs/adr/0018 section 7).
+	Repowise bool
 }
 
 // PodsBackend: one pod per active user, mounting only that user's RWO PVC.
@@ -432,6 +434,7 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, spec StartSpec) err
 				{"name": "HERMES_SELECTION", "valueFrom": map[string]any{"fieldRef": map[string]string{
 					"fieldPath": "metadata.annotations['" + annSelection + "']"}}},
 				{"name": "WEB_SEARCH_ENABLED", "value": fmt.Sprint(b.cfg.WebSearch)},
+				{"name": "REPOWISE_ENABLED", "value": fmt.Sprint(b.cfg.Repowise)},
 			},
 			"securityContext": sc(10001),
 			"resources": map[string]any{

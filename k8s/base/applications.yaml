@@ -283,6 +283,14 @@ spec:
                   name: airgap-runtime
                   key: WEB_SEARCH_ENABLED
                   optional: true
+            # /mcp/repowise/ (docs/adr/0018-repowise-codebase-intelligence.md
+            # section 5), same gating with REPOWISE_ENABLED.
+            - name: REPOWISE_ENABLED
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: REPOWISE_ENABLED
+                  optional: true
             - name: MCP_CALLS_PER_MINUTE
               value: "30"
           volumeMounts:

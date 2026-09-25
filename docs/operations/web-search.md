@@ -16,8 +16,8 @@ Yandex from the site's egress address. Never enable on an air-gapped install.
 
 - pat-service authenticates (PAT, or Keycloak token with `ai-user`/`ai-admin`),
   sets `X-User-Id` / `X-User-Name` / `X-Pat-Token-Id`, limits tool calls to
-  `MCP_CALLS_PER_MINUTE` per user (default 30, Valkey, fails open) and counts
-  `patsvc_mcp_calls_total{user,tool,status}`.
+  `MCP_CALLS_PER_MINUTE` per user and server (default 30, Valkey, fails open)
+  and counts `patsvc_mcp_calls_total{user,server,tool,status}`.
 - `web-search-mcp` accepts traffic from pat-service only (NetworkPolicy) and
   trusts its identity headers for that reason. It logs user, tool, status and
   latency, never page bodies.
@@ -33,10 +33,10 @@ Yandex from the site's egress address. Never enable on an air-gapped install.
 
 | Where | How | Applied by |
 | --- | --- | --- |
-| `helm/web-search` release (OpenSERP, sidecar, web-search-mcp, Open WebUI tool connection ConfigMap) | installed or not | `make websearch-up` / `make websearch-down` (`stack-up` runs `websearch-up` when true) |
+| `helm/web-search` release (OpenSERP, sidecar, web-search-mcp) | installed or not | `make websearch-up` / `make websearch-down` (`stack-up` runs `websearch-up` when true) |
 | pat-service `/mcp/web-search/` | `airgap-runtime` Secret key; 404 unless `true` | `make helm-up`, then `kubectl -n airgap-ai-stack rollout restart deploy/pat-service` |
 | Hermes profile `mcp_servers.web-search` | `hermes-images` ConfigMap -> broker -> agent sync container | `make hermes-up`; agents pick it up at their next start |
-| Open WebUI tool server | optional `configMapKeyRef` to `openwebui-tool-servers` | `websearch-up` / `websearch-down` restart Open WebUI |
+| Open WebUI tool server | entry in the `openwebui-tool-servers` ConfigMap rendered by `helm/airgap-stack` (docs/adr/0018 section 7), read through an optional `configMapKeyRef` | `make helm-up`; `websearch-up` / `websearch-down` restart Open WebUI |
 
 On:
 

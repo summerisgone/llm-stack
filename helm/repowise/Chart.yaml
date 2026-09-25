@@ -1,0 +1,6 @@
+apiVersion: v2
+name: repowise
+description: Shared repowise (codebase intelligence) - web UI on its own host behind gateway OIDC, MCP through pat-service /mcp/repowise/
+version: 0.1.0
+appVersion: "0.53.0"
+type: application

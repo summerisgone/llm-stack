@@ -1,0 +1,89 @@
+# docs/adr/0018-repowise-codebase-intelligence.md. Installed only when
+# REPOWISE_ENABLED=true in .env: `make repowise-up`, which refuses unless the
+# embeddings-inference release runs in accelerator: gpu mode (section 6a).
+# Secrets (API key, OIDC client secret, service PAT) are created from .env by
+# `make repowise-up`, not by this chart.
+
+# REPOWISE_IMAGE in versions.lock.env is the source of truth; keep in step.
+image: ghcr.io/summerisgone/repowise:v0.53.0
+
+# Section 3. Site-specific, set by `make repowise-up` from .env:
+# publicOrigin (REPOWISE_PUBLIC_ORIGIN) is the UI's own browser origin, its
+# host is matched against :authority on the edge's external listener;
+# stackOrigin (STACK_BASE_URL) is the main origin, where Keycloak's issuer
+# lives under /sso.
+publicOrigin: ""
+stackOrigin: ""
+
+gateway:
+  name: edge
+  sectionName: external
+
+# Section 4. Keycloak issuer stays on the main origin (stackOrigin + /sso);
+# the token endpoint and JWKS are fetched in-cluster.
+oidc:
+  clientID: repowise
+  realm: ai-stack
+  tokenEndpoint: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/token
+  jwksURI: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+  # Realm roles that may read (GET, plus the interactive paths below).
+  readRoles: [ai-user, ai-admin, repowise-admin]
+  # Realm role that may use every method everywhere (settings, provider
+  # keys, repo add/delete, sync, re-index).
+  adminRole: repowise-admin
+  # Paths where readers may also POST/PATCH/DELETE: chat (conversations are
+  # shared -- repowise has no users) and blast-radius analysis. Enumerated
+  # from packages/api-client of the pinned version; re-check on upgrade (V1).
+  interactivePathRegex: ^/api/repos/[^/]+/(chat|blast-radius)(/.*)?$
+
+# Section 2. Every signed-in ai-user sees every repository listed here, in
+# the UI and through MCP. ADMISSION RULE: only list repositories readable by
+# every ai-user holder. Stage 1 is public HTTPS repositories only (no
+# credentials exist in this release).
+repos:
+  - alias: click
+    url: https://github.com/pallets/click.git
+    branch: main
+  - alias: httpx
+    url: https://github.com/encode/httpx.git
+    branch: master
+
+# Fetch interval of the sync container. repowise's own poll only compares the
+# local HEAD and never fetches, so this loop is what moves the checkouts.
+syncIntervalSeconds: 900
+
+# Section 6. LLM and embeddings through pat-service /v1 under the service
+# PAT (Secret repowise, key OPENAI_API_KEY).
+llm:
+  baseURL: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
+  model: qwen-3.8-27b
+  embeddingModel: bge-m3
+  # bge-m3 is fixed at 1024; declared, never sent as `dimensions`.
+  embeddingDims: 1024
+  embeddingTimeoutSeconds: 60
+  # false = structural wiki only, no LLM on the initial index (ADR 0018
+  # section 6, V5).
+  initialProse: true
+
+storage:
+  size: 20Gi
+
+resources:
+  app:
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+  mcp:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "1", memory: 2Gi}
+  sync:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "2", memory: 4Gi}
+
+# Egress to the internet (git over HTTPS): everything except these ranges.
+egressExcept:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - 169.254.0.0/16
+  - 100.64.0.0/10
+  - 127.0.0.0/8

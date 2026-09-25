@@ -1,8 +1,10 @@
 # Web search in chat is the web-search MCP tool through pat-service
 # (docs/adr/0017-web-search-mcp-openserp-kagent.md section 6), not Open
 # WebUI's native provider. TOOL_SERVER_CONNECTIONS comes from the ConfigMap
-# owned by the helm/web-search release: while it is not installed the
-# optional key leaves the variable unset and Open WebUI has no tool servers.
+# rendered by helm/airgap-stack (templates/openwebui-tool-servers.yaml, one
+# entry per enabled MCP server, docs/adr/0018 section 7): while none is
+# enabled the optional key leaves the variable unset and Open WebUI has no
+# tool servers.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

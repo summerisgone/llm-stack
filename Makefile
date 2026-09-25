@@ -12,7 +12,7 @@ include versions.lock.env
 # Local/site-specific overrides (gitignored). Not required to exist.
 -include .env
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up hermes-catalog hermes-broker-image hermes-k3d-load hermes-up hermes-down hermes-smoke hermes-test websearch-up websearch-down websearch-smoke web-search-mcp-test
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up hermes-catalog hermes-broker-image hermes-k3d-load hermes-up hermes-down hermes-smoke hermes-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -246,7 +246,7 @@ ninfer-down:
 # bge-m3 embeddings deployment (docs/adr/0013-embeddings-api-bge-m3.md). Edit
 # helm/embeddings-inference/values.yaml, then run `make embeddings-up`.
 # `accelerator: cpu` (the default) has no ordering constraint. `accelerator:
-# gpu` is refused unless the live LLM engine (vLLM or SGLang) already has a
+# gpu` is refused unless the live LLM engine (vLLM, SGLang or ninfer) already has a
 # Running pod -- the ADR's fixed start order, checked here since Helm itself
 # has no notion of "another release's Deployment is Ready".
 EMBEDDINGS_CHART = helm/embeddings-inference
@@ -255,9 +255,9 @@ EMBEDDINGS_RELEASE = embeddings-inference
 embeddings-up:
 	@accel=$$(awk '/^accelerator:/{print $$2; exit}' $(EMBEDDINGS_CHART)/values.yaml); \
 	if [ "$$accel" = "gpu" ]; then \
-		running=$$($(KUBECTL) -n $(K8S_NAMESPACE) get pods -l 'app.kubernetes.io/name in (vllm-qwen38-nvfp4,sglang-qwen38)' --field-selector=status.phase=Running -o name 2>/dev/null); \
+		running=$$($(KUBECTL) -n $(K8S_NAMESPACE) get pods -l 'app.kubernetes.io/name in (vllm-qwen38-nvfp4,sglang-qwen38,ninfer-qwen38)' --field-selector=status.phase=Running -o name 2>/dev/null); \
 		if [ -z "$$running" ]; then \
-			echo "embeddings-up: accelerator: gpu requires the live LLM engine (vLLM or SGLang) to be Ready first -- see docs/adr/0013-embeddings-api-bge-m3.md 'Start order is fixed'." >&2; \
+			echo "embeddings-up: accelerator: gpu requires the live LLM engine (vLLM, SGLang or ninfer) to be Ready first -- see docs/adr/0013-embeddings-api-bge-m3.md 'Start order is fixed'." >&2; \
 			exit 1; \
 		fi; \
 	fi
@@ -272,10 +272,11 @@ embeddings-down:
 	$(HELM) uninstall $(EMBEDDINGS_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
 
 # Web search (docs/adr/0017-web-search-mcp-openserp-kagent.md): OpenSERP,
-# its engine-pinning sidecar and web-search-mcp, plus the ConfigMap Open WebUI
-# reads its MCP tool connection from. Open WebUI reads that env only at start,
-# hence the restart. pat-service /mcp/ and the Hermes profile entry follow
-# WEB_SEARCH_ENABLED in .env (helm-up, hermes-up), not this release.
+# its engine-pinning sidecar and web-search-mcp. Open WebUI's MCP tool
+# connection (ConfigMap openwebui-tool-servers, helm/airgap-stack since
+# docs/adr/0018 section 7), pat-service /mcp/ and the Hermes profile entry
+# follow WEB_SEARCH_ENABLED in .env (helm-up, hermes-up), not this release.
+# Open WebUI reads the tool connections only at start, hence the restart.
 WEBSEARCH_CHART = helm/web-search
 WEBSEARCH_RELEASE = web-search
 
@@ -294,6 +295,52 @@ websearch-down:
 
 websearch-smoke:
 	./scripts/websearch-smoke-test
+
+# Repowise (docs/adr/0018-repowise-codebase-intelligence.md). Refuses unless
+# REPOWISE_ENABLED=true and the embeddings run on the GPU with one Ready
+# replica (section 6a). Secrets come from .env. Open WebUI reads its tool
+# connections only at start, hence the restart; pat-service /mcp/repowise/
+# and the Hermes entry follow REPOWISE_ENABLED (helm-up, hermes-up).
+REPOWISE_CHART = helm/repowise
+REPOWISE_RELEASE = repowise
+
+repowise-up:
+	@[ "$(REPOWISE_ENABLED)" = true ] || { echo "repowise-up: REPOWISE_ENABLED is not true in .env" >&2; exit 1; }
+	@[ -n "$(REPOWISE_PUBLIC_ORIGIN)" ] && [ -n "$(STACK_BASE_URL)" ] || { echo "repowise-up: REPOWISE_PUBLIC_ORIGIN and STACK_BASE_URL must be set in .env" >&2; exit 1; }
+	@[ -n "$(REPOWISE_PAT)" ] || { echo "repowise-up: REPOWISE_PAT is empty in .env (svc-repowise PAT, ADR 0018 section 6)" >&2; exit 1; }
+	@rc=$$($(KUBECTL) -n $(K8S_NAMESPACE) get deploy embeddings-bge-m3 -o jsonpath='{.spec.template.spec.runtimeClassName}/{.status.readyReplicas}' 2>/dev/null); \
+	if [ "$$rc" != "nvidia/1" ]; then \
+		echo "repowise-up: embeddings-bge-m3 must run in accelerator: gpu mode with 1 Ready replica (got '$$rc') -- docs/adr/0018 section 6a." >&2; \
+		exit 1; \
+	fi
+	$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise \
+		--from-literal=REPOWISE_API_KEY='$(REPOWISE_API_KEY)' \
+		--from-literal=OPENAI_API_KEY='$(REPOWISE_PAT)' \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise-credential \
+		--from-literal=credential='Bearer $(REPOWISE_API_KEY)' \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise-oidc \
+		--from-literal=client-secret='$(REPOWISE_OIDC_CLIENT_SECRET)' \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(HELM) upgrade --install $(REPOWISE_RELEASE) $(REPOWISE_CHART) \
+		--namespace $(K8S_NAMESPACE) \
+		--values $(REPOWISE_CHART)/values.yaml \
+		--set image=$(REPOWISE_IMAGE) \
+		--set publicOrigin=$(REPOWISE_PUBLIC_ORIGIN) \
+		--set stackOrigin=$(STACK_BASE_URL) \
+		--take-ownership \
+		$(HELM_FORCE_CONFLICTS) \
+		--wait --timeout 60m
+	$(KUBECTL) -n $(K8S_NAMESPACE) rollout restart deployment/openwebui
+
+repowise-down:
+	$(HELM) uninstall $(REPOWISE_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
+	$(KUBECTL) -n $(K8S_NAMESPACE) delete secret repowise repowise-credential repowise-oidc --ignore-not-found
+	$(KUBECTL) -n $(K8S_NAMESPACE) rollout restart deployment/openwebui
+
+provision-repowise-oidc:
+	./scripts/provision-repowise-oidc
 
 web-search-mcp-test:
 	cd web-search-mcp && go vet ./... && go test ./...
@@ -442,7 +489,8 @@ hermes-test:
 	cd hermes-broker && go vet ./... && go test ./...
 
 # Applies k8s/hermes, then the values it cannot hold itself because they
-# come from versions.lock.env and .env (WEB_SEARCH_ENABLED, docs/adr/0017).
+# come from versions.lock.env and .env (WEB_SEARCH_ENABLED, docs/adr/0017;
+# REPOWISE_ENABLED, docs/adr/0018).
 # Restarts the broker so it picks up a new catalog; running agents move to it
 # at their next idle point.
 hermes-up:
@@ -451,6 +499,7 @@ hermes-up:
 		--from-literal=HERMES_IMAGE=$(HERMES_IMAGE) \
 		--from-literal=HERMES_CATALOG_IMAGE=$(HERMES_CATALOG_IMAGE) \
 		--from-literal=WEB_SEARCH_ENABLED=$(or $(WEB_SEARCH_ENABLED),false) \
+		--from-literal=REPOWISE_ENABLED=$(or $(REPOWISE_ENABLED),false) \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n hermes-agents set image deployment/hermes-broker catalog-index=$(HERMES_CATALOG_IMAGE) broker=$(HERMES_BROKER_IMAGE)
 	$(KUBECTL) -n hermes-agents rollout restart deployment/hermes-broker

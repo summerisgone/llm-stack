@@ -147,10 +147,11 @@ type config struct {
 	// Hermes agent's inference key (hermes.go, docs/adr/0014 section 8).
 	hermesNamespace string
 	hermesTTLDays   int
-	// webSearchEnabled opens /mcp/web-search/ (mcp.go, docs/adr/0017);
-	// WEB_SEARCH_ENABLED from .env through the airgap-runtime Secret.
-	webSearchEnabled  bool
-	webSearchMCPURL   string
+	// mcpServers maps an enabled /mcp/<name>/ to its upstream URL (mcp.go,
+	// docs/adr/0017, docs/adr/0018 section 5). A name is present only when
+	// its flag (WEB_SEARCH_ENABLED, REPOWISE_ENABLED) is true in .env,
+	// through the airgap-runtime Secret.
+	mcpServers        map[string]string
 	mcpCallsPerMinute int
 }
 
@@ -295,9 +296,9 @@ func newMux(a *app) *http.ServeMux {
 	mux.HandleFunc("GET /v1/", a.proxy)
 	mux.HandleFunc("POST /v1/", a.proxy)
 	mux.HandleFunc("DELETE /v1/", a.proxy)
-	mux.HandleFunc("GET /mcp/web-search/", a.mcpProxy)
-	mux.HandleFunc("POST /mcp/web-search/", a.mcpProxy)
-	mux.HandleFunc("DELETE /mcp/web-search/", a.mcpProxy)
+	mux.HandleFunc("GET /mcp/", a.mcpProxy)
+	mux.HandleFunc("POST /mcp/", a.mcpProxy)
+	mux.HandleFunc("DELETE /mcp/", a.mcpProxy)
 	return mux
 }
 
@@ -377,13 +378,22 @@ func loadConfig() (config, error) {
 		hermesNamespace = "hermes-agents"
 	}
 	hermesTTLDays := readIntEnv("HERMES_PAT_TTL_DAYS", 7)
-	webSearchEnabled := os.Getenv("WEB_SEARCH_ENABLED") == "true"
-	webSearchMCPURL := strings.TrimRight(os.Getenv("WEB_SEARCH_MCP_URL"), "/")
-	if webSearchMCPURL == "" {
-		webSearchMCPURL = "http://web-search-mcp.airgap-ai-stack.svc.cluster.local:8080"
+	mcpServers := map[string]string{}
+	for _, s := range []struct{ name, flag, urlVar, def string }{
+		{"web-search", "WEB_SEARCH_ENABLED", "WEB_SEARCH_MCP_URL", "http://web-search-mcp.airgap-ai-stack.svc.cluster.local:8080"},
+		{"repowise", "REPOWISE_ENABLED", "REPOWISE_MCP_URL", "http://repowise-mcp.airgap-ai-stack.svc.cluster.local:7338/mcp"},
+	} {
+		if os.Getenv(s.flag) != "true" {
+			continue
+		}
+		u := strings.TrimRight(os.Getenv(s.urlVar), "/")
+		if u == "" {
+			u = s.def
+		}
+		mcpServers[s.name] = u
 	}
 	mcpCallsPerMinute := readIntEnv("MCP_CALLS_PER_MINUTE", 30)
-	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, hermesNamespace, hermesTTLDays, webSearchEnabled, webSearchMCPURL, mcpCallsPerMinute}, nil
+	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, hermesNamespace, hermesTTLDays, mcpServers, mcpCallsPerMinute}, nil
 }
 
 // readIntEnv reads an optional integer threshold, falling back to def when
@@ -719,7 +729,7 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 var errDatabaseUnavailable = errors.New("database unavailable")
 
 // lookupPAT resolves a live (not revoked, not expired) PAT and records its
-// use. Shared by /v1/ and /mcp/web-search/ so revocation cuts both.
+// use. Shared by /v1/ and /mcp/<name>/ so revocation cuts both.
 func (a *app) lookupPAT(ctx context.Context, token string) (id, owner, ownerName, tokenName string, err error) {
 	err = a.db.QueryRow(ctx, `SELECT id,owner_subject,owner_name,name FROM personal_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()`, a.tokenHash(token)).Scan(&id, &owner, &ownerName, &tokenName)
 	if err != nil {

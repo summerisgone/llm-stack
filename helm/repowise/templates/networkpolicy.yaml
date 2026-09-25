@@ -1,0 +1,58 @@
+# ADR 0018 sections 2, 4, 5. UI port from the edge Envoy pods only (the
+# injected-key path is the only way in); MCP port from pat-service only
+# (repowise's HTTP transport has no auth, upstream #1400).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: repowise
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: repowise
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: {{ .Values.gateway.name }}
+      ports:
+        - port: 3000
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pat-service
+      ports:
+        - port: 7338
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # LLM and embeddings (section 6).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pat-service
+      ports:
+        - port: 8080
+          protocol: TCP
+    # git over HTTPS to public hosts (stage 1).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml .Values.egressExcept | nindent 14 }}
+      ports:
+        - port: 443
+          protocol: TCP

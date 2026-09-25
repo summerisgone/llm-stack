@@ -1,0 +1,34 @@
+# Read by the Open WebUI Deployment as TOOL_SERVER_CONNECTIONS through a
+# configMapKeyRef with optional: true (k8s/overlays/remote-wsl-vllm-nvfp4/
+# openwebui-web-search-patch.yaml). Not rendered while no server is enabled,
+# so Open WebUI then has no tool servers. system_oauth sends the chat user's
+# Keycloak access token; pat-service validates it (ADR 0017 section 6).
+# config.enable is the admin switch; access_grants "user *" read makes it
+# visible to every signed-in user; users still enable the tool per chat.
+{{- $env := .Values.runtimeEnvironment | default dict }}
+{{- $conns := list }}
+{{- range .Values.openwebuiToolServers }}
+{{- if eq (toString (index $env .flag)) "true" }}
+{{- $conns = append $conns (dict
+  "type" "mcp"
+  "url" .url
+  "path" ""
+  "auth_type" "system_oauth"
+  "key" ""
+  "config" (dict "enable" true "access_grants" (list (dict "principal_type" "user" "principal_id" "*" "permission" "read")))
+  "info" (dict "id" .id "name" .name "description" .description)
+) }}
+{{- end }}
+{{- end }}
+{{- if $conns }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openwebui-tool-servers
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: openwebui-tool-servers
+data:
+  TOOL_SERVER_CONNECTIONS: |
+    {{- $conns | toJson | nindent 4 }}
+{{- end }}

@@ -10,7 +10,7 @@ modelClaim: embeddings-bge-m3-model
 # then `make vllm-up` (or `make sglang-up`) to apply the paired LLM memory
 # reduction or its reversal -- the two moves happen in one commit, never
 # separately. See the ADR's "Workload: one chart, two accelerator modes".
-accelerator: cpu
+accelerator: gpu
 
 inference:
   servedModelName: bge-m3
@@ -51,7 +51,7 @@ inference:
 # image or the vLLM pooling runner fallback on SM 12.0.
 image:
   cpu: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07
-  gpu: ""
+  gpu: ghcr.io/huggingface/text-embeddings-inference:120-1.9.3@sha256:aedf3b34836dc57289583142adcf2b93836cda0736ac8e6ce43691b9c2c67170
 
 # cpu-mode resources. Explicit requests/limits, no GPU resource, no
 # RuntimeClass -- this pod must never contend with vLLM/SGLang for the GPU.
@@ -102,7 +102,7 @@ resources:
 # sits outside scheduler GPU accounting (see the ADR's "gpu (opt-in)" note on
 # why requesting the extended resource is wrong here).
 gpu:
-  gpuMemoryBudgetGiB: 0
+  gpuMemoryBudgetGiB: 3
   # cpu: request == limit, same reasoning as the cpu-mode resources block
   # above (avoid the burst-then-CFS-throttle cycle that took the node down).
   resources:

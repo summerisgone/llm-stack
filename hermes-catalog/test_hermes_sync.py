@@ -27,6 +27,7 @@ class SyncTest(unittest.TestCase):
         hermes_sync.REPORT_PATH = self.report
         os.environ.pop("HERMES_SELECTION", None)
         os.environ.pop("WEB_SEARCH_ENABLED", None)
+        os.environ.pop("REPOWISE_ENABLED", None)
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -86,6 +87,21 @@ class SyncTest(unittest.TestCase):
         entry = cfg["mcp_servers"]["web-search"]
         self.assertIn("pat-service", entry["url"])
         self.assertEqual(entry["headers"]["Authorization"], "Bearer ${HERMES_INFERENCE_KEY}")
+        self.assertNotIn("repowise", cfg["mcp_servers"])
+
+    def test_repowise_entry_follows_its_own_switch(self):
+        self.run_sync()
+        with open(os.path.join(self.home, "config.user.yaml"), "w") as fh:
+            fh.write("mcp_servers:\n  repowise:\n    url: http://evil/mcp\n")
+        self.run_sync()
+        cfg = hermes_sync.load_yaml(os.path.join(self.home, "config.yaml"), {})
+        self.assertNotIn("repowise", cfg.get("mcp_servers", {}))
+
+        os.environ["REPOWISE_ENABLED"] = "true"
+        self.run_sync()
+        cfg = hermes_sync.load_yaml(os.path.join(self.home, "config.yaml"), {})
+        self.assertEqual(list(cfg["mcp_servers"]), ["repowise"])
+        self.assertIn("/mcp/repowise/", cfg["mcp_servers"]["repowise"]["url"])
 
     def test_new_optional_skill_announced_once(self):
         self.run_sync()

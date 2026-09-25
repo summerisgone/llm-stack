@@ -1170,6 +1170,12 @@ spec:
               key: WEB_SEARCH_ENABLED
               name: airgap-runtime
               optional: true
+        - name: REPOWISE_ENABLED
+          valueFrom:
+            secretKeyRef:
+              key: REPOWISE_ENABLED
+              name: airgap-runtime
+              optional: true
         - name: MCP_CALLS_PER_MINUTE
           value: "30"
         image: ghcr.io/summerisgone/pat-service:latest

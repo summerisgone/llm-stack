@@ -176,3 +176,22 @@ oidc:
   # cluster-internal service DNS (no /sso rewrite needed; Envoy handles that).
   internalIssuer: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack
   internalAIGatewayURL: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080
+
+# --- Open WebUI MCP tool servers ----------------------------------------------
+# Rendered into the ConfigMap openwebui-tool-servers (templates/
+# openwebui-tool-servers.yaml), one entry per server whose flag is "true" in
+# runtimeEnvironment (.env). Owned by this chart since ADR 0018 section 7
+# (amends ADR 0017 section 6): TOOL_SERVER_CONNECTIONS is one JSON list, so
+# the web-search and repowise releases cannot each own it. Open WebUI reads
+# it only at start; websearch-up/-down and repowise-up/-down restart it.
+openwebuiToolServers:
+  - flag: WEB_SEARCH_ENABLED
+    id: web-search
+    name: Web search
+    description: Search the public web and fetch pages (queries leave the company)
+    url: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/web-search/
+  - flag: REPOWISE_ENABLED
+    id: repowise
+    name: Repowise
+    description: Codebase intelligence over the indexed repositories (docs, search, dependency graph, history)
+    url: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/repowise/

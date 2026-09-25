@@ -36,6 +36,9 @@ REPORT_PATH = os.environ.get("REPORT_PATH", "/dev/termination-log")
 PERSONAL_DIRS = ("skills", "memories", "sessions", "logs")
 PERSONAL_FILES = ("config.user.yaml", "SOUL.user.md")
 
+# Catalog mcp_servers entry -> env flag that keeps it (set by hermes-broker).
+MCP_SERVER_FLAGS = {"web-search": "WEB_SEARCH_ENABLED", "repowise": "REPOWISE_ENABLED"}
+
 
 def load_yaml(path, default):
     try:
@@ -274,12 +277,14 @@ def sync():
 
     locked = load_yaml(os.path.join(catalog, "locked-keys.yaml"), [])
     catalog_cfg = load_yaml(os.path.join(catalog, "config.yaml"), {})
-    # Web search is opt-in per install (docs/adr/0017 section 7). Dropping the
-    # entry here lets the lock remove a user's copy of it as well.
-    if os.environ.get("WEB_SEARCH_ENABLED") != "true":
-        set_path(catalog_cfg, "mcp_servers.web-search", None, False)
-        if catalog_cfg.get("mcp_servers") == {}:
-            del catalog_cfg["mcp_servers"]
+    # MCP servers are opt-in per install (docs/adr/0017 section 7, 0018
+    # section 7). Dropping an entry here lets the lock remove a user's copy of
+    # it as well.
+    for entry, flag in MCP_SERVER_FLAGS.items():
+        if os.environ.get(flag) != "true":
+            set_path(catalog_cfg, "mcp_servers." + entry, None, False)
+    if catalog_cfg.get("mcp_servers") == {}:
+        del catalog_cfg["mcp_servers"]
     cfg = merged_config(
         catalog_cfg,
         load_yaml(os.path.join(home, "config.user.yaml"), {}),

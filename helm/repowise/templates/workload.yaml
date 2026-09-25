@@ -1,0 +1,196 @@
+# ADR 0018 sections 1-2 and 6. One pod, one RWO PVC: checkouts and per-repo
+# .repowise/ indexes under /data/workspace, shared by the API/UI (app), the MCP
+# server (mcp) and the fetch/update loop (sync).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: repowise-data
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: repowise-repos
+  namespace: {{ .Release.Namespace }}
+data:
+  # alias url branch, one per line; read by the workspace and sync scripts.
+  repos: |
+    {{- range .Values.repos }}
+    {{ .alias }} {{ .url }} {{ .branch }}
+    {{- end }}
+  # Clones missing repos; the first run inits the workspace, later runs add
+  # repos new to the list. Idempotent. Removing a repo from the list does not
+  # remove it from the workspace (runbook: repowise workspace remove).
+  workspace.sh: |
+    set -eu
+    mkdir -p /data/workspace
+    cd /data/workspace
+    while read -r alias url branch; do
+      [ -n "$alias" ] || continue
+      if [ ! -d "$alias/.git" ]; then
+        git clone --quiet --branch "$branch" --single-branch "$url" "$alias"
+      fi
+    done < /etc/repowise/repos
+    if [ ! -f .repowise-workspace.yaml ]; then
+      repowise init /data/workspace --all --yes {{ if .Values.llm.initialProse }}--prose{{ else }}--no-prose{{ end }} \
+        --no-editor-setup --no-hook --no-distill-hook --no-claude-md --no-agents --no-codex --no-save-key
+      exit 0
+    fi
+    while read -r alias url branch; do
+      [ -n "$alias" ] || continue
+      grep -q "^  alias: $alias\$" .repowise-workspace.yaml && continue
+      repowise workspace add "/data/workspace/$alias" --alias "$alias" {{ if .Values.llm.initialProse }}--docs{{ else }}--no-docs{{ end }}
+    done < /etc/repowise/repos
+  # Fetches every repo; on a new upstream commit resets the checkout and
+  # runs an incremental update of the workspace.
+  sync.sh: |
+    set -u
+    cd /data/workspace
+    while true; do
+      sleep {{ .Values.syncIntervalSeconds }}
+      changed=0
+      while read -r alias url branch; do
+        [ -d "$alias/.git" ] || continue
+        before=$(git -C "$alias" rev-parse HEAD)
+        git -C "$alias" fetch --quiet origin "$branch" || continue
+        git -C "$alias" reset --quiet --hard FETCH_HEAD
+        [ "$(git -C "$alias" rev-parse HEAD)" = "$before" ] || changed=1
+      done < /etc/repowise/repos
+      if [ "$changed" = 1 ]; then
+        repowise update /data/workspace --workspace --yes || echo "repowise update failed" >&2
+      fi
+    done
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: repowise
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: repowise
+spec:
+  selector:
+    app.kubernetes.io/name: repowise
+  ports:
+    - name: ui
+      port: 3000
+      targetPort: ui
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: repowise-mcp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: repowise
+spec:
+  selector:
+    app.kubernetes.io/name: repowise
+  ports:
+    - name: mcp
+      port: 7338
+      targetPort: mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: repowise
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: repowise
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: repowise
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: repowise
+      annotations:
+        checksum/repos: {{ toJson .Values.repos | sha256sum | trunc 16 }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # The image's repowise user (uid/gid 999, by name in the image, which
+        # runAsNonRoot cannot verify); fsGroup makes the PVC writable.
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: workspace
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "/etc/repowise/workspace.sh"]
+          env: {{- include "repowise.env" . | nindent 12 }}
+          volumeMounts: {{- include "repowise.mounts" . | nindent 12 }}
+          securityContext: {{- include "repowise.securityContext" . | nindent 12 }}
+          resources: {{- toYaml .Values.resources.sync | nindent 12 }}
+      containers:
+        - name: app
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          # The API detects workspace mode from its working directory.
+          workingDir: /data/workspace
+          env: {{- include "repowise.env" . | nindent 12 }}
+          ports:
+            - name: ui
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: ui
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: ui
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts: {{- include "repowise.mounts" . | nindent 12 }}
+          securityContext: {{- include "repowise.securityContext" . | nindent 12 }}
+          resources: {{- toYaml .Values.resources.app | nindent 12 }}
+        - name: mcp
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          workingDir: /data/workspace
+          command: ["repowise", "mcp", "/data/workspace", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "7338"]
+          env: {{- include "repowise.env" . | nindent 12 }}
+          ports:
+            - name: mcp
+              containerPort: 7338
+          readinessProbe:
+            tcpSocket:
+              port: mcp
+            periodSeconds: 10
+          volumeMounts: {{- include "repowise.mounts" . | nindent 12 }}
+          securityContext: {{- include "repowise.securityContext" . | nindent 12 }}
+          resources: {{- toYaml .Values.resources.mcp | nindent 12 }}
+        - name: sync
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "/etc/repowise/sync.sh"]
+          env: {{- include "repowise.env" . | nindent 12 }}
+          volumeMounts: {{- include "repowise.mounts" . | nindent 12 }}
+          securityContext: {{- include "repowise.securityContext" . | nindent 12 }}
+          resources: {{- toYaml .Values.resources.sync | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: repowise-data
+        - name: scripts
+          configMap:
+            name: repowise-repos
