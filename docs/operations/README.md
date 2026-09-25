@@ -57,7 +57,9 @@ For the vLLM launch settings, measured throughput, and Helm-provisioned Grafana
 dashboard, see [vLLM inference and monitoring](vllm-inference.md). For the
 optional SGLang, llama.cpp and external-API backends and how requests are
 routed to them by model name, see
-[inference backends and model routing](inference-backends.md).
+[inference backends and model routing](inference-backends.md). Web search
+for Hermes agents and Open WebUI (opt-in, not for air-gapped installs):
+[web search](web-search.md).
 
 ## Changing the model server
 

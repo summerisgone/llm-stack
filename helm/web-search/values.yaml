@@ -1,0 +1,68 @@
+# docs/adr/0017-web-search-mcp-openserp-kagent.md (search workload from
+# docs/adr/0016-self-hosted-web-search-openserp.md). Installed only when
+# WEB_SEARCH_ENABLED=true in .env: `make websearch-up`. Air-gapped installs
+# never run it.
+
+# OPENSERP_IMAGE, NGINX_UNPRIVILEGED_IMAGE and WEB_SEARCH_MCP_IMAGE in
+# versions.lock.env are the source of truth; keep these in step by hand.
+image:
+  openserp: docker.io/karust/openserp:0.8.12@sha256:9f5c5736fc7434862fa23dd0955e53d4003ffe42f151a5e1297085decf3100b7
+  sidecar: docker.io/nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+  # No digest until the first CI build of web-search-mcp/ is published;
+  # pin it here and in versions.lock.env then.
+  mcp: ghcr.io/summerisgone/web-search-mcp:latest
+
+# 0016 names searxng as the fallback; only openserp is implemented until the
+# V5 bake-off (0016 V3) actually chooses searxng.
+provider: openserp
+
+openserp:
+  # Appended by the sidecar to every /mega/search. Finalized by the bake-off.
+  engines: google,bing,duckduckgo,yandex
+  mode: balanced
+  # Upstream default 90s. A slow engine returns partial results instead.
+  megaTimeoutSeconds: 20
+  # Upstream default 6 Chromium processes; V6 sets it from measurements.
+  maxProcesses: 2
+  cacheTTLSeconds: 600
+  # /dev/shm for Chromium; upstream compose uses 2gb.
+  shmSize: 1Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+mcp:
+  # Server-side cap on fetch_url text. V6 sets it from prompt-token cost.
+  fetchMaxChars: 20000
+  fetchMaxBytes: 2097152
+  fetchTimeoutSeconds: 20
+  # Denied on top of the built-in private/loopback/link-local/CGNAT ranges.
+  # k3s defaults (pod 10.42/16, service 10.43/16) are already inside 10/8;
+  # list them here if the cluster uses public-looking CIDRs.
+  extraDenyCIDRs: ""
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# Egress to the internet: everything except these ranges, on 80/443 only.
+egressExcept:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - 169.254.0.0/16
+  - 100.64.0.0/10
+  - 127.0.0.0/8
+
+# Open WebUI MCP tool-server connection (ADR 0017 section 6). Rendered into
+# the ConfigMap openwebui-tool-servers, which the Open WebUI Deployment reads
+# with optional: true -- so it exists only while this release is installed.
+openwebui:
+  mcpURL: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/web-search/

@@ -126,6 +126,9 @@ type PodsConfig struct {
 	StartTimeout  time.Duration
 	StopGrace     int64
 	ExtraAgentEnv map[string]string
+	// WebSearch keeps the web-search MCP entry in the synced config.yaml
+	// (hermes-sync, docs/adr/0017 section 5).
+	WebSearch bool
 }
 
 // PodsBackend: one pod per active user, mounting only that user's RWO PVC.
@@ -428,6 +431,7 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, spec StartSpec) err
 				{"name": "HERMES_HOME", "value": "/opt/data/home"},
 				{"name": "HERMES_SELECTION", "valueFrom": map[string]any{"fieldRef": map[string]string{
 					"fieldPath": "metadata.annotations['" + annSelection + "']"}}},
+				{"name": "WEB_SEARCH_ENABLED", "value": fmt.Sprint(b.cfg.WebSearch)},
 			},
 			"securityContext": sc(10001),
 			"resources": map[string]any{

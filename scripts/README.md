@@ -40,6 +40,11 @@ development hostnames at a local SSH tunnel; `GRAFANA_BASE_URL` and
   Set `INFERENCE_SMOKE_MODEL` to
   aim it at another backend's model name (`llamacpp-local`, …).
 - `vllm-nvfp4-smoke-test` — the GPU Deployment on its own.
+- `websearch-smoke-test` — web search boundaries (ADR 0017 V4): which pods
+  reach web-search-mcp and the OpenSERP sidecar, `/mcp/web-search/`
+  authentication, identity headers replaced by pat-service, and `fetch_url`
+  refusing private, cluster and metadata addresses. Set `WEBSEARCH_SMOKE_PAT`
+  for the authenticated checks.
 
 Set `INFERENCE_SMOKE_VERIFY_CHAT=false` to skip the calls that reach the model
 while keeping every other boundary under test; `make smoke-nogpu` is that mode

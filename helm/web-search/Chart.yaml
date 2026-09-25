@@ -1,0 +1,6 @@
+apiVersion: v2
+name: web-search
+description: OpenSERP behind an engine-pinning sidecar, and web-search-mcp in front of it; reached only through pat-service /mcp/web-search/
+version: 0.1.0
+appVersion: "0.8.12"
+type: application

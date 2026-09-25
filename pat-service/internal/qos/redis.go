@@ -34,6 +34,20 @@ func streakCountKey(sub string) string       { return "qos:streak:count:" + sub 
 func dispatchKey(sub, session string) string { return "qos:dispatch:" + sub + ":" + session }
 func spendKey(sub string) string             { return "qos:spend:" + sub }
 
+// IncrWindow increments a fixed-window counter and returns its new value;
+// the key expires with the window. Used for the per-user MCP call limit
+// (docs/adr/0017-web-search-mcp-openserp-kagent.md section 3).
+func (s *RedisStore) IncrWindow(ctx context.Context, key string, window time.Duration) (int64, error) {
+	n, err := s.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	if n == 1 {
+		s.rdb.Expire(ctx, key, window)
+	}
+	return n, nil
+}
+
 func (s *RedisStore) GetSessionForChain(ctx context.Context, sub, link string) (string, error) {
 	v, err := s.rdb.Get(ctx, chainKey(sub, link)).Result()
 	if err == redis.Nil {

@@ -274,6 +274,17 @@ spec:
               value: /etc/pat-service/pricing.json
             - name: QOS_MONTHLY_LIMIT
               value: "0"
+            # /mcp/web-search/ (docs/adr/0017-web-search-mcp-openserp-kagent.md
+            # section 3) answers 404 unless WEB_SEARCH_ENABLED=true in .env,
+            # which helm-env-values copies into airgap-runtime.
+            - name: WEB_SEARCH_ENABLED
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: WEB_SEARCH_ENABLED
+                  optional: true
+            - name: MCP_CALLS_PER_MINUTE
+              value: "30"
           volumeMounts:
             - name: pricing
               mountPath: /etc/pat-service

@@ -39,3 +39,9 @@ patches:
       version: v1
       kind: Deployment
       name: openwebui
+  - path: openwebui-web-search-patch.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: openwebui

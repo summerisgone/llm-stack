@@ -37,6 +37,20 @@ agent:
     - tts
     - spotify
     - homeassistant
+    # Hermes' built-in web_search/web_extract: web access goes only through
+    # the web-search MCP server below (ADR 0017 section 5).
+    - web
+
+# Web search through pat-service with the user's own PAT (docs/adr/0017
+# section 5); pat-service attributes, rate-limits and forwards to
+# web-search-mcp. hermes-sync removes this entry unless the agent's sync
+# container has WEB_SEARCH_ENABLED=true.
+mcp_servers:
+  web-search:
+    url: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/web-search/
+    headers:
+      Authorization: Bearer ${HERMES_INFERENCE_KEY}
+    timeout: 60
 
 curator:
   enabled: false

@@ -1,0 +1,67 @@
+{{- if ne .Values.provider "openserp" }}
+{{- fail "only provider: openserp is implemented (ADR 0016/0017)" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-search
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: web-search
+data:
+  # Everything not listed keeps the upstream default (ADR 0016 "OpenSERP
+  # configuration"). server.host is forced by env below: the image sets
+  # OPENSERP_SERVER_HOST=0.0.0.0, and env wins over this file.
+  config.yaml: |
+    app:
+      log_format: json
+      max_processes: {{ .Values.openserp.maxProcesses }}
+      mega_timeout: {{ .Values.openserp.megaTimeoutSeconds }}s
+    extract:
+      enabled: false
+    proxies:
+      allow_request_proxy_url: false
+    cache:
+      ttl_seconds: {{ .Values.openserp.cacheTTLSeconds }}
+    resilience:
+      max_retries: 1
+    circuit_breaker:
+      failures: 3
+      recovery_seconds: 300
+      successes: 1
+    cors:
+      enabled: false
+    captcha:
+      solver_enabled: false
+  # The Service's only port. Exposes /mega/search and /health, pins engines
+  # and mode, drops proxy/profile headers. OpenSERP listens on 127.0.0.1.
+  nginx.conf: |
+    pid /tmp/nginx.pid;
+    worker_processes 1;
+    events { worker_connections 256; }
+    http {
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path /tmp/proxy_temp;
+      fastcgi_temp_path /tmp/fastcgi_temp;
+      uwsgi_temp_path /tmp/uwsgi_temp;
+      scgi_temp_path /tmp/scgi_temp;
+      log_format main escape=json '{"status":$status,"path":"$uri","upstream_status":"$upstream_status","upstream_time":"$upstream_response_time","request_time":$request_time}';
+      access_log /dev/stdout main;
+      server_tokens off;
+      server {
+        listen 8080;
+        location = /health {
+          limit_except GET { deny all; }
+          proxy_pass http://127.0.0.1:7000/health;
+        }
+        location = /mega/search {
+          limit_except GET { deny all; }
+          set $q "text=$arg_text&limit=$arg_limit&engines={{ .Values.openserp.engines }}&mode={{ .Values.openserp.mode }}";
+          proxy_pass http://127.0.0.1:7000/mega/search?$q;
+          proxy_pass_request_headers off;
+          proxy_set_header Accept application/json;
+          proxy_read_timeout {{ add .Values.openserp.megaTimeoutSeconds 5 }}s;
+        }
+        location / { return 404; }
+      }
+    }

@@ -7,6 +7,7 @@
 - terminal.cwd
 - skills.external_dirs
 - agent.disabled_toolsets
+- mcp_servers.web-search
 - curator.enabled
 - updates.check
 - telemetry

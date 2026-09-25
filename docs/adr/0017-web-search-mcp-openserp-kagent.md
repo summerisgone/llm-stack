@@ -8,6 +8,13 @@ MCP tool-server support has been checked against a running system, so each of
 those assumptions is listed under "Verification stages" and must be closed
 before this is accepted.
 
+Implementation order steps 1-3 are in the repository (2026-09-25):
+`web-search-mcp/`, `helm/web-search`, the pat-service `/mcp/web-search/`
+route, the Hermes profile entry and the Open WebUI tool connection. V1 was
+answered from the kagent sources and blocks the `kagent` backend (section 4);
+V0, V2 and V3 are closed as far as source reading goes (recorded under each
+stage). Nothing has run on the cluster yet.
+
 Supersedes [ADR 0016](0016-self-hosted-web-search-openserp.md) (Proposed,
 never deployed). 0016's search workload -- the `helm/web-search` release,
 OpenSERP configuration, engine-pinning sidecar, SearXNG fallback, network
@@ -157,6 +164,31 @@ Consequences of placing it here:
   Substrate, if the pinned kagent offers one (V1). If it does not, VS
   becomes a precondition of `HERMES_BACKEND=kagent`, and web search for
   Hermes ships on the `pods` backend first (section 5 works on both).
+
+**V1 answer (2026-09-25, from source; no kagent release pinned).** There is
+no non-Substrate runtime, so VS is a precondition and nothing in this
+section is implemented yet: no `kagent` release, no `RemoteMCPServer`, no
+broker backend. Web search for Hermes ships on `pods`.
+
+- kagent v0.10.2 (`go/api/v1alpha2/agentharness_types.go`): `AgentHarness`
+  has `backend: openclaw|hermes`, and a CEL rule makes `spec.substrate`
+  required. Snapshot locations must match `^gs://` (GCS only), which an
+  air-gapped install cannot provide. There is no gateway-token Secret
+  reference; per-harness settings are `env []EnvVar` and `modelConfigRef`.
+- kagent main / v1.0.0-alpha3 (`go/api/v1alpha3/harness_types.go`):
+  `AgentHarness` is replaced by `Harness` with runtimes
+  `kagent|codex|claude|byo`. There is no `hermes` backend, so Hermes would be
+  a BYO image implementing kagent's private A2A contract. `spec.substrate`
+  (WorkerPool and snapshot policy) is required, and the workload image must be
+  pinned by digest.
+- `RemoteMCPServer` (v1alpha3) has `url`, `protocol`, `headersFrom`,
+  `timeout` and `tls`. Headers are set per server, not per agent, so a
+  per-user PAT cannot be expressed. Section 5's Hermes-side config is
+  therefore the path for Hermes in every case.
+- The ADR 0014 V1 gVisor result (runsc on the reference host) covers only
+  the "runs under gVisor" half of VS. Checkpoint/restore and a snapshot
+  store reachable without GCS are still open, and in v1.0 a BYO Hermes image
+  is needed as well.
 - The agent sandbox policies of `k8s/hermes/networkpolicy.yaml` apply to
   harness pods unchanged: DNS and pat-service only.
 
@@ -174,8 +206,13 @@ In `config/hermes/base-profile/config.yaml`:
 - the MCP entry added to `locked-keys.yaml`, so a user's `config.user.yaml`
   cannot point it elsewhere or drop the header.
 
-hermes-sync writes the entry only when the catalog build has
-`WEB_SEARCH_ENABLED=true`; otherwise it removes it. If V1/V2 show that
+hermes-sync writes the entry only when `WEB_SEARCH_ENABLED=true`; otherwise
+it removes it. As implemented, this is a runtime switch rather than a catalog
+build flag, so one catalog image serves both modes. `make hermes-up` puts
+`.env`'s value into the `hermes-images` ConfigMap, the broker passes it to
+the agent's sync init container, and hermes-sync drops
+`mcp_servers.web-search` from the catalog config before the merge. The lock
+then removes any user copy as well. If V1/V2 show that
 kagent hands tools to Hermes itself and a duplicate entry in `config.yaml`
 conflicts, the `config.yaml` entry is dropped for the `kagent` backend and
 kept for `pods`.
@@ -192,6 +229,12 @@ server connections, confirmed in V3) to pat-service `/mcp/web-search/`
 with `auth_type: system_oauth`, so the call is attributed to the chat user
 through the Keycloak token path of section 3.
 
+- As implemented, `TOOL_SERVER_CONNECTIONS` is read through an optional
+  `configMapKeyRef` from the ConfigMap `openwebui-tool-servers`. That
+  ConfigMap is owned by the `web-search` release, so the connection exists
+  exactly while search is installed. The connection carries `access_grants`
+  of `user *` / `read`; without grants, v0.11.4 makes a connection
+  admin-only (`has_connection_access`).
 - The tool is not enabled by default in a chat or model; the user enables
   it per chat. This is the consent point 0016 placed on the "Web search"
   toggle; V3 confirms the model is not offered the tool otherwise.
@@ -260,6 +303,19 @@ Each stage has an exit condition. A failed gate stops the stages after it.
   redirect to private, DNS answer with mixed public/private addresses).
 - Check whether an upstream OpenSERP MCP server exists and meets section 2.
 
+Recorded 2026-09-25:
+- `@openserp/mcp` 0.1.7 exists. It is Node/TypeScript and exposes search
+  tools against OpenSERP OSS or Cloud, but has no guarded page fetch, so
+  section 2 stands.
+- `helm template` and `helm lint` of `helm/web-search` are clean.
+  `make verify` now includes them; its `preflight` step needs the cluster.
+- `fetch_url` guard tests are in `web-search-mcp/cmd/web-search-mcp/guard_test.go`.
+- The chart implements `provider: openserp` only. It fails on any other
+  value until the V5 bake-off actually picks SearXNG.
+- Digests are pinned for OpenSERP (`0.8.12`, the Docker Hub tag has no `v`)
+  and nginx-unprivileged. `WEB_SEARCH_MCP_IMAGE` gets its digest after the
+  first CI build.
+
 ### V1 -- kagent on the pinned release
 
 - Record: `AgentHarness` fields and available runtimes (is a non-Substrate
@@ -279,6 +335,23 @@ waits for 0014 VS.
 
 Exit: section 5 finalized with exact keys.
 
+From source (Hermes `v2026.9.14`, 2026-09-25), still to be confirmed on a
+live agent:
+- `mcp_servers.<name>.{url, headers, timeout}`; `${VAR}` is interpolated in
+  every string value, headers included (`tools/mcp_tool_config.py`).
+- Streamable HTTP is the default for `url`. The client preflights with
+  HEAD/GET and accepts web-search-mcp's 405 (stateless mode).
+- The built-in web toolset is `web` (`web_search`, `web_extract`,
+  `toolsets.py`) and is added to `agent.disabled_toolsets`.
+
+Live run (2026-09-25, reference k3d host, pods backend, gVisor agent). A
+temporary user's agent synced the `mcp_servers.web-search` entry. It answered
+a question by calling `web_search` and then `fetch_url`; web-search-mcp
+logged both under the user's Keycloak `sub`, and pat-service counted them in
+`patsvc_mcp_calls_total`. The HEAD/GET preflight got 405 and went on. V2 is
+closed except for checking that disabling `web` actually removes the
+built-in tools from the model's tool list.
+
 ### V3 -- Open WebUI v0.11.3 MCP tool server
 
 - Tool server connection with `system_oauth` reaches pat-service with the
@@ -287,6 +360,17 @@ Exit: section 5 finalized with exact keys.
   it.
 
 Exit: section 6 finalized, or the fallback recorded.
+
+From source (Open WebUI `v0.11.4`, the pinned version, 2026-09-25):
+- `TOOL_SERVER_CONNECTIONS` accepts `type: mcp`.
+- `auth_type: system_oauth` sends the chat user's `access_token` as
+  `Bearer` (`utils/tools.py` `build_tool_server_headers`).
+- Access is governed by `config.access_grants`.
+
+Still open on a live system:
+- The token's `iss` must equal pat-service's `OIDC_ISSUER` (`verifyJWT`
+  checks it; there is no audience check).
+- The per-chat consent behaviour.
 
 ### V4 -- boundaries (`scripts/websearch-smoke-test`)
 
@@ -301,6 +385,19 @@ Exit: section 6 finalized, or the fallback recorded.
   resolving to a private address -> refused.
 
 Exit: all pass twice.
+
+Passed twice on 2026-09-25 with a temporary user (`scripts/websearch-smoke-test`
+at that commit). Also checked by hand:
+- A Keycloak access token (issuer
+  `https://<site>/sso/realms/ai-stack`, role `ai-user`) lists tools through
+  `/mcp/`.
+- After the PAT is revoked on `/api/tokens/<id>`, both `/mcp/` and `/v1/`
+  answer 401.
+- HTTPS egress works from web-search-mcp. OpenSERP returned real results
+  (kubernetes.io, ru.wikipedia.org); which engines answered was not recorded.
+- A direct `fetch_url` of `https://www.google.com/` timed out in the TLS
+  handshake while other HTTPS sites worked. Noted for V5.
+- Not covered: a token without the role -> 403.
 
 ### V5 -- search quality and reliability
 

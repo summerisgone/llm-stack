@@ -12,7 +12,7 @@ include versions.lock.env
 # Local/site-specific overrides (gitignored). Not required to exist.
 -include .env
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up hermes-catalog hermes-broker-image hermes-k3d-load hermes-up hermes-down hermes-smoke hermes-test
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up hermes-catalog hermes-broker-image hermes-k3d-load hermes-up hermes-down hermes-smoke hermes-test websearch-up websearch-down websearch-smoke web-search-mcp-test
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -271,6 +271,33 @@ embeddings-up:
 embeddings-down:
 	$(HELM) uninstall $(EMBEDDINGS_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
 
+# Web search (docs/adr/0017-web-search-mcp-openserp-kagent.md): OpenSERP,
+# its engine-pinning sidecar and web-search-mcp, plus the ConfigMap Open WebUI
+# reads its MCP tool connection from. Open WebUI reads that env only at start,
+# hence the restart. pat-service /mcp/ and the Hermes profile entry follow
+# WEB_SEARCH_ENABLED in .env (helm-up, hermes-up), not this release.
+WEBSEARCH_CHART = helm/web-search
+WEBSEARCH_RELEASE = web-search
+
+websearch-up:
+	$(HELM) upgrade --install $(WEBSEARCH_RELEASE) $(WEBSEARCH_CHART) \
+		--namespace $(K8S_NAMESPACE) \
+		--values $(WEBSEARCH_CHART)/values.yaml \
+		--take-ownership \
+		$(HELM_FORCE_CONFLICTS) \
+		--wait --timeout 10m
+	$(KUBECTL) -n $(K8S_NAMESPACE) rollout restart deployment/openwebui
+
+websearch-down:
+	$(HELM) uninstall $(WEBSEARCH_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
+	$(KUBECTL) -n $(K8S_NAMESPACE) rollout restart deployment/openwebui
+
+websearch-smoke:
+	./scripts/websearch-smoke-test
+
+web-search-mcp-test:
+	cd web-search-mcp && go vet ./... && go test ./...
+
 llmd-up:
 	$(HELM) upgrade --install llmd-qwen-test oci://ghcr.io/llm-d/charts/llm-d-router-standalone --version $(LLMD_ROUTER_CHART_VERSION) --namespace $(K8S_NAMESPACE) --create-namespace --values config/llmd/router-nvfp4-values.yaml --wait
 	$(KUBECTL) -n $(K8S_NAMESPACE) rollout status deployment/llmd-qwen-test-epp --timeout=5m
@@ -287,6 +314,9 @@ stack-up: gateway-up operators-up
 	$(MAKE) vllm-up
 	$(MAKE) embeddings-up
 	$(MAKE) helm-up
+ifeq ($(WEB_SEARCH_ENABLED),true)
+	$(MAKE) websearch-up
+endif
 	$(KUBECTL) apply -f $(KUSTOMIZE_DIR)/monitoring-referencegrant.yaml
 	$(KUBECTL) -n $(K8S_NAMESPACE) wait --for=condition=Ready cluster/pat-db --timeout=180s
 	$(KUBECTL) -n $(K8S_NAMESPACE) rollout restart deployment/otel-collector deployment/prometheus
@@ -372,6 +402,8 @@ pat-smoke:
 verify: preflight render-check gpu-objects-config
 	$(HELM) lint $(HELM_CHART) --values $(HELM_VALUES)
 	$(HELM) template $(HELM_RELEASE) $(HELM_CHART) --namespace $(K8S_NAMESPACE) --values $(HELM_VALUES) >/dev/null
+	$(HELM) lint $(WEBSEARCH_CHART)
+	$(HELM) template $(WEBSEARCH_RELEASE) $(WEBSEARCH_CHART) --namespace $(K8S_NAMESPACE) >/dev/null
 	printf '%s\n' 'Repository configuration is valid.'
 
 # Fails if templates/resources.yaml or manifest.yaml is not what
@@ -409,14 +441,16 @@ hermes-test:
 	python3 -m unittest discover -s hermes-catalog -p 'test_*.py'
 	cd hermes-broker && go vet ./... && go test ./...
 
-# Applies k8s/hermes, then the two values it cannot hold itself because they
-# come from versions.lock.env. Restarts the broker so it picks up a new
-# catalog; running agents move to it at their next idle point.
+# Applies k8s/hermes, then the values it cannot hold itself because they
+# come from versions.lock.env and .env (WEB_SEARCH_ENABLED, docs/adr/0017).
+# Restarts the broker so it picks up a new catalog; running agents move to it
+# at their next idle point.
 hermes-up:
 	$(KUBECTL) apply -k $(HERMES_OVERLAY)
 	$(KUBECTL) -n hermes-agents create configmap hermes-images \
 		--from-literal=HERMES_IMAGE=$(HERMES_IMAGE) \
 		--from-literal=HERMES_CATALOG_IMAGE=$(HERMES_CATALOG_IMAGE) \
+		--from-literal=WEB_SEARCH_ENABLED=$(or $(WEB_SEARCH_ENABLED),false) \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n hermes-agents set image deployment/hermes-broker catalog-index=$(HERMES_CATALOG_IMAGE) broker=$(HERMES_BROKER_IMAGE)
 	$(KUBECTL) -n hermes-agents rollout restart deployment/hermes-broker

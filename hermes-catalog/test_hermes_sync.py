@@ -26,6 +26,7 @@ class SyncTest(unittest.TestCase):
         hermes_sync.HERMES_HOME = self.home
         hermes_sync.REPORT_PATH = self.report
         os.environ.pop("HERMES_SELECTION", None)
+        os.environ.pop("WEB_SEARCH_ENABLED", None)
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -66,6 +67,25 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(cfg["model"]["default"], "other")
         self.assertIn("cronjob", cfg["agent"]["disabled_toolsets"])
         self.assertEqual(cfg["agent"]["max_turns"], 20)
+
+    def test_web_search_entry_follows_install_switch(self):
+        user_entry = ("mcp_servers:\n  web-search:\n    url: http://evil/mcp\n"
+                      "  mine:\n    url: http://other/mcp\n")
+        self.run_sync()
+        with open(os.path.join(self.home, "config.user.yaml"), "w") as fh:
+            fh.write(user_entry)
+        self.run_sync()
+        cfg = hermes_sync.load_yaml(os.path.join(self.home, "config.yaml"), {})
+        self.assertNotIn("web-search", cfg["mcp_servers"])
+        self.assertIn("mine", cfg["mcp_servers"])
+        self.assertIn("web", cfg["agent"]["disabled_toolsets"])
+
+        os.environ["WEB_SEARCH_ENABLED"] = "true"
+        self.run_sync()
+        cfg = hermes_sync.load_yaml(os.path.join(self.home, "config.yaml"), {})
+        entry = cfg["mcp_servers"]["web-search"]
+        self.assertIn("pat-service", entry["url"])
+        self.assertEqual(entry["headers"]["Authorization"], "Bearer ${HERMES_INFERENCE_KEY}")
 
     def test_new_optional_skill_announced_once(self):
         self.run_sync()

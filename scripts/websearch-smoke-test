@@ -1,0 +1,149 @@
+#!/usr/bin/env sh
+set -eu
+
+# Web search boundaries (docs/adr/0017-web-search-mcp-openserp-kagent.md
+# stage V4): who can reach web-search-mcp and the OpenSERP sidecar, pat-service
+# /mcp/web-search/ authentication and identity headers, and fetch_url's SSRF
+# guard against private and cluster addresses.
+#
+# Needs `make websearch-up` and WEB_SEARCH_ENABLED=true applied to pat-service
+# (`make helm-up`). The authenticated checks need a live PAT:
+#   WEBSEARCH_SMOKE_PAT=$(scripts/kc-pat-issue <user> <password> ws-smoke 1 | awk '/^token:/{print $2}')
+# Without it only the unauthenticated and network checks run.
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+hns=${HERMES_NAMESPACE:-hermes-agents}
+pat=${WEBSEARCH_SMOKE_PAT:-}
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+pass() { printf 'ok   %s\n' "$*"; }
+skip() { printf 'skip %s\n' "$*"; }
+
+free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+
+for d in web-search web-search-mcp pat-service openwebui; do
+  kubectl -n "$namespace" rollout status "deployment/$d" --timeout=120s >/dev/null
+done
+pass "web-search, web-search-mcp, pat-service and openwebui are rolled out"
+
+# --- network boundary ------------------------------------------------------
+# reach <deployment> <container> <url>: exit 0 if the URL answers at all
+# (an HTTP error status still means the connection was allowed).
+reach() {
+  out=$(kubectl -n "$namespace" exec "deployment/$1" -c "$2" -- wget -q -T 5 -O /dev/null "$3" 2>&1) && return 0
+  case "$out" in *"server returned error"*) return 0 ;; esac
+  return 1
+}
+reach_py() {
+  kubectl -n "$namespace" exec "deployment/$1" -- python3 -c "
+import sys, urllib.request, urllib.error
+try:
+    urllib.request.urlopen('$2', timeout=5)
+except urllib.error.HTTPError:
+    pass
+except Exception:
+    sys.exit(1)
+" >/dev/null 2>&1
+}
+
+mcp_svc="http://web-search-mcp.$namespace.svc.cluster.local:8080/healthz"
+sidecar_svc="http://web-search.$namespace.svc.cluster.local/health"
+
+reach pat-service pat-service "$mcp_svc" || fail "pat-service cannot reach web-search-mcp"
+pass "pat-service -> web-search-mcp allowed"
+reach web-search-mcp web-search-mcp "$sidecar_svc" || fail "web-search-mcp cannot reach the sidecar"
+pass "web-search-mcp -> web-search sidecar allowed"
+if reach_py openwebui "$mcp_svc"; then fail "openwebui reaches web-search-mcp directly"; fi
+pass "openwebui -> web-search-mcp refused"
+if reach_py openwebui "$sidecar_svc"; then fail "openwebui reaches the OpenSERP sidecar"; fi
+pass "openwebui -> web-search sidecar refused"
+if reach pat-service pat-service "$sidecar_svc"; then fail "pat-service reaches the OpenSERP sidecar"; fi
+pass "pat-service -> web-search sidecar refused"
+if reach web-search-mcp web-search-mcp "http://keycloak.$namespace.svc.cluster.local:8080/"; then
+  fail "web-search-mcp egress reaches keycloak"
+fi
+pass "web-search-mcp -> keycloak refused by egress policy"
+
+agent=$(kubectl -n "$hns" get pods -l app.kubernetes.io/component=hermes-agent \
+  --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+if [ -n "$agent" ]; then
+  if kubectl -n "$hns" exec "$agent" -c hermes -- /opt/hermes/.venv/bin/python -c "
+import urllib.request; urllib.request.urlopen('$mcp_svc', timeout=5)" >/dev/null 2>&1; then
+    fail "hermes agent $agent reaches web-search-mcp directly"
+  fi
+  pass "hermes agent -> web-search-mcp refused"
+else
+  skip "no running hermes agent to test agent -> web-search-mcp"
+fi
+
+# --- pat-service /mcp/web-search/ -----------------------------------------
+port=$(free_port)
+kubectl -n "$namespace" port-forward svc/pat-service "$port:8080" >/dev/null 2>&1 &
+pf_pid=$!
+trap 'kill "$pf_pid" 2>/dev/null || true' EXIT INT TERM
+base="http://127.0.0.1:$port/mcp/web-search/"
+i=0
+until curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz" 2>/dev/null; do
+  i=$((i + 1))
+  [ "$i" -lt 30 ] || fail "pat-service port-forward did not come up"
+  sleep 1
+done
+
+status() { curl -s -o /dev/null -w '%{http_code}' -X POST "$base" -H 'Content-Type: application/json' "$@" -d '{}'; }
+[ "$(status)" = 401 ] || fail "/mcp/ without credentials is not 401"
+[ "$(status -H 'Authorization: Bearer sk-not-a-real-token')" = 401 ] || fail "/mcp/ with an unknown PAT is not 401"
+[ "$(status -H 'Authorization: Bearer a.b.c')" = 401 ] || fail "/mcp/ with a forged JWT is not 401"
+pass "/mcp/ rejects missing, unknown and forged credentials"
+
+if [ -z "$pat" ]; then
+  skip "WEBSEARCH_SMOKE_PAT not set: authenticated and SSRF checks"
+  exit 0
+fi
+
+call() {
+  curl -fsS -X POST "$base" \
+    -H "Authorization: Bearer $pat" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'X-User-Id: spoofed-user' -H 'X-Pat-Token-Id: spoofed-token' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}"
+}
+refused() {
+  out=$(call fetch_url "{\"url\":\"$1\"}") || fail "fetch_url $1: request failed"
+  # The guard's own error, not a network failure that happens to look like one.
+  printf '%s' "$out" | grep -q 'destination not allowed' || fail "fetch_url $1 was not refused by the guard: $out"
+  pass "fetch_url $1 refused"
+}
+
+out=$(call web_search '{"query":"kubernetes networkpolicy","limit":3}') || fail "web_search request failed"
+printf '%s' "$out" | grep -q 'UNTRUSTED WEB CONTENT' || fail "web_search result not marked untrusted: $out"
+if printf '%s' "$out" | grep -q '"isError":true'; then
+  fail "web_search returned an error: $out"
+fi
+printf '%s' "$out" | grep -q 'https\?://' || fail "web_search returned no results (engines blocked?): $out"
+pass "web_search through pat-service returns marked results"
+
+kc_ip=$(kubectl -n "$namespace" get svc keycloak -o jsonpath='{.spec.clusterIP}')
+node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+refused "http://$kc_ip/"
+refused "http://$node_ip/"
+refused "http://169.254.169.254/latest/meta-data/"
+refused "http://[::1]/"
+refused "http://keycloak.$namespace.svc.cluster.local/"
+refused "http://httpbin.org/redirect-to?url=http%3A%2F%2F169.254.169.254%2F"
+refused "http://example.com:8080/"
+
+logs=$(kubectl -n "$namespace" logs deployment/web-search-mcp --since=5m)
+if printf '%s' "$logs" | grep -q 'spoofed-'; then
+  fail "client-supplied X-User-Id / X-Pat-Token-Id reached web-search-mcp"
+fi
+printf '%s' "$logs" | grep '"tool call"' | tail -n 1 | grep -q '"user":"[^"]' \
+  || fail "web-search-mcp did not log a server-derived user"
+pass "identity headers are replaced by pat-service"
+
+printf '%s\n' 'Web search smoke test passed.'

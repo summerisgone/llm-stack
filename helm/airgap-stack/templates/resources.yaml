@@ -899,6 +899,14 @@ spec:
     spec:
       containers:
       - env:
+        - name: ENABLE_WEB_SEARCH
+          value: "false"
+        - name: TOOL_SERVER_CONNECTIONS
+          valueFrom:
+            configMapKeyRef:
+              key: TOOL_SERVER_CONNECTIONS
+              name: openwebui-tool-servers
+              optional: true
         - name: OPENID_PROVIDER_URL
           value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/.well-known/openid-configuration
         - name: OPENID_REDIRECT_URI
@@ -1156,6 +1164,14 @@ spec:
           value: /etc/pat-service/pricing.json
         - name: QOS_MONTHLY_LIMIT
           value: "0"
+        - name: WEB_SEARCH_ENABLED
+          valueFrom:
+            secretKeyRef:
+              key: WEB_SEARCH_ENABLED
+              name: airgap-runtime
+              optional: true
+        - name: MCP_CALLS_PER_MINUTE
+          value: "30"
         image: ghcr.io/summerisgone/pat-service:latest
         imagePullPolicy: Always
         name: pat-service

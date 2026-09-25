@@ -147,6 +147,11 @@ type config struct {
 	// Hermes agent's inference key (hermes.go, docs/adr/0014 section 8).
 	hermesNamespace string
 	hermesTTLDays   int
+	// webSearchEnabled opens /mcp/web-search/ (mcp.go, docs/adr/0017);
+	// WEB_SEARCH_ENABLED from .env through the airgap-runtime Secret.
+	webSearchEnabled  bool
+	webSearchMCPURL   string
+	mcpCallsPerMinute int
 }
 
 type app struct {
@@ -159,6 +164,8 @@ type app struct {
 	qos       *qos.Tracker
 	pricing   pricing
 	hermes    *hermesKube
+	// mcpLimiter backs the per-user MCP call limit (mcp.go).
+	mcpLimiter windowCounter
 }
 
 type session struct {
@@ -237,13 +244,14 @@ func main() {
 	qosMetrics := qos.NewMetrics(registry)
 	qosStore := qos.NewRedisStore(cfg.valkeyAddr)
 	a := &app{
-		cfg:       cfg,
-		db:        db,
-		http:      &http.Client{Timeout: 30 * time.Second},
-		proxyHTTP: &http.Client{},
-		qos:       qos.NewTracker(qosStore, qosMetrics, cfg.qosSessionTTL, cfg.qosWarmTTL, cfg.qosDemoteAfterSteps, cfg.qosCostAlpha, cfg.qosCostBeta, cfg.qosSpendDemoteThreshold, cfg.qosSpendWindow),
-		pricing:   loadPricing(cfg.pricingFile),
-		hermes:    newHermesKube(cfg.hermesNamespace),
+		cfg:        cfg,
+		db:         db,
+		http:       &http.Client{Timeout: 30 * time.Second},
+		proxyHTTP:  &http.Client{},
+		qos:        qos.NewTracker(qosStore, qosMetrics, cfg.qosSessionTTL, cfg.qosWarmTTL, cfg.qosDemoteAfterSteps, cfg.qosCostAlpha, cfg.qosCostBeta, cfg.qosSpendDemoteThreshold, cfg.qosSpendWindow),
+		pricing:    loadPricing(cfg.pricingFile),
+		hermes:     newHermesKube(cfg.hermesNamespace),
+		mcpLimiter: qosStore,
 	}
 	if err := a.migrate(ctx); err != nil {
 		log.Fatal(err)
@@ -287,6 +295,9 @@ func newMux(a *app) *http.ServeMux {
 	mux.HandleFunc("GET /v1/", a.proxy)
 	mux.HandleFunc("POST /v1/", a.proxy)
 	mux.HandleFunc("DELETE /v1/", a.proxy)
+	mux.HandleFunc("GET /mcp/web-search/", a.mcpProxy)
+	mux.HandleFunc("POST /mcp/web-search/", a.mcpProxy)
+	mux.HandleFunc("DELETE /mcp/web-search/", a.mcpProxy)
 	return mux
 }
 
@@ -366,7 +377,13 @@ func loadConfig() (config, error) {
 		hermesNamespace = "hermes-agents"
 	}
 	hermesTTLDays := readIntEnv("HERMES_PAT_TTL_DAYS", 7)
-	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, hermesNamespace, hermesTTLDays}, nil
+	webSearchEnabled := os.Getenv("WEB_SEARCH_ENABLED") == "true"
+	webSearchMCPURL := strings.TrimRight(os.Getenv("WEB_SEARCH_MCP_URL"), "/")
+	if webSearchMCPURL == "" {
+		webSearchMCPURL = "http://web-search-mcp.airgap-ai-stack.svc.cluster.local:8080"
+	}
+	mcpCallsPerMinute := readIntEnv("MCP_CALLS_PER_MINUTE", 30)
+	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, hermesNamespace, hermesTTLDays, webSearchEnabled, webSearchMCPURL, mcpCallsPerMinute}, nil
 }
 
 // readIntEnv reads an optional integer threshold, falling back to def when
@@ -635,14 +652,13 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 		openAIError(w, 401, "Invalid authentication credentials")
 		return
 	}
-	var id, owner, ownerName, tokenName string
-	err := a.db.QueryRow(r.Context(), `SELECT id,owner_subject,owner_name,name FROM personal_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()`, a.tokenHash(token)).Scan(&id, &owner, &ownerName, &tokenName)
-	if err != nil {
-		openAIError(w, 401, "Invalid authentication credentials")
+	id, owner, ownerName, tokenName, err := a.lookupPAT(r.Context(), token)
+	if errors.Is(err, errDatabaseUnavailable) {
+		http.Error(w, "database unavailable", 503)
 		return
 	}
-	if _, err := a.db.Exec(r.Context(), `UPDATE personal_access_tokens SET last_used_at=now() WHERE id=$1`, id); err != nil {
-		http.Error(w, "database unavailable", 503)
+	if err != nil {
+		openAIError(w, 401, "Invalid authentication credentials")
 		return
 	}
 	if a.cfg.logClientShape {
@@ -698,6 +714,21 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+var errDatabaseUnavailable = errors.New("database unavailable")
+
+// lookupPAT resolves a live (not revoked, not expired) PAT and records its
+// use. Shared by /v1/ and /mcp/web-search/ so revocation cuts both.
+func (a *app) lookupPAT(ctx context.Context, token string) (id, owner, ownerName, tokenName string, err error) {
+	err = a.db.QueryRow(ctx, `SELECT id,owner_subject,owner_name,name FROM personal_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()`, a.tokenHash(token)).Scan(&id, &owner, &ownerName, &tokenName)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	if _, err := a.db.Exec(ctx, `UPDATE personal_access_tokens SET last_used_at=now() WHERE id=$1`, id); err != nil {
+		return "", "", "", "", errDatabaseUnavailable
+	}
+	return id, owner, ownerName, tokenName, nil
 }
 
 // recordUsage is TASK-qos-fair-share.md §4.4: for a non-streaming

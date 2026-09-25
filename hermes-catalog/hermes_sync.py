@@ -273,8 +273,15 @@ def sync():
     swap_dir(new, os.path.join(home, "catalog-enabled"))
 
     locked = load_yaml(os.path.join(catalog, "locked-keys.yaml"), [])
+    catalog_cfg = load_yaml(os.path.join(catalog, "config.yaml"), {})
+    # Web search is opt-in per install (docs/adr/0017 section 7). Dropping the
+    # entry here lets the lock remove a user's copy of it as well.
+    if os.environ.get("WEB_SEARCH_ENABLED") != "true":
+        set_path(catalog_cfg, "mcp_servers.web-search", None, False)
+        if catalog_cfg.get("mcp_servers") == {}:
+            del catalog_cfg["mcp_servers"]
     cfg = merged_config(
-        load_yaml(os.path.join(catalog, "config.yaml"), {}),
+        catalog_cfg,
         load_yaml(os.path.join(home, "config.user.yaml"), {}),
         locked)
     write_atomic(os.path.join(home, "config.yaml"), yaml.safe_dump(cfg, sort_keys=False))
