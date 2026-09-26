@@ -56,6 +56,6 @@ INFERENCE_SMOKE_REQUIRE_LMSTUDIO=false \
 INFERENCE_SMOKE_VERIFY_UPSTREAM_LOG=false \
 INFERENCE_SMOKE_VERIFY_CHAT="${INFERENCE_SMOKE_VERIFY_CHAT:-true}" \
 STACK_TUNNEL_PORT="${STACK_TUNNEL_PORT:-}" \
-STACK_BASE_URL="${STACK_BASE_URL:-***REMOVED***}" \
+STACK_BASE_URL="${STACK_BASE_URL:?STACK_BASE_URL must be set}" \
 ./scripts/pat-smoke-test
 printf '%s\n' 'llm-d EPP smoke test passed (standalone proxy, EPP metrics, and PAT route).'

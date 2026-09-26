@@ -165,13 +165,13 @@ routing:
 # The sole browser-facing origin. Keycloak issuer and OAuth callbacks must be
 # stable absolute URLs; no workload uses the Windows host name as an endpoint.
 oidc:
-  publicBaseURL: ***REMOVED***
+  publicBaseURL: https://ai.example.com
   # Realm name used in Keycloak URL paths.
   realm: ai-stack
   # Fully-qualified external issuer for the browser clients. Includes the
   # /sso path-prefix Keycloak runs under (KC_HTTP_RELATIVE_PATH). Matches
   # KC_HOSTNAME so JWT iss claims line up with what the realm returns.
-  externalIssuer: ***REMOVED***/sso/realms/ai-stack
+  externalIssuer: https://ai.example.com/sso/realms/ai-stack
   # Internal-issuer URL used by services that talk to Keycloak over the
   # cluster-internal service DNS (no /sso rewrite needed; Envoy handles that).
   internalIssuer: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack

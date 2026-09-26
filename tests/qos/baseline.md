@@ -73,7 +73,7 @@ Command (two throwaway users provisioned first; see
 `kc-pat-issue` invocations):
 
 ```sh
-QOS_PAT_A=sk-... QOS_PAT_B=sk-... STACK_BASE_URL=***REMOVED*** \
+QOS_PAT_A=sk-... QOS_PAT_B=sk-... STACK_BASE_URL=https://ai.example.com \
   ./scripts/qos-baseline-repro /tmp/qos-baseline-run3
 ```
 

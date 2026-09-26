@@ -214,12 +214,13 @@ func TestForwardMCPUpstreamDownIs502(t *testing.T) {
 
 func TestMCPToolName(t *testing.T) {
 	for body, want := range map[string]string{
-		`{"method":"tools/call","params":{"name":"web_search"}}`: "web_search",
-		`{"method":"tools/call","params":{"name":"fetch_url"}}`:  "fetch_url",
-		`{"method":"tools/call","params":{"name":"x"}}`:          "other",
-		`{"method":"initialize"}`:                                 "none",
-		`[{"method":"tools/call"}]`:                               "other",
-		strings.Repeat(" ", mcpMaxInspectBody+1):                  "other",
+		`{"method":"tools/call","params":{"name":"web_search"}}`:      "web_search",
+		`{"method":"tools/call","params":{"name":"fetch_url"}}`:       "fetch_url",
+		`{"method":"tools/call","params":{"name":"search_codebase"}}`: "search_codebase",
+		`{"method":"tools/call","params":{"name":"x"}}`:               "other",
+		`{"method":"initialize"}`:                                     "none",
+		`[{"method":"tools/call"}]`:                                   "other",
+		strings.Repeat(" ", mcpMaxInspectBody+1):                      "other",
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/mcp/web-search/", strings.NewReader(body))
 		rc, got := mcpToolName(req)

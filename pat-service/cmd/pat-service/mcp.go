@@ -165,7 +165,7 @@ func (a *app) mcpLimited(ctx context.Context, server, subject string) bool {
 
 // mcpToolName reads at most mcpMaxInspectBody bytes of a JSON-RPC request
 // and returns a reader that reproduces the body exactly, plus the tool:
-// web_search|fetch_url|other for tools/call, "none" for anything else.
+// a known web-search or repowise tool name, else other, for tools/call, "none" for anything else.
 func mcpToolName(r *http.Request) (io.ReadCloser, string) {
 	if r.Method != http.MethodPost || r.Body == nil {
 		return r.Body, "none"
@@ -189,7 +189,11 @@ func mcpToolName(r *http.Request) (io.ReadCloser, string) {
 		return restored, "none"
 	}
 	switch msg.Params.Name {
-	case "web_search", "fetch_url":
+	case "web_search", "fetch_url",
+		// repowise v0.53.0 (docs/adr/0018 verification log).
+		"get_answer", "get_change_risk", "get_context", "get_dead_code",
+		"get_health", "get_overview", "get_risk", "get_symbol", "get_why",
+		"list_repos", "search_codebase":
 		return restored, msg.Params.Name
 	}
 	return restored, "other"

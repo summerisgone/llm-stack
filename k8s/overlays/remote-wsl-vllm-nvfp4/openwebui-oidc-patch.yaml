@@ -12,7 +12,7 @@ spec:
             - name: OPENID_PROVIDER_URL
               value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/.well-known/openid-configuration
             - name: OPENID_REDIRECT_URI
-              value: ***REMOVED***/oauth/oidc/callback
+              value: https://ai.example.com/oauth/oidc/callback
             # llm-d's fixed single-model endpoint is reliable for chat but
             # does not expose a model catalogue to Open WebUI's discovery
             # client. Declare the deployed models explicitly so the selector
@@ -49,7 +49,7 @@ spec:
               value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent"]}}'
             - name: OPENAI_API_BASE_URLS
               value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://hermes-broker.hermes-agents.svc.cluster.local:8080/v1
-            # Issued for ***REMOVED*** specifically (not a shared service
+            # Issued for https://ai.example.com specifically (not a shared service
             # account), so per-user rate limits and usage stay attributed
             # correctly. Index 0 has no static key (system_oauth), hence the
             # leading empty entry before the semicolon; index 2 (Hermes)

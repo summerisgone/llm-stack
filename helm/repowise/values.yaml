@@ -5,7 +5,7 @@
 # `make repowise-up`, not by this chart.
 
 # REPOWISE_IMAGE in versions.lock.env is the source of truth; keep in step.
-image: ghcr.io/summerisgone/repowise:v0.53.0
+image: ghcr.io/summerisgone/repowise:v0.53.0@sha256:5c89d955b5db7ee7e7355982f7e126d55561239cc0017ed02f1fdc8010bad821
 
 # Section 3. Site-specific, set by `make repowise-up` from .env:
 # publicOrigin (REPOWISE_PUBLIC_ORIGIN) is the UI's own browser origin, its
@@ -47,6 +47,9 @@ repos:
   - alias: httpx
     url: https://github.com/encode/httpx.git
     branch: master
+  - alias: llm-stack
+    url: https://github.com/summerisgone/llm-stack.git
+    branch: main
 
 # Fetch interval of the sync container. repowise's own poll only compares the
 # local HEAD and never fetches, so this loop is what moves the checkouts.

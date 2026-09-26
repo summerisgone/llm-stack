@@ -169,7 +169,7 @@ same treatment as fairness id). Band logic (`Tracker.assignBand`,
   (default 8), both read the same way every other QoS threshold is (env var
   with a default, never a literal).
 
-**Validated live, 2026-09-07**, real PAT path (`***REMOVED***`,
+**Validated live, 2026-09-07**, real PAT path (`https://ai.example.com`,
 throwaway Keycloak user, deployed via `make pat-deploy`): a 10-step growing
 conversation produced `patsvc_session_match_total{result="new"}=1`,
 `{result="matched"}=9`, `patsvc_session_steps_total{user}=10`,

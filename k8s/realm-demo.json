@@ -43,10 +43,10 @@
       "secret": "openwebui-demo-secret",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["***REMOVED***/*"],
-      "webOrigins": ["***REMOVED***"],
+      "redirectUris": ["https://ai.example.com/*"],
+      "webOrigins": ["https://ai.example.com"],
       "attributes": {
-        "post.logout.redirect.uris": "***REMOVED***/auth"
+        "post.logout.redirect.uris": "https://ai.example.com/auth"
       },
       "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"],
       "optionalClientScopes": ["offline_access"]
@@ -71,8 +71,8 @@
       "publicClient": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["***REMOVED***/platform/auth/callback"],
-      "webOrigins": ["***REMOVED***"],
+      "redirectUris": ["https://ai.example.com/platform/auth/callback"],
+      "webOrigins": ["https://ai.example.com"],
       "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
     },
     {

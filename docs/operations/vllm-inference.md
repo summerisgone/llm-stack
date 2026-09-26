@@ -270,5 +270,5 @@ Grafana provisioning log excerpts:
 ```
 
 Visual browser verification was blocked by automatic approval review of the
-redirect to the existing external SSO origin, `***REMOVED***`.
+redirect to the existing external SSO origin, `https://ai.example.com`.
 No browser login or authentication-setting changes were performed.

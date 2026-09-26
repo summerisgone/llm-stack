@@ -61,7 +61,7 @@ spec:
             - name: KC_PROXY_HEADERS
               value: xforwarded
             - name: KC_HOSTNAME
-              value: ***REMOVED***/sso
+              value: https://ai.example.com/sso
             # Admin console/API get their own fixed hostname. Unlike `hostname`,
             # `hostname-admin` must be a full URL with scheme -- Keycloak does
             # NOT derive it from the incoming request, so this only works if
@@ -213,13 +213,13 @@ spec:
                   name: airgap-runtime
                   key: PAT_GATEWAY_CLIENT_SECRET
             - name: OIDC_ISSUER
-              value: ***REMOVED***/sso/realms/ai-stack
+              value: https://ai.example.com/sso/realms/ai-stack
             - name: OIDC_INTERNAL_ISSUER
               value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack
             - name: OIDC_CLIENT_ID
               value: pat-dashboard
             - name: OIDC_REDIRECT_URL
-              value: ***REMOVED***/platform/auth/callback
+              value: https://ai.example.com/platform/auth/callback
             # This service alone sends client-credential JWTs to the private
             # ClusterIP-only AI Gateway. Browser and OpenAI clients never
             # receive it.
@@ -237,7 +237,7 @@ spec:
             # "Open WebUI ↗" link points at the reachable origin (the catch-all
             # public route at the site root), not a localhost dev address.
             - name: WEBUI_URL
-              value: ***REMOVED***
+              value: https://ai.example.com
             # TASK-qos-fair-share.md Stage 0.4: logs header names and
             # top-level JSON body key names only (never values) for real
             # client traffic, to confirm which coding agents can carry a
@@ -405,7 +405,7 @@ spec:
                   name: airgap-runtime
                   key: WEBUI_SECRET_KEY
             - name: WEBUI_URL
-              value: ***REMOVED***
+              value: https://ai.example.com
             - name: ENABLE_PERSISTENT_CONFIG
               value: "false"
             - name: ENABLE_SIGNUP
@@ -454,7 +454,7 @@ spec:
             - name: OPENID_PROVIDER_URL
               value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/.well-known/openid-configuration
             - name: OPENID_REDIRECT_URI
-              value: ***REMOVED***/oauth/oidc/callback
+              value: https://ai.example.com/oauth/oidc/callback
             # offline_access: Keycloak issues an offline refresh token, which
             # outlives the browser SSO session (offline session idle default
             # 30d, vs. the realm's ~30min SSO idle timeout). Without it, an

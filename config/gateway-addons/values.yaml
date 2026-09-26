@@ -32,7 +32,7 @@ grafana:
     GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana
     GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: grafana-oauth-demo-only
     GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email roles groups
-    GF_AUTH_GENERIC_OAUTH_AUTH_URL: ***REMOVED***/sso/realms/ai-stack/protocol/openid-connect/auth
+    GF_AUTH_GENERIC_OAUTH_AUTH_URL: https://ai.example.com/sso/realms/ai-stack/protocol/openid-connect/auth
     GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/token
     GF_AUTH_GENERIC_OAUTH_API_URL: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/userinfo
     GF_AUTH_GENERIC_OAUTH_VALIDATE_ID_TOKEN: "true"

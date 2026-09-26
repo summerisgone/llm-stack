@@ -717,7 +717,7 @@ spec:
         - name: KC_PROXY_HEADERS
           value: xforwarded
         - name: KC_HOSTNAME
-          value: ***REMOVED***/sso
+          value: {{ .Values.oidc.publicBaseURL }}/sso
         - name: KC_HOSTNAME_ADMIN
           value: http://localhost:8888/sso
         - name: KC_HTTP_RELATIVE_PATH
@@ -910,7 +910,7 @@ spec:
         - name: OPENID_PROVIDER_URL
           value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/.well-known/openid-configuration
         - name: OPENID_REDIRECT_URI
-          value: ***REMOVED***/oauth/oidc/callback
+          value: {{ .Values.oidc.publicBaseURL }}/oauth/oidc/callback
         - name: OPENAI_API_CONFIGS
           value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent"]}}'
         - name: OPENAI_API_BASE_URLS
@@ -930,7 +930,7 @@ spec:
               key: WEBUI_SECRET_KEY
               name: airgap-runtime
         - name: WEBUI_URL
-          value: ***REMOVED***
+          value: {{ .Values.oidc.publicBaseURL }}
         - name: ENABLE_PERSISTENT_CONFIG
           value: "false"
         - name: ENABLE_SIGNUP
@@ -1135,13 +1135,13 @@ spec:
               key: PAT_GATEWAY_CLIENT_SECRET
               name: airgap-runtime
         - name: OIDC_ISSUER
-          value: ***REMOVED***/sso/realms/ai-stack
+          value: {{ .Values.oidc.publicBaseURL }}/sso/realms/ai-stack
         - name: OIDC_INTERNAL_ISSUER
           value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack
         - name: OIDC_CLIENT_ID
           value: pat-dashboard
         - name: OIDC_REDIRECT_URL
-          value: ***REMOVED***/platform/auth/callback
+          value: {{ .Values.oidc.publicBaseURL }}/platform/auth/callback
         - name: AI_GATEWAY_URL
           value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080
         - name: AI_GATEWAY_CLIENT_ID
@@ -1149,7 +1149,7 @@ spec:
         - name: URL_PREFIX
           value: /platform
         - name: WEBUI_URL
-          value: ***REMOVED***
+          value: {{ .Values.oidc.publicBaseURL }}
         - name: QOS_LOG_CLIENT_SHAPE
           value: "false"
         - name: VALKEY_ADDR
@@ -1485,10 +1485,10 @@ data:
           "secret": "openwebui-demo-secret",
           "standardFlowEnabled": true,
           "directAccessGrantsEnabled": false,
-          "redirectUris": ["***REMOVED***/*"],
-          "webOrigins": ["***REMOVED***"],
+          "redirectUris": ["{{ .Values.oidc.publicBaseURL }}/*"],
+          "webOrigins": ["{{ .Values.oidc.publicBaseURL }}"],
           "attributes": {
-            "post.logout.redirect.uris": "***REMOVED***/auth"
+            "post.logout.redirect.uris": "{{ .Values.oidc.publicBaseURL }}/auth"
           },
           "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"],
           "optionalClientScopes": ["offline_access"]
@@ -1513,8 +1513,8 @@ data:
           "publicClient": true,
           "standardFlowEnabled": true,
           "directAccessGrantsEnabled": false,
-          "redirectUris": ["***REMOVED***/platform/auth/callback"],
-          "webOrigins": ["***REMOVED***"],
+          "redirectUris": ["{{ .Values.oidc.publicBaseURL }}/platform/auth/callback"],
+          "webOrigins": ["{{ .Values.oidc.publicBaseURL }}"],
           "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
         },
         {

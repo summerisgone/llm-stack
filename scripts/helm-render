@@ -28,6 +28,7 @@ OUT = os.environ.get("HELM_RENDER_OUT",
                      "helm/airgap-stack/templates/resources.yaml")
 MANIFEST = os.environ.get("HELM_RENDER_MANIFEST",
                           "helm/airgap-stack/manifest.yaml")
+PLACEHOLDER_ORIGIN = "https://ai.example.com"
 
 # (kind, name) pairs left out of the Helm release. Kept in the repo for
 # manual/scripted GPU management.
@@ -136,6 +137,9 @@ def main():
     body = body.replace("---\n---", "---\n")  # drop empty separators
     if realm_cm:
         body = body + "\n---\n" + realm_cm.strip() + "\n"
+    # The kustomize sources carry a placeholder origin, never the site's;
+    # helm-up sets oidc.publicBaseURL from .env STACK_BASE_URL.
+    body = body.replace(PLACEHOLDER_ORIGIN, "{{ .Values.oidc.publicBaseURL }}")
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w") as f:

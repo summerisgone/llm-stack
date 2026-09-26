@@ -67,6 +67,14 @@ spec:
           # The CPU candle backend also logs "Backend does not support a
           # batch size > 4" and processes batches in internal groups of 4,
           # transparent to the client (the 32-item batch test still 200s).
+          {{- if eq .Values.accelerator "gpu" }}
+          # Bypass the CUDA image's /entrypoint.sh: it parses "CUDA Version"
+          # from nvidia-smi, which driver 610 prints as "CUDA UMD Version",
+          # so it prepends /usr/local/cuda/compat and the non-WSL compat
+          # libcuda then finds no device and TEI falls back to CPU.
+          command:
+            - text-embeddings-router
+          {{- end }}
           args:
             - --model-id
             - /model

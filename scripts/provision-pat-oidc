@@ -3,7 +3,7 @@ set -eu
 
 # Realm imports run only for a fresh Keycloak database. Keep existing stacks
 # convergent by provisioning Open WebUI and the two PAT clients through the Admin API too.
-public_base_url=${PUBLIC_BASE_URL:-***REMOVED***}
+public_base_url=${PUBLIC_BASE_URL:?PUBLIC_BASE_URL must be set (make passes STACK_BASE_URL)}
 namespace=${K8S_NAMESPACE:-airgap-ai-stack}
 gateway_secret=$(sed -n 's/^PAT_GATEWAY_CLIENT_SECRET=//p' .env | tail -n 1)
 [ -n "$gateway_secret" ]

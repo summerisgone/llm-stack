@@ -10,6 +10,11 @@
   value: openai
 - name: REPOWISE_MODEL
   value: {{ .Values.llm.model | quote }}
+# Qwen thinks by default and spends the whole max_tokens budget on it
+# (get_answer: 1024/1024 output tokens, empty answer). "off" makes repowise
+# send chat_template_kwargs.enable_thinking=false.
+- name: REPOWISE_REASONING
+  value: "off"
 - name: OPENAI_BASE_URL
   value: {{ .Values.llm.baseURL | quote }}
 - name: OPENAI_API_KEY
@@ -56,4 +61,14 @@ capabilities:
 
 {{- define "repowise.issuer" -}}
 {{- printf "%s/sso/realms/%s" (required "stackOrigin (STACK_BASE_URL in .env)" .Values.stackOrigin | trimSuffix "/") .Values.oidc.realm -}}
+{{- end }}
+
+{{- define "repowise.jwtProvider" -}}
+- name: keycloak
+  issuer: {{ include "repowise.issuer" . | quote }}
+  remoteJWKS:
+    uri: {{ .Values.oidc.jwksURI | quote }}
+    cacheDuration: 300s
+  extractFrom:
+    cookies: [repowise-access-token]
 {{- end }}

@@ -12,7 +12,7 @@ patches:
     patch: |-
       - op: replace
         path: /data/OIDC_ISSUER
-        value: ***REMOVED***/sso/realms/ai-stack
+        value: https://ai.example.com/sso/realms/ai-stack
       - op: replace
         path: /data/OIDC_JWKS_URL
         value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs

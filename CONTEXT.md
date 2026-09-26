@@ -456,7 +456,7 @@ of it:
   `OPENAI_API_CONFIGS` `model_ids` is `["qwen38-nvfp4","qwen38-nvfp4-sglang"]`.
 - Prometheus scrapes vLLM, SGLang and the llm-d EPP, each labelled
   `namespace=airgap-ai-stack`.
-- Public origin `***REMOVED***`; the edge `external`
+- Public origin `https://ai.example.com`; the edge `external`
   listener is port 3091 (`routing.edge.externalPort`).
 - `/sso/admin` and `/sso/realms/master` return 404 at the edge. Keycloak's
   `KC_HOSTNAME_ADMIN` is pinned to `http://localhost:8888/sso`, so the admin
@@ -555,7 +555,7 @@ Both `remote-wsl-device-plugin` (one-time cluster bootstrap) and
 
 ```
 [Internet]
-  ***REMOVED***
+  https://ai.example.com
     -> Synology reverse proxy / Windows + WSL plumbing
       -> Envoy Gateway `edge`, listener `external:3091`
         -> /sso      Keycloak
@@ -572,7 +572,7 @@ Both `remote-wsl-device-plugin` (one-time cluster bootstrap) and
 - Public routing is selected only by path; no `Host` header or `gpu-host.local`
   name is used for route matching.
 - The public Keycloak issuer and all browser callbacks use the canonical
-  `***REMOVED***` origin. Open WebUI sets its explicit
+  `https://ai.example.com` origin. Open WebUI sets its explicit
   `OPENID_REDIRECT_URI`, so an upstream proxy's host header cannot change its
   callback URL.
 - `gpu-host.local` remains only the Windows/WSL SSH host name; workload-to-workload

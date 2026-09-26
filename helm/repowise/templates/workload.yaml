@@ -45,6 +45,9 @@ data:
       [ -n "$alias" ] || continue
       grep -q "^  alias: $alias\$" .repowise-workspace.yaml && continue
       repowise workspace add "/data/workspace/$alias" --alias "$alias" {{ if .Values.llm.initialProse }}--docs{{ else }}--no-docs{{ end }}
+      # `workspace add` writes the wiki but no LanceDB vectors (v0.53.0);
+      # batch 16 = the embeddings' maxConcurrentRequests.
+      repowise reindex "/data/workspace/$alias" --embedder openai --batch-size 16
     done < /etc/repowise/repos
   # Fetches every repo; on a new upstream commit resets the checkout and
   # runs an incremental update of the workspace.
@@ -105,6 +108,10 @@ metadata:
     app.kubernetes.io/name: repowise
 spec:
   replicas: 1
+  # The first start pulls the image and runs the initial index in the init
+  # container; the default 600s marks the rollout Failed long before that
+  # ends. Matches `make repowise-up --timeout 60m`.
+  progressDeadlineSeconds: 3600
   strategy:
     type: Recreate
   selector:

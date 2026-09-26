@@ -1,8 +1,12 @@
 # ADR 0018 sections 3-4. Host-matched route on the edge's external listener
 # (scoped exception to ADR 0001): edge-test-external has no hostnames, so the
 # repowise host is served by this route only and never by /sso, /platform,
-# /v1 or Open WebUI. Two named rules so each gets its own SecurityPolicy
-# (authorization matches methods, not paths).
+# /v1 or Open WebUI. Envoy Gateway authorization matches methods, not paths,
+# and each SecurityPolicy gets its own oauth2 HMAC/expiry cookie suffix, so a
+# session from one policy is not valid under another. Hence: one OIDC policy
+# over `interactive` and `read`, method limits for readers done by routing
+# (`read` matches GET/HEAD only), and everything else falls to `admin`,
+# which checks the same access-token cookie without OIDC of its own.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -30,6 +34,23 @@ spec:
         - name: repowise
           port: 3000
     - name: read
+      matches:
+        {{- range list "GET" "HEAD" }}
+        - path:
+            type: PathPrefix
+            value: /
+          method: {{ . }}
+        {{- end }}
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.envoyproxy.io
+            kind: HTTPRouteFilter
+            name: repowise-api-key
+      backendRefs:
+        - name: repowise
+          port: 3000
+    - name: admin
       matches:
         - path:
             type: PathPrefix
@@ -59,32 +80,34 @@ spec:
       valueRef:
         name: repowise-credential
 ---
-{{- range $rule := list "read" "interactive" }}
-# OIDC (client {{ $.Values.oidc.clientID }}, host-only cookies) plus realm-role
-# authorization from the access-token cookie, validated as a JWT.
+# OIDC (client {{ .Values.oidc.clientID }}, host-only cookies) plus realm-role
+# authorization from the access-token cookie, validated as a JWT. Readers
+# may use any method here; `read` only routes GET/HEAD.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
 metadata:
-  name: repowise-{{ $rule }}
-  namespace: {{ $.Release.Namespace }}
+  name: repowise-session
+  namespace: {{ .Release.Namespace }}
 spec:
   targetRefs:
+    {{- range list "interactive" "read" }}
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       name: repowise
-      sectionName: {{ $rule }}
+      sectionName: {{ . }}
+    {{- end }}
   oidc:
     provider:
-      issuer: {{ include "repowise.issuer" $ | quote }}
-      authorizationEndpoint: {{ printf "%s/protocol/openid-connect/auth" (include "repowise.issuer" $) | quote }}
-      tokenEndpoint: {{ $.Values.oidc.tokenEndpoint | quote }}
-      endSessionEndpoint: {{ printf "%s/protocol/openid-connect/logout" (include "repowise.issuer" $) | quote }}
-    clientID: {{ $.Values.oidc.clientID | quote }}
+      issuer: {{ include "repowise.issuer" . | quote }}
+      authorizationEndpoint: {{ printf "%s/protocol/openid-connect/auth" (include "repowise.issuer" .) | quote }}
+      tokenEndpoint: {{ .Values.oidc.tokenEndpoint | quote }}
+      endSessionEndpoint: {{ printf "%s/protocol/openid-connect/logout" (include "repowise.issuer" .) | quote }}
+    clientID: {{ .Values.oidc.clientID | quote }}
     clientSecret:
       name: repowise-oidc
-    redirectURL: {{ printf "%s/oauth2/callback" (trimSuffix "/" $.Values.publicOrigin) | quote }}
+    redirectURL: {{ printf "%s/oauth2/callback" (trimSuffix "/" .Values.publicOrigin) | quote }}
     logoutPath: /logout
-    # Plain JWT in the cookie so the jwt provider below can read the roles.
+    # Plain JWT in the cookie so the jwt providers can read the roles.
     disableTokenEncryption: true
     cookieNames:
       accessToken: repowise-access-token
@@ -93,13 +116,38 @@ spec:
     scopes: [openid, profile, roles]
   jwt:
     providers:
-      - name: keycloak
-        issuer: {{ include "repowise.issuer" $ | quote }}
-        remoteJWKS:
-          uri: {{ $.Values.oidc.jwksURI | quote }}
-          cacheDuration: 300s
-        extractFrom:
-          cookies: [repowise-access-token]
+      {{- include "repowise.jwtProvider" . | nindent 6 }}
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: readers
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: realm_access.roles
+                valueType: StringArray
+                values:
+                  {{- toYaml (concat .Values.oidc.readRoles (list .Values.oidc.adminRole) | uniq) | nindent 18 }}
+---
+# Every other method on every other path: settings, provider keys, repo
+# add/delete, sync, re-index. No OIDC here (a second policy would get its
+# own session cookies); the cookie set by repowise-session is checked.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: repowise-admin
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: repowise
+      sectionName: admin
+  jwt:
+    providers:
+      {{- include "repowise.jwtProvider" . | nindent 6 }}
   authorization:
     defaultAction: Deny
     rules:
@@ -111,28 +159,4 @@ spec:
             claims:
               - name: realm_access.roles
                 valueType: StringArray
-                values: [{{ $.Values.oidc.adminRole | quote }}]
-      - name: readers
-        action: Allow
-        operation:
-          methods:
-            {{- if eq $rule "read" }}
-            - GET
-            - HEAD
-            {{- else }}
-            - GET
-            - HEAD
-            - POST
-            - PATCH
-            - DELETE
-            {{- end }}
-        principal:
-          jwt:
-            provider: keycloak
-            claims:
-              - name: realm_access.roles
-                valueType: StringArray
-                values:
-                  {{- toYaml $.Values.oidc.readRoles | nindent 18 }}
----
-{{- end }}
+                values: [{{ .Values.oidc.adminRole | quote }}]

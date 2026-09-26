@@ -227,15 +227,20 @@ The local-mac profile already routes by host (ADR 0001) and gets
 - Authorization: the access token from the OIDC cookie (stored unencrypted,
   `disableTokenEncryption`, under a fixed cookie name) is validated as a
   JWT and the realm role is checked. Envoy Gateway's authorization rules
-  match methods, not paths, so the route has two named rules, each with its
-  own `SecurityPolicy` (same OIDC client and cookies):
+  match methods, not paths, and every `SecurityPolicy` gets its own
+  suffix on the oauth2 HMAC/expiry cookies (only the token cookie names
+  are configurable), so a session from one policy is not valid under
+  another. The route therefore has three named rules and two policies:
   - rule `interactive`, paths `^/api/repos/[^/]+/(chat|blast-radius)(/.*)?$`
-    (enumerated from the pinned `packages/api-client`): `ai-user` and
-    `ai-admin` may use GET, POST, PATCH and DELETE. Chat conversations are
+    (enumerated from the pinned `packages/api-client`), any method, and
+    rule `read`, any path but GET and HEAD only: one policy
+    `repowise-session` (OIDC, JWT from the cookie) over both, allowing
+    `ai-user`, `ai-admin` and `repowise-admin`. Chat conversations are
     shared by everyone, since repowise has no users;
-  - rule `read`, everything else: `ai-user` and `ai-admin` get GET and HEAD;
-  - new realm role `repowise-admin`: every method on both rules (settings,
-    provider keys, repo add/delete, sync and full re-index).
+  - rule `admin`, every other method on every other path (settings,
+    provider keys, repo add/delete, sync and full re-index): policy
+    `repowise-admin`, JWT from the same cookie without OIDC of its own,
+    new realm role `repowise-admin` only.
   Everything else is denied at the gateway. This is what stops any user
   from changing provider settings or starting an LLM-heavy full re-index,
   which the shared key alone would allow.
@@ -547,8 +552,53 @@ Exit: ADR moved to Accepted.
 - VG, partial. TEI publishes `120-1.9.x` (SM 12.0) images; pinned
   `120-1.9.3` by digest. ninfer redeployed with `kvCapacity: "196608"`:
   `kv_capacity_mode: explicit`, KV pool 196,608 tokens, numbers in section
-  6a. Not yet done: `make embeddings-up` in GPU mode, peak VRAM, vectors
-  versus CPU mode, restarts, TTFT/TPOT under load, reversal.
+  6a.
+- VG, 2026-09-25/26, GPU mode on the cluster. The TEI CUDA image's
+  `/entrypoint.sh` greps `CUDA Version` from `nvidia-smi`; driver 610
+  prints `CUDA UMD Version`, so it prepends the non-WSL cuda-compat
+  `libcuda` and TEI silently falls back to CPU (`CUDA_ERROR_NO_DEVICE`).
+  The chart now runs `text-embeddings-router` directly in gpu mode; TEI
+  starts `FlashBert` on CUDA. VRAM (`nvidia-smi`, 32,607 MiB total):
+  ninfer alone 28,884; + TEI after start 30,575 (+1,691); peak under
+  16 x ~8k-token batches 31,119 (+2,235), so `gpuMemoryBudgetGiB: 3` holds
+  with ~1.4 GiB spare. `maxConcurrentRequests: 16` counts inputs, not
+  requests: a batch of 17+ inputs gets 429, so the effective client batch
+  is 16, not `maxClientBatchSize: 32`. A 177,654-token prompt was admitted
+  and answered (58 s) with TEI on the GPU. Embeddings restart with ninfer
+  running and ninfer restart with TEI running both succeed; ninfer comes
+  back with the same explicit pool (196,608 tokens, 1.30 GiB free).
+  ninfer TTFT/TPOT, 256-token streamed answers, unique prompts, against
+  a sustained embedding load of 2 x 8-input batches (~21k tokens/s):
+  1 stream TTFT p50 542 -> 587 ms, TPOT p50 17.3 -> 20.1 ms; 3 streams
+  TTFT p50 668 -> 687 ms, TPOT p50 19.1 -> 21.9 ms (TPOT about +15%).
+  Vectors, 8 texts (ru/en/code): GPU vs CPU cosine >= 0.9999995, max abs
+  difference 3.2e-4. Reversal: `accelerator: cpu` returns VRAM to 28,882
+  MiB; `kvCapacity: auto` on ninfer then restores 250,304 tokens (3,911
+  pages, 30,680 MiB used, 1.19 GiB free). VG exit met.
+- First cluster deploy (2026-09-26), repos click, httpx, llm-stack. The
+  initial index outlives the Deployment's default 600s progress deadline
+  (chart now sets 3600). Qwen thinks by default and returned empty
+  content for `get_answer` and decision mining (1024/1024 tokens spent on
+  reasoning); the chart sets `REPOWISE_REASONING=off`, which repowise maps
+  to `enable_thinking: false`. `repowise workspace add` writes the wiki
+  but no LanceDB vectors, so search was full-text only for the added repo;
+  `workspace.sh` now runs `repowise reindex` after it. With both fixes the
+  MCP server, reached directly on `repowise-mcp:7338`, returns
+  `fts`+`vector` hits (also for Russian queries) and a synthesized
+  `get_answer`. Not yet through `/mcp/repowise/`: the cluster's
+  pat-service still runs a pre-0018 image and `airgap-runtime` has no
+  `REPOWISE_ENABLED` (needs `make helm-up`, then `make hermes-up`).
+- Same day, after `helm-up` (site origin now templated from
+  `STACK_BASE_URL`, see `scripts/helm-render`) and `hermes-up`:
+  `/mcp/repowise/` through pat-service with a PAT lists 11 tools and
+  returns `fts`+`vector` hits; `patsvc_mcp_calls_total{server="repowise"}`
+  counts them. Open WebUI carries both MCP connections. V1 finding: with
+  one policy per rule the UI's chat API (`interactive`) got
+  `302 oauth.missing_credentials` for a user logged in through `read`
+  (cookie suffixes `82add9e6` vs `b004846b`); replaced by the layout in
+  section 4, one suffix left. Hermes: the broker needs the catalog and
+  broker images of this commit imported (`make hermes-k3d-load`) before
+  `hermes-up`, or the rollout sits in ImagePullBackOff.
 - V0. pat-service tests for the MCP table pass (disabled and unknown names
   404, per-server rate limit, `server` label, `/mcp/repowise/` mapped to
   upstream `/mcp` because `/mcp/` answers 307). hermes-sync and
@@ -561,7 +611,10 @@ Exit: ADR moved to Accepted.
   `sectionName`) accepted. Image built locally for amd64 from `v0.53.0`
   with the override: the only `localhost:7337` strings left in the client
   bundle are the settings page's input placeholder and the webhook field's
-  initial state; the CI check excludes exactly those two.
+  initial state; the CI check excludes exactly those two. CI published
+  `ghcr.io/summerisgone/repowise:v0.53.0` (public, linux/amd64); the index
+  digest `sha256:5c89d955...` is pinned in `versions.lock.env` and the
+  chart values.
 - Workspace behaviour, run locally on an arm64 build of the same tag (the
   amd64 build segfaults in lancedb under Rosetta emulation, not
   representative; the arm64 build needs `gcc` and drops the

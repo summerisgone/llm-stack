@@ -30,13 +30,21 @@ MONITORING_CHART ?= oci://docker.io/envoyproxy/gateway-addons-helm
 # Grafana's public root URL (OIDC redirect target). Site-specific: the
 # gpu-host.local default in config/gateway-addons/values.yaml is a generic
 # placeholder; override with GRAFANA_BASE_URL in .env for a local dev host
-# (e.g. GRAFANA_BASE_URL=http://grafana.***REMOVED***.local:32030) instead of
+# (e.g. GRAFANA_BASE_URL=http://grafana.example.local:32030) instead of
 # committing that hostname.
 GRAFANA_BASE_URL ?= http://grafana.gpu-host.local:32030
 
+# The browser-facing origin (.env STACK_BASE_URL, no trailing slash). Tracked
+# manifests carry the placeholder origin below instead of the site's own;
+# helm-render turns it into .Values.oidc.publicBaseURL, which helm-up sets
+# from here, and hermes-up/monitoring-up substitute it the same way.
+STACK_ORIGIN = $(patsubst %/,%,$(STACK_BASE_URL))
+PLACEHOLDER_ORIGIN = https://ai.example.com
+
 .PHONY: monitoring-up
 monitoring-up:
-	$(HELM) upgrade --install eg-addons $(MONITORING_CHART) --version $(ENVOY_GATEWAY_ADDONS_CHART_VERSION) --namespace monitoring --create-namespace --values config/gateway-addons/values.yaml --set grafana.env.GF_SERVER_ROOT_URL=$(GRAFANA_BASE_URL) --set-file grafana.dashboards.vllm.vllm.json=config/grafana/dashboards/vllm.json --set-file grafana.dashboards.llm-d.llm-d-diagnostic-drilldown-dashboard.json=config/grafana/dashboards/llm-d/llm-d-diagnostic-drilldown-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-failure-saturation-dashboard.json=config/grafana/dashboards/llm-d/llm-d-failure-saturation-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-inference-gateway.json=config/grafana/dashboards/llm-d/llm-d-inference-gateway.json --set-file grafana.dashboards.llm-d.llm-d-pd-coordinator-metrics.json=config/grafana/dashboards/llm-d/llm-d-pd-coordinator-metrics.json --set-file grafana.dashboards.llm-d.llm-d-performance-kv-cache.json=config/grafana/dashboards/llm-d/llm-d-performance-kv-cache.json --set-file grafana.dashboards.llm-d.llm-d-sglang-overview.json=config/grafana/dashboards/llm-d/llm-d-sglang-overview.json --set-file grafana.dashboards.llm-d.llm-d-vllm-overview.json=config/grafana/dashboards/llm-d/llm-d-vllm-overview.json --set-file grafana.dashboards.system-state.system-state.json=config/grafana/dashboards/system-state.json --set-file grafana.dashboards.fair-share.fair-share.json=config/grafana/dashboards/fair-share.json --set-file grafana.dashboards.fair-share.user-activity.json=config/grafana/dashboards/user-activity.json --set-file grafana.dashboards.fair-share.cluster-load.json=config/grafana/dashboards/cluster-load.json --set-file grafana.dashboards.cluster-monitor.cluster-monitor.json=config/grafana/dashboards/cluster-monitor.json --set-file grafana.dashboards.ninfer.ninfer.json=config/grafana/dashboards/ninfer.json --wait --timeout 5m
+	@[ -n "$(STACK_ORIGIN)" ] || { echo "monitoring-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }
+	$(HELM) upgrade --install eg-addons $(MONITORING_CHART) --version $(ENVOY_GATEWAY_ADDONS_CHART_VERSION) --namespace monitoring --create-namespace --values config/gateway-addons/values.yaml --set grafana.env.GF_SERVER_ROOT_URL=$(GRAFANA_BASE_URL) --set grafana.env.GF_AUTH_GENERIC_OAUTH_AUTH_URL=$(STACK_ORIGIN)/sso/realms/ai-stack/protocol/openid-connect/auth --set-file grafana.dashboards.vllm.vllm.json=config/grafana/dashboards/vllm.json --set-file grafana.dashboards.llm-d.llm-d-diagnostic-drilldown-dashboard.json=config/grafana/dashboards/llm-d/llm-d-diagnostic-drilldown-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-failure-saturation-dashboard.json=config/grafana/dashboards/llm-d/llm-d-failure-saturation-dashboard.json --set-file grafana.dashboards.llm-d.llm-d-inference-gateway.json=config/grafana/dashboards/llm-d/llm-d-inference-gateway.json --set-file grafana.dashboards.llm-d.llm-d-pd-coordinator-metrics.json=config/grafana/dashboards/llm-d/llm-d-pd-coordinator-metrics.json --set-file grafana.dashboards.llm-d.llm-d-performance-kv-cache.json=config/grafana/dashboards/llm-d/llm-d-performance-kv-cache.json --set-file grafana.dashboards.llm-d.llm-d-sglang-overview.json=config/grafana/dashboards/llm-d/llm-d-sglang-overview.json --set-file grafana.dashboards.llm-d.llm-d-vllm-overview.json=config/grafana/dashboards/llm-d/llm-d-vllm-overview.json --set-file grafana.dashboards.system-state.system-state.json=config/grafana/dashboards/system-state.json --set-file grafana.dashboards.fair-share.fair-share.json=config/grafana/dashboards/fair-share.json --set-file grafana.dashboards.fair-share.user-activity.json=config/grafana/dashboards/user-activity.json --set-file grafana.dashboards.fair-share.cluster-load.json=config/grafana/dashboards/cluster-load.json --set-file grafana.dashboards.cluster-monitor.cluster-monitor.json=config/grafana/dashboards/cluster-monitor.json --set-file grafana.dashboards.ninfer.ninfer.json=config/grafana/dashboards/ninfer.json --wait --timeout 5m
 	$(KUBECTL) apply -f k8s/monitoring-tempo-headless.yaml
 
 gateway-up:
@@ -91,7 +99,7 @@ provision-grafana-oidc:
 	./scripts/provision-grafana-oidc
 
 provision-pat-oidc:
-	./scripts/provision-pat-oidc
+	PUBLIC_BASE_URL=$(STACK_ORIGIN) ./scripts/provision-pat-oidc
 
 provision-realm-security:
 	./scripts/provision-realm-security
@@ -308,19 +316,20 @@ repowise-up:
 	@[ "$(REPOWISE_ENABLED)" = true ] || { echo "repowise-up: REPOWISE_ENABLED is not true in .env" >&2; exit 1; }
 	@[ -n "$(REPOWISE_PUBLIC_ORIGIN)" ] && [ -n "$(STACK_BASE_URL)" ] || { echo "repowise-up: REPOWISE_PUBLIC_ORIGIN and STACK_BASE_URL must be set in .env" >&2; exit 1; }
 	@[ -n "$(REPOWISE_PAT)" ] || { echo "repowise-up: REPOWISE_PAT is empty in .env (svc-repowise PAT, ADR 0018 section 6)" >&2; exit 1; }
+	@[ -n "$(REPOWISE_OIDC_CLIENT_SECRET)" ] && [ -n "$(REPOWISE_API_KEY)" ] || { echo "repowise-up: REPOWISE_OIDC_CLIENT_SECRET and REPOWISE_API_KEY must be set in .env (run make provision-repowise-oidc after setting the secret)" >&2; exit 1; }
 	@rc=$$($(KUBECTL) -n $(K8S_NAMESPACE) get deploy embeddings-bge-m3 -o jsonpath='{.spec.template.spec.runtimeClassName}/{.status.readyReplicas}' 2>/dev/null); \
 	if [ "$$rc" != "nvidia/1" ]; then \
 		echo "repowise-up: embeddings-bge-m3 must run in accelerator: gpu mode with 1 Ready replica (got '$$rc') -- docs/adr/0018 section 6a." >&2; \
 		exit 1; \
 	fi
-	$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise \
+	@$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise \
 		--from-literal=REPOWISE_API_KEY='$(REPOWISE_API_KEY)' \
 		--from-literal=OPENAI_API_KEY='$(REPOWISE_PAT)' \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise-credential \
+	@$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise-credential \
 		--from-literal=credential='Bearer $(REPOWISE_API_KEY)' \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise-oidc \
+	@$(KUBECTL) -n $(K8S_NAMESPACE) create secret generic repowise-oidc \
 		--from-literal=client-secret='$(REPOWISE_OIDC_CLIENT_SECRET)' \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(HELM) upgrade --install $(REPOWISE_RELEASE) $(REPOWISE_CHART) \
@@ -417,11 +426,16 @@ helm-render:
 helm-env-values:
 	./scripts/helm-env-values
 
+HELM_ORIGIN_SETS = --set oidc.publicBaseURL=$(STACK_ORIGIN) \
+	--set oidc.externalIssuer=$(STACK_ORIGIN)/sso/realms/ai-stack
+
 helm-up: helm-render helm-env-values
+	@[ -n "$(STACK_ORIGIN)" ] || { echo "helm-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }
 	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
 		--namespace $(K8S_NAMESPACE) --create-namespace \
 		--values $(HELM_VALUES) \
 		--values $(HELM_RUNTIME_VALUES) \
+		$(HELM_ORIGIN_SETS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \
 		--wait --timeout 10m --debug
@@ -435,6 +449,7 @@ helm-diff: helm-render helm-env-values
 		--namespace $(K8S_NAMESPACE) --create-namespace \
 		--values $(HELM_VALUES) \
 		--values $(HELM_RUNTIME_VALUES) \
+		$(HELM_ORIGIN_SETS) \
 		--dry-run
 
 helm-down:
@@ -494,7 +509,8 @@ hermes-test:
 # Restarts the broker so it picks up a new catalog; running agents move to it
 # at their next idle point.
 hermes-up:
-	$(KUBECTL) apply -k $(HERMES_OVERLAY)
+	@[ -n "$(STACK_ORIGIN)" ] || { echo "hermes-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }
+	$(KUBECTL) kustomize $(HERMES_OVERLAY) | sed 's#$(PLACEHOLDER_ORIGIN)#$(STACK_ORIGIN)#g' | $(KUBECTL) apply -f -
 	$(KUBECTL) -n hermes-agents create configmap hermes-images \
 		--from-literal=HERMES_IMAGE=$(HERMES_IMAGE) \
 		--from-literal=HERMES_CATALOG_IMAGE=$(HERMES_CATALOG_IMAGE) \
