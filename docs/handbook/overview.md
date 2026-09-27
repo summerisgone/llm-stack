@@ -55,23 +55,27 @@ engine, traced in Langfuse and measured in Prometheus/Grafana.
 
 ## Three request paths
 
-```
-[Browser]                                   [Program with a PAT]
-  https://<origin>/                            https://<origin>/v1
-    -> edge -> Open WebUI                        -> edge -> pat-service
-         |  user's Keycloak token                     |  PAT -> owner, session key, band
-         v                                            v
-       ai-gateway-private  <--------------------------+
-         |  JWT check, per-user rate limit, model-name route
-         v
-       llm-d EPP (queue, bands, fairness)  -> vLLM or SGLang
-       (or, with INFERENCE_ENGINE=ninfer, straight to ninfer)
+```mermaid
+flowchart TD
+    browser["Browser<br/>https://&lt;origin&gt;/"]
+    program["Program with a PAT<br/>https://&lt;origin&gt;/v1"]
+    agentchat["Agent chat in Open WebUI"]
 
-[Agent chat in Open WebUI]
-  Open WebUI -> agent-broker (agents ns) -> agent pod <runtime>-agent-<id> (gVisor)
-                                              |  the user's agent PAT
-                                              v
-                                           pat-service /v1 and /mcp/<name>/  -> as above
+    browser --> edge1["edge"] --> owui["Open WebUI"]
+    program --> edge2["edge"] --> pat["pat-service"]
+
+    owui -- "user's Keycloak token" --> aigw
+    pat -- "PAT -> owner, session key, band" --> aigw
+
+    aigw["ai-gateway-private<br/>JWT check, per-user rate limit, model-name route"]
+    aigw --> epp["llm-d EPP<br/>queue, bands, fairness"]
+    epp --> engine["vLLM or SGLang"]
+    aigw -. "INFERENCE_ENGINE=ninfer" .-> ninfer["ninfer"]
+
+    agentchat --> owui2["Open WebUI"] --> broker["agent-broker<br/>(agents ns)"]
+    broker --> pod["agent pod<br/>&lt;runtime&gt;-agent-&lt;id&gt; (gVisor)"]
+    pod -- "the user's agent PAT" --> patmcp["pat-service<br/>/v1 and /mcp/&lt;name&gt;/"]
+    patmcp -- "as above" --> aigw
 ```
 
 - **Browser.** Open WebUI calls the private AI Gateway directly with the

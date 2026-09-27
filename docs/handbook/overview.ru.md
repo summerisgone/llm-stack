@@ -56,23 +56,27 @@ Prometheus/Grafana.
 
 ## Три пути запроса
 
-```
-[Браузер]                                   [Программа с PAT]
-  https://<origin>/                            https://<origin>/v1
-    -> edge -> Open WebUI                        -> edge -> pat-service
-         |  Keycloak-токен пользователя               |  PAT -> владелец, ключ сессии, полоса
-         v                                            v
-       ai-gateway-private  <--------------------------+
-         |  проверка JWT, rate limit на пользователя, маршрут по имени модели
-         v
-       llm-d EPP (очередь, полосы, справедливость)  -> vLLM или SGLang
-       (или, при INFERENCE_ENGINE=ninfer, напрямую в ninfer)
+```mermaid
+flowchart TD
+    browser["Браузер<br/>https://&lt;origin&gt;/"]
+    program["Программа с PAT<br/>https://&lt;origin&gt;/v1"]
+    agentchat["Чат с агентом в Open WebUI"]
 
-[Чат с агентом в Open WebUI]
-  Open WebUI -> agent-broker (ns agents) -> под агента <runtime>-agent-<id> (gVisor)
-                                              |  PAT агента этого пользователя
-                                              v
-                                           pat-service /v1 и /mcp/<name>/  -> как выше
+    browser --> edge1["edge"] --> owui["Open WebUI"]
+    program --> edge2["edge"] --> pat["pat-service"]
+
+    owui -- "Keycloak-токен пользователя" --> aigw
+    pat -- "PAT -> владелец, ключ сессии, полоса" --> aigw
+
+    aigw["ai-gateway-private<br/>проверка JWT, rate limit на пользователя, маршрут по имени модели"]
+    aigw --> epp["llm-d EPP<br/>очередь, полосы, справедливость"]
+    epp --> engine["vLLM или SGLang"]
+    aigw -. "INFERENCE_ENGINE=ninfer" .-> ninfer["ninfer"]
+
+    agentchat --> owui2["Open WebUI"] --> broker["agent-broker<br/>(ns agents)"]
+    broker --> pod["под агента<br/>&lt;runtime&gt;-agent-&lt;id&gt; (gVisor)"]
+    pod -- "PAT агента этого пользователя" --> patmcp["pat-service<br/>/v1 и /mcp/&lt;name&gt;/"]
+    patmcp -- "как выше" --> aigw
 ```
 
 - **Браузер.** Open WebUI вызывает приватный AI Gateway напрямую с
