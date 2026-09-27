@@ -45,9 +45,9 @@ inference:
   # Must match each engine chart's `inference.servedModelName`.
   modelName: qwen-3.8-27b
   # Per-user storm guard on the inference route (llmd-per-user-limit
-  # BackendTrafficPolicy) -- frequency, not concurrency; slot admission is
-  # separate (pat-service internal/qos, and redundantly the llm-d EPP
-  # concurrency-detector). 3/min was a temporary value set to keep Stage 0's
+  # BackendTrafficPolicy) -- frequency, not concurrency; admission is the
+  # llm-d EPP flow control (utilization-detector, ADR 0012), not this
+  # limit. 3/min was a temporary value set to keep Stage 0's
   # baseline measurements from tripping it before the interesting
   # concurrency behaviour was even observable
   # (TASK-qos-fair-share.md Stage 0.6); raised now that Stage 3's
@@ -65,11 +65,10 @@ inference:
   # that shared path (TASK-qos-fair-share.md §7.1,
   # docs/adr/0008-per-user-fair-share.md "SGLang portability"). Set it
   # whenever SGLang is the live engine and SGLANG_API_KEY is non-empty.
-  # true: config/llmd/router-nvfp4-values.yaml modelServers.type is sglang
-  # today (TASK-qos-fair-share.md §7.1 engine switch). Flip both back to
-  # vllm together if reverting.
+  # `make helm-up` sets it from INFERENCE_ENGINE in .env (Makefile
+  # HELM_ENGINE_SETS); the value here is only the render default.
   sglang:
-    enabled: true
+    enabled: false
   # llama.cpp's server (deploy/llamacpp). No profile is wired up until a
   # checksummed GGUF model is in place; see config/llamacpp.
   llamacpp:
@@ -114,9 +113,11 @@ inference:
   # auxiliary title generation, HTTP 400 "this response_format requires
   # constrained output, which NInfer cannot guarantee". See
   # deploy/ninfer/README.md.
+  # `live` is set by `make helm-up` from INFERENCE_ENGINE in .env (Makefile
+  # HELM_ENGINE_SETS); the value here is only the render default.
   ninfer:
     enabled: true
-    live: true
+    live: false
     host: ninfer-qwen38.airgap-ai-stack.svc.cluster.local
     port: 18080
     modelName: qwen-3.8-27b

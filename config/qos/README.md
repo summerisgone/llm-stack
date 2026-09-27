@@ -14,8 +14,9 @@ Roles, per `TASK-qos-fair-share.md` §2:
   `demoted` objectives (`ADR 0008` "Stage 1B") -- `InferencePool` here is
   only the namespace anchor EPP resolves objectives against, never the
   `AIGatewayRoute` backend (ADR 0002's routing model is unchanged).
-- **Envoy AI Gateway** owns limits: `QuotaPolicy` (token budget per window)
-  and usage-based rate limiting (frequency) on the inference route.
+- **Envoy AI Gateway** owns limits: a per-user request rate limit
+  (`BackendTrafficPolicy` `llmd-per-user-limit`, frequency) on the inference
+  route. There is no token-budget `QuotaPolicy` today.
 - **`pat-service`** (`internal/qos`) is not a scheduler; it computes what
   llm-d and the Gateway cannot derive themselves -- session identity (a
   server-side prefix-hash chain, since clients can't be relied on to send

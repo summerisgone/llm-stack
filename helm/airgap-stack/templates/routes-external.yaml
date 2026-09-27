@@ -159,7 +159,7 @@ spec:
             unit: Minute
 ---
 # Rate limit on /v1 by source IP before PAT lookup: 60 req/min per IP.
-# The per-owner limit (3 req/min on inference) still applies after auth.
+# The per-owner limit (inference.perUserRateLimitPerMinute) still applies after auth.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:

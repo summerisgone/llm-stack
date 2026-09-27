@@ -10,7 +10,7 @@ Yandex from the site's egress address. Never enable on an air-gapped install.
 
 ## Path of a request
 
-    Hermes agent (PAT) ------\
+    agent (PAT) -------------\
                               > pat-service /mcp/web-search/ -> web-search-mcp:8080 -> web-search:80 (nginx) -> OpenSERP 127.0.0.1:7000
     Open WebUI (user's JWT) -/                                  \-> fetch_url: public internet, 80/443 only
 
@@ -35,7 +35,7 @@ Yandex from the site's egress address. Never enable on an air-gapped install.
 | --- | --- | --- |
 | `helm/web-search` release (OpenSERP, sidecar, web-search-mcp) | installed or not | `make websearch-up` / `make websearch-down` (`stack-up` runs `websearch-up` when true) |
 | pat-service `/mcp/web-search/` | `airgap-runtime` Secret key; 404 unless `true` | `make helm-up`, then `kubectl -n airgap-ai-stack rollout restart deploy/pat-service` |
-| Hermes profile `mcp_servers.web-search` | `agent-images` ConfigMap -> broker -> agent sync container | `make agents-up`; agents pick it up at their next start |
+| agent profiles (Hermes `mcp_servers`, pi `mcp.json`, opencode `mcp`, from `config/agents/base-profile/mcp-servers.yaml`) | `agent-images` ConfigMap -> broker -> agent sync container | `make agents-up`; agents pick it up at their next start |
 | Open WebUI tool server | entry in the `openwebui-tool-servers` ConfigMap rendered by `helm/airgap-stack` (docs/adr/0018 section 7), read through an optional `configMapKeyRef` | `make helm-up`; `websearch-up` / `websearch-down` restart Open WebUI |
 
 On:
@@ -60,7 +60,7 @@ Unit tests: `make web-search-mcp-test`, `cd pat-service && go test ./...`,
 - **Agent has no web tools.** `kubectl -n agents exec hermes-agent-<id> -c hermes -- grep -A4 mcp_servers /opt/data/home/config.yaml`.
   No entry: the broker's `WEB_SEARCH_ENABLED` is not `true` (`make agents-up`,
   then stop the agent so it re-syncs). Entry present: check the agent's
-  `INFERENCE_KEY` is a live PAT (`/platform` -> Hermes token).
+  `INFERENCE_KEY` is a live PAT (`/platform` -> "Agent inference key").
 - **401 on `/mcp/`.** Revoked or expired PAT, or an Open WebUI token whose
   issuer is not pat-service's `OIDC_ISSUER`.
 - **403 on `/mcp/`.** Keycloak user without `ai-user` / `ai-admin`.

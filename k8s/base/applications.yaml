@@ -67,7 +67,7 @@ spec:
             # NOT derive it from the incoming request, so this only works if
             # the admin API/console is always reached via the same local port.
             # Matches `kubectl -n airgap-ai-stack port-forward svc/keycloak
-            # 8888:8080` (docs/USER_GUIDE.md, scripts/pat-smoke-test). Needed
+            # 8888:8080` (docs/handbook/operations.md, scripts/pat-smoke-test). Needed
             # because /sso/admin is closed at the edge (docs/security/README.md),
             # so it's only ever reached this way, never through the public origin.
             - name: KC_HOSTNAME_ADMIN

@@ -12,6 +12,11 @@ Nothing in the request path leaves the cluster: the model, the token store and
 the trace store are all local. The stack is built to be air-gappable, and to
 be stood up more than once — see [docs/install](docs/install/README.md).
 
+How every part works and is operated (inference and fair share, engines,
+observability, the PAT service, configuration and tuning, Open WebUI, agents,
+MCP) is in the [handbook](docs/handbook/README.md), in English and
+[Russian](docs/handbook/README.ru.md).
+
 ## Helm charts
 
 Four charts in `helm/`, each its own release with its own `make` target:
@@ -43,7 +48,7 @@ The operators are installed separately, by `make operators-up`:
 | | `remote-wsl-vllm-nvfp4` | `local-mac` |
 | --- | --- | --- |
 | Purpose | the deployable product | development without a GPU |
-| Inference | vLLM on an RTX 5090 via llm-d, optionally SGLang | LM Studio on the LAN |
+| Inference | vLLM or SGLang on an RTX 5090 via llm-d, or ninfer (`make engine-up`) | LM Studio on the LAN |
 | Cluster | k3d on Windows + WSL2 | OrbStack on macOS |
 | Public routing | one origin, split by path | `*.localhost` hosts on `:8080` |
 | Routing owned by | `helm/airgap-stack/templates` | `k8s/overlays/local-mac` |
@@ -72,7 +77,7 @@ site, is in [docs/install](docs/install/README.md).
 ```sh
 cp .env.example .env         # then replace every value; see docs/security
 make verify                  # renders and validates everything, no cluster needed
-make stack-up                # prerequisites, GPU objects, vLLM, Helm release, llm-d, OIDC
+make stack-up                # prerequisites, GPU objects, the engine (INFERENCE_ENGINE), Helm release, llm-d, OIDC
 make llmd-nvfp4-smoke        # end-to-end: PAT issue, inference, rate limit, revoke
 ```
 
@@ -148,5 +153,5 @@ manifests rather than in `.env`, is listed with its rotation procedure in
 | `deploy/vllm-qwen38-nvfp4` | host and k3d bootstrap for the GPU node |
 | `deploy/sglang-qwen38`, `deploy/llamacpp` | host-Docker bring-up for the optional backends — see [docs/operations/inference-backends.md](docs/operations/inference-backends.md) |
 | `scripts` | render, validation and smoke helpers |
-| `docs` | install, operations, architecture, security, ADRs |
+| `docs` | [handbook](docs/handbook/README.md) (en/ru), install, operations, architecture, security, ADRs |
 | `models`, `versions.lock.env` | model inventory and pinned image/chart versions |

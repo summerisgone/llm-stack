@@ -3,8 +3,9 @@
 ## Project structure
 
 This repository defines an air-gappable AI stack for Kubernetes. Read
-[README.md](README.md) for what it is and [k8s/README.md](k8s/README.md) for
-how the manifests are split.
+[README.md](README.md) for what it is, [k8s/README.md](k8s/README.md) for
+how the manifests are split, and the [handbook](docs/handbook/README.md)
+(English and Russian) for how each part works and is operated.
 
 The rule that matters most: **every object has exactly one owner.** Workloads
 live in `k8s/base`; the `local-mac` overlay owns the development routing and
@@ -16,8 +17,9 @@ that is exactly the drift
 `scripts/helm-render` now fails rather than let it happen again.
 
 The model servers themselves are their own Helm releases:
-`helm/vllm-inference` (`make vllm-up`, deployed by `make stack-up`) and
-`helm/sglang-inference` (`make sglang-up`, opt-in) — see
+`helm/vllm-inference`, `helm/sglang-inference` and `helm/ninfer-inference`;
+the one named by `INFERENCE_ENGINE` in `.env` is brought up by `make
+engine-up` (and by `make stack-up`) — see
 [ADR 0007](docs/adr/0007-inference-engines-as-helm-releases.md). Edit their
 `values.yaml`, not a manifest. `k8s/overlays/remote-wsl-vllm-nvfp4/vllm.yaml`
 still holds an older copy of the vLLM Deployment; it is filtered out of every
@@ -51,15 +53,17 @@ Consequences worth knowing before editing any of this:
   requests carrying no `x-llm-d-inference-objective` header, and it sits
   **below** `demoted` (1). Only `pat-service` sets that header; Open WebUI
   bypasses it and therefore lands in the lowest band.
-- Explicit `fairnessPolicyRef`/`orderingPolicyRef` are set only on band `0`;
-  the dynamic bands take EPP defaults.
+- Band `0` sets `fairnessPolicyRef`/`orderingPolicyRef` explicitly; the
+  dynamic bands inherit the same round-robin/FCFS pair from
+  `flowControl.defaultPriorityBand`.
 - Negative priorities are deliberately left unused, reserved for a future
   sheddable background class.
-- `concurrency-detector.maxConcurrency` must match the live engine's admission
-  limit (SGLang `--max-running-requests`, vLLM `--max-num-seqs`) and moves
-  together with `router.modelServers.*` and
-  `core-metrics-extractor.defaultEngine` on every engine switch — see
-  [docs/operations/inference-backends.md](docs/operations/inference-backends.md).
+- Saturation comes from `utilization-detector` (engine queue depth and KV
+  use, ADR 0012), not a request-count limit. EPP reads each engine's metric
+  names from the pod label `llm-d.ai/engine-type`, and `router.modelServers.*`
+  is set by `make llmd-up` from `INFERENCE_ENGINE` in `.env`: switch engines
+  with `make engine-up`, never by editing the values file; see
+  [docs/handbook/engines](docs/handbook/engines/README.md).
 
 ## Deployment host
 
@@ -81,11 +85,13 @@ Copy `.env.example` to `.env` before deploying; never commit `.env`.
   (`helm template <release> helm/<chart> -n airgap-ai-stack`).
 - `make preflight` — the kustomize half of `verify` on its own.
 - `make stack-up` — the single deploy path for the remote GPU profile
-  (prerequisites, GPU objects, the vLLM release, the `airgap-stack` release,
-  llm-d, OIDC reconciliation). `make up` deploys the local-mac development
+  (prerequisites, GPU objects, the live engine via `engine-up`, the
+  `airgap-stack` release, llm-d, OIDC reconciliation). `make up` deploys the local-mac development
   profile.
-- `make vllm-up` / `make vllm-down`, `make sglang-up` / `make sglang-down` —
-  the inference engines on their own. One GPU: only one of them can run.
+- `make engine-up` switches the live engine to `INFERENCE_ENGINE` (stops
+  the others, routes the model name, points EPP, restarts GPU embeddings in
+  order). `make vllm-up` / `sglang-up` / `ninfer-up` and their `-down`
+  apply one engine release on its own. One GPU: only one engine can run.
 - `make down` scales application Deployments to zero without deleting PVCs.
 - `make ps`, `make logs`, `make config` — workload state and rendered base.
 - `make smoke`, `make services-smoke`, `make pat-smoke` — SSO, service and PAT

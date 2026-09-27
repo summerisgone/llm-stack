@@ -1,7 +1,8 @@
 # Architecture
 
 Decisions are recorded in [docs/adr](../adr/README.md); this page is the
-current shape of the system.
+current shape of the system. For how each part works and is operated, start
+with the [handbook](../handbook/README.md).
 
 ## Request paths
 
@@ -75,8 +76,10 @@ resolves its owner, derives the chain-hash session key
 ([ADR 0011](../adr/0011-pat-session-key-langfuse-tracing.md)), and attaches the
 headers that describe the request: `x-llm-d-inference-objective` (the band
 name) and `X-Llm-D-Inference-Fairness-Id` (the Keycloak `sub`). It holds no
-queue, runs no limiter and no semaphore, and makes no admission or dispatch
-decision -- every request it authorises is proxied immediately.
+queue, runs no inference limiter and no semaphore, and makes no admission or
+dispatch decision -- every model request it authorises is proxied
+immediately. (Its one limiter is the per-user rate limit on MCP tool calls,
+`MCP_CALLS_PER_MINUTE`, which is not inference.)
 `pat-service/internal/qos` is bookkeeping that produces a label: band
 assignment from warmth, streak and spend (`session.go` `assignBand`) and
 post-hoc cost accounting in Valkey (`RecordCost`). It is not a scheduler.
@@ -98,9 +101,10 @@ Three reasons this does not get re-litigated:
   limitation. Stage 1B proved the same image dispatches per band once the
   `InferencePool` exists.
 - EPP already measures per-flow queue depth, wait time and token usage, and
-  reads streaming responses to do it. `pat-service`'s own cost accounting
-  parses non-streaming JSON usage only, so a scheduler there would start from
-  worse data than EPP already has.
+  reads streaming responses to do it. `pat-service` only learns a request's
+  usage after the response ends (it injects `stream_options.include_usage`
+  and reads the final chunk), so a scheduler there would start from worse
+  data than EPP already has.
 - `pat-service` cannot see all the traffic. Open WebUI calls the private AI
   Gateway directly and never passes through `pat-service`, so a queue there
   would arbitrate a subset of the load while EPP arbitrates all of it.
@@ -129,8 +133,10 @@ two replicas would load a second copy of the model into the same card. Every
 in-cluster engine requests and limits `nvidia.com/gpu: 1`, so on this
 one-GPU node the scheduler itself arbitrates: a second engine stays `Pending`
 rather than silently contending for the card. The
-llm-d EPP's admission concurrency is derived from the vLLM Deployment's
-declared capacity (`--max-num-seqs`), so those two numbers move together. The
+engine's own admission limit (vLLM `--max-num-seqs`, SGLang
+`--max-running-requests`) is the concurrency; llm-d EPP holds requests back
+on a saturation signal read from the engine's metrics (queue depth and KV
+use, [ADR 0012](../adr/0012-graduated-band-ceiling-over-strict-priority.md)). The
 model is mounted read-only from a static `Retain` PV backed by a host
 directory, so weights stay outside container images.
 
@@ -148,7 +154,8 @@ canonical `qwen-3.8-27b` model: SGLang is a swap-in replacement, reached the
 same way, through llm-d EPP (see "Inference profile" above and
 [ADR 0008](../adr/0008-per-user-fair-share.md) "SGLang portability"). Which
 one EPP dispatches to is `config/llmd/router-nvfp4-values.yaml`'s
-`router.modelServers` block, never a gateway routing change — the
+`router.modelServers` block, set by `make llmd-up` from `INFERENCE_ENGINE`
+in `.env` (`make engine-up` switches engines), never a gateway routing change — the
 `AIGatewayRoute/llmd` rule for `qwen-3.8-27b` always points at EPP.
 
 llama.cpp and an external OpenAI-compatible API (the same role LM Studio
@@ -175,6 +182,7 @@ benchmarking.
 
 This host has one GPU: vLLM and SGLang cannot serve concurrently. Enabling
 `inference.<name>.enabled` for llama.cpp/external-api only advertises the
-model at the gateway; it never starts or stops the engine behind it, and
-`make stack-up` brings up vLLM only — bringing up SGLang instead is always a
-manual `make sglang-up` plus the EPP switch above.
+model at the gateway; it never starts or stops the engine behind it. The
+in-cluster engine (vLLM, SGLang or ninfer) is chosen by `INFERENCE_ENGINE`
+in `.env`: `make stack-up` brings that one up, and `make engine-up` switches
+between them.

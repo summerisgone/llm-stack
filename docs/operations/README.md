@@ -1,7 +1,8 @@
 # Operations — remote host access
 
 Day-2 procedures for a running installation. Standing one up from nothing is
-[docs/install](../install/README.md).
+[docs/install](../install/README.md); the day-2 overview and known failure
+modes are in the [handbook](../handbook/operations.md).
 
 Everything below — the SSH coordinates, ports, node name, paths and operator
 UI hostnames — describes the **reference site**. On another installation these

@@ -81,15 +81,11 @@ router:
               scheme: http
               path: /metrics
               insecureSkipVerify: true
+          # Picks each endpoint's metric names from its pod label
+          # llm-d.ai/engine-type (set by helm/vllm-inference and
+          # helm/sglang-inference), so this config is engine-neutral; an
+          # unlabelled pod is read as vllm.
           - type: core-metrics-extractor
-            parameters:
-              # Only needed when modelServers.type != vllm -- the chart's own
-              # default-plugins.yaml sets this automatically (see
-              # llm-d-router-standalone/charts/router/templates/_config.yaml),
-              # but pluginsCustomConfig below replaces that generated file
-              # entirely, so it has to be set here by hand. Keep in sync with
-              # modelServers.type.
-              defaultEngine: sglang
           - type: round-robin-fairness-policy
           - type: fcfs-ordering-policy
           # ADR 0012: request-count concurrency-detector (maxConcurrency: 3)
@@ -151,16 +147,14 @@ router:
       auth:
         enabled: false
   # Points EPP at whichever engine is actually live -- only one runs at a
-  # time (one GPU). Switching engines means changing all three fields
-  # together, plus core-metrics-extractor.defaultEngine above. See
-  # docs/operations/inference-backends.md and TASK-qos-fair-share.md §7.1.
-  #
-  # vLLM:   type: vllm,   targetPorts: [8000],  matchLabels app.kubernetes.io/name: vllm-qwen38-nvfp4
-  # SGLang: type: sglang, targetPorts: [30000], matchLabels app.kubernetes.io/name: sglang-qwen38
+  # time (one GPU). The committed value is the vLLM default; `make llmd-up`
+  # overrides all three fields from INFERENCE_ENGINE in .env (Makefile
+  # LLMD_ENGINE_SETS), so switching engines is `make engine-up`, not an edit
+  # here. See docs/handbook/engines/README.md.
   modelServers:
-    type: sglang
+    type: vllm
     protocol: http
     targetPorts:
-      - number: 30000
+      - number: 8000
     matchLabels:
-      app.kubernetes.io/name: sglang-qwen38
+      app.kubernetes.io/name: vllm-qwen38-nvfp4

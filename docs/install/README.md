@@ -1,5 +1,8 @@
 # Installing on a new site
 
+How the installed stack works and is operated afterwards is in the
+[handbook](../handbook/README.md).
+
 This is the ordered runbook for standing the remote GPU profile up somewhere
 it has never run. Day-2 operations — tunnels, reboots, dashboards — are in
 [docs/operations](../operations/README.md).
@@ -28,14 +31,15 @@ next piece of work, tracked in
 
 | Value | Where it is today |
 | --- | --- |
-| Public origin | `helm/airgap-stack/values.yaml` (`oidc.publicBaseURL`, `oidc.externalIssuer`), `k8s/base/applications.yaml`, `k8s/realm-demo.json`, `config/gateway-addons/values.yaml`, `scripts/provision-*-oidc` |
+| Public origin | `STACK_BASE_URL` in `.env`: the Makefile sets `oidc.publicBaseURL` / `oidc.externalIssuer` and substitutes the placeholder origin in rendered manifests (`helm-up`, `agents-up`, `monitoring-up`); also `k8s/realm-demo.json`, `scripts/provision-*-oidc` |
 | Edge listener port | `helm/airgap-stack/values.yaml` (`routing.edge.externalPort`) |
 | Operator UI hostnames and NodePorts | `helm/airgap-stack/values.yaml` (`routing.nodePorts`), `config/gateway-addons/values.yaml`, `k8s/overlays/remote-wsl-vllm-nvfp4/langfuse-public-url-patch.yaml`, `deploy/vllm-qwen38-nvfp4/systemd/*` |
 | Realm name and client redirect URIs | `k8s/realm-demo.json` |
-| k3d node name | `Makefile` (`K3D_NODE`), `helm/vllm-inference/values.yaml`, `helm/sglang-inference/values.yaml`, `k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml` |
+| k3d node name | `Makefile` (`K3D_NODE`), `nodeName` in `helm/vllm-inference`, `helm/sglang-inference`, `helm/ninfer-inference` and `helm/embeddings-inference` values, the model volumes in `k8s/overlays/remote-wsl-vllm-nvfp4/` (`model-volume.yaml`, `embeddings-model-volume.yaml`, `ninfer-model-volume.yaml`) |
 | k3d API port, model root | `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia` (`K3D_API_PORT`, `K3D_MODEL_ROOT`) |
 | Model directory | `k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml` |
 | Served model name, GPU sizing, launch flags | `helm/vllm-inference/values.yaml` (and `helm/sglang-inference/values.yaml` if SGLang is used) |
+| Live engine | `INFERENCE_ENGINE` in `.env`, applied by `make engine-up` |
 | Which backends the gateway advertises | `helm/airgap-stack/values.yaml` (`inference.*.enabled`), `k8s/overlays/remote-wsl-vllm-nvfp4/openwebui-oidc-patch.yaml` (`OPENAI_API_CONFIGS`) |
 | SSH host for remote `kubectl` | `docs/operations/README.md` |
 | Every credential | see [docs/security](../security/README.md) |
@@ -66,18 +70,18 @@ kubectl apply -f k8s/overlays/remote-wsl-vllm-nvfp4/gpu-runtime-smoke.yaml
 kubectl -n airgap-ai-stack logs pod/cuda-runtime-smoke
 kubectl -n airgap-ai-stack delete pod cuda-runtime-smoke
 
-# 6. Deploy. This is the whole stack: prerequisites, GPU objects, the vLLM
-#    release, the Helm release that owns routing, llm-d, and Keycloak client
-#    reconciliation.
+# 6. Deploy. This is the whole stack: prerequisites, GPU objects, the engine
+#    named by INFERENCE_ENGINE in .env (vllm by default), the Helm release
+#    that owns routing, llm-d, and Keycloak client reconciliation.
 make stack-up
 
 # 7. Verify.
 make llmd-nvfp4-smoke                               # needs the GPU free
 make smoke-nogpu                                    # everything except the model calls
 
-# 8. Optional: SGLang instead of vLLM on the same card. Not part of step 6.
-kubectl -n airgap-ai-stack scale deployment/vllm-qwen38-nvfp4 --replicas=0
-make sglang-up                                      # needs SGLANG_API_KEY in .env
+# 8. Optional: another engine on the same card, e.g. SGLang.
+#    .env: INFERENCE_ENGINE=sglang and SGLANG_API_KEY set, then:
+make engine-up
 ```
 
 Step 6 is the only deploy command for the stack. `kubectl apply -k` on the remote overlay

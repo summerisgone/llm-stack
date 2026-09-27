@@ -9,7 +9,11 @@
 - `helm-env-values` turns `.env` into the chart's runtime values overlay, so
   `.env` stays the source of truth for the workload Secret.
 - `preflight` client-validates every kustomization.
-- `make verify` runs `preflight`, `helm lint`, `helm template`, a dry run of
+- `docs-check` checks every tracked Markdown file: relative links and
+  `#anchors` resolve, each `docs/handbook` page has its `.ru.md` twin and
+  links within its own language, and no site value from `.env` (public
+  origins, SSH host) appears in the text.
+- `make verify` runs `preflight`, `docs-check`, `helm lint`, `helm template`, a dry run of
   the GPU prerequisite objects, and a check that the committed chart still
   matches what `helm-render` produces from the current sources. It covers
   `helm/airgap-stack` only — `helm/vllm-inference` and

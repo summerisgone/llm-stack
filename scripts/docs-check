@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Check the tracked Markdown files: every relative link resolves to a file
+and, with a #fragment, to a heading in it (GitHub slug rules, Cyrillic
+included). Under docs/handbook every page X.md has a Russian twin X.ru.md and
+each language links to its own pages; the only cross-language link is the
+switch to the page's own twin. Site values from .env (public origins, SSH
+host) must not appear in any Markdown file.
+
+Run from anywhere; exits nonzero with one line per failure.
+"""
+import re
+import subprocess
+import sys
+import unicodedata
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+ROOT = Path(__file__).resolve().parent.parent
+HANDBOOK = ROOT / "docs" / "handbook"
+
+LINK = re.compile(r"(?<!\!)\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+IMAGE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+FENCE = re.compile(r"^\s*(```|~~~)")
+INLINE_CODE = re.compile(r"`+[^`]*`+")
+HTML_ANCHOR = re.compile(r"<a\s+(?:name|id)=\"([^\"]+)\"")
+
+
+def tracked_markdown():
+    out = subprocess.run(
+        ["git", "ls-files", "-co", "--exclude-standard", "*.md"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.split()
+    return sorted({ROOT / p for p in out if (ROOT / p).is_file()})
+
+
+def slug(text):
+    # GitHub: drop markup, lowercase, keep letters/digits/_/-/space, spaces -> '-'.
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = text.replace("`", "")
+    text = re.sub(r"<[^>]+>", "", text)
+    text = text.strip().lower()
+    out = []
+    for ch in text:
+        if ch in " -":
+            out.append("-" if ch == " " else ch)
+        elif ch == "_" or unicodedata.category(ch)[0] in "LN":
+            out.append(ch)
+    return "".join(out)
+
+
+def scan(path):
+    """Return (anchors, links) of one file, ignoring fenced and inline code."""
+    anchors, links, seen = set(), [], {}
+    in_fence = False
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        m = HEADING.match(line)
+        if m:
+            s = slug(m.group(2))
+            k = seen.get(s, 0)
+            seen[s] = k + 1
+            anchors.add(s if k == 0 else f"{s}-{k}")
+        anchors.update(a.lower() for a in HTML_ANCHOR.findall(line))
+        bare = INLINE_CODE.sub("", line)
+        for target in LINK.findall(bare) + IMAGE.findall(bare):
+            links.append((n, target))
+    return anchors, links
+
+
+def site_values():
+    env = ROOT / ".env"
+    if not env.is_file():
+        return set()
+    values = set()
+    for line in env.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if not value or key.startswith("#"):
+            continue
+        if key in ("STACK_BASE_URL", "REPOWISE_PUBLIC_ORIGIN", "GRAFANA_BASE_URL", "GF_SERVER_ROOT_URL", "LANGFUSE_BASE_URL"):
+            host = urlparse(value).hostname
+            if host and not host.endswith(("example.com", "example.local", "localhost", "gpu-host.local")):
+                values.add(host)
+        elif key == "WSL_SSH_HOST":
+            values.add(value)
+    return values
+
+
+def is_handbook(path):
+    return HANDBOOK in path.parents
+
+
+def twin(path):
+    name = path.name
+    if name.endswith(".ru.md"):
+        return path.with_name(name[: -len(".ru.md")] + ".md")
+    return path.with_name(name[: -len(".md")] + ".ru.md")
+
+
+def main():
+    files = tracked_markdown()
+    cache = {}
+    errors = []
+
+    def anchors_of(p):
+        if p not in cache:
+            cache[p] = scan(p)[0]
+        return cache[p]
+
+    leaks = site_values()
+    for path in files:
+        rel = path.relative_to(ROOT)
+        text = path.read_text(encoding="utf-8")
+        for value in leaks:
+            if value in text:
+                errors.append(f"{rel}: contains a site value from .env ({value[:3]}...)")
+        _, links = scan(path)
+        for n, target in links:
+            if re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
+                continue  # http(s), mailto and other absolute URLs
+            file_part, _, frag = target.partition("#")
+            dest = path if not file_part else (path.parent / unquote(file_part)).resolve()
+            if file_part and not dest.exists():
+                errors.append(f"{rel}:{n}: broken link {target}")
+                continue
+            if frag and dest.is_file() and dest.suffix == ".md":
+                if unquote(frag).lower() not in anchors_of(dest):
+                    errors.append(f"{rel}:{n}: missing anchor #{frag} in {dest.relative_to(ROOT)}")
+            if is_handbook(path) and dest != path and dest.is_file() and is_handbook(dest):
+                ru_src, ru_dst = path.name.endswith(".ru.md"), dest.name.endswith(".ru.md")
+                if ru_src != ru_dst and dest != twin(path) and twin(dest).exists():
+                    lang = "Russian" if ru_src else "English"
+                    errors.append(f"{rel}:{n}: {lang} page links to the other language: {target}")
+        if is_handbook(path) and not twin(path).exists():
+            errors.append(f"{rel}: missing language twin {twin(path).name}")
+
+    for e in errors:
+        print(e)
+    if errors:
+        print(f"docs-check: {len(errors)} problem(s)", file=sys.stderr)
+        return 1
+    print(f"docs-check: {len(files)} Markdown files OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
