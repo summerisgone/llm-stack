@@ -1,5 +1,5 @@
 # ADR 0017 sections 2-3. Enforcement depends on the CNI's policy controller
-# (k3s kube-router: verified for k8s/hermes, see docs/operations/hermes.md).
+# (k3s kube-router: verified for k8s/agents, see docs/operations/agents.md).
 # web-search (OpenSERP + sidecar): reachable from web-search-mcp only.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

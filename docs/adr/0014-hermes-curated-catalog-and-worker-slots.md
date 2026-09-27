@@ -29,7 +29,7 @@ Implemented on 2026-09-24 for the `pods` backend on the local-mac profile
 `k8s/hermes`, `scripts/hermes-smoke-test` (passes twice; covers the V3/V4
 items that need neither inference nor Open WebUI). V1 answers are recorded
 under stage V1; the runbook is
-[docs/operations/hermes.md](../operations/hermes.md). Differences from the
+[docs/operations/agents.md](../operations/agents.md). Differences from the
 text below, kept deliberately:
 
 - Catalog image tag is a content hash of the catalog and sync code, not the
@@ -712,7 +712,7 @@ upstream `7c6f21a5`), 2026-09-24:
   including a model answer through pat-service with the user's own PAT and
   NetworkPolicy isolation. This covers the "runs under gVisor" half of VS
   items 1-2; checkpoint/restore was not tried. Setup in
-  `docs/operations/hermes.md`.
+  `docs/operations/agents.md`.
 
 ### V2 -- capacity and cold start
 
@@ -802,7 +802,7 @@ this ADR.
    listener Service, shared Secret; second Open WebUI connection in
    `k8s/base/applications.yaml`. `make verify`.
 7. V2-V4; broker metrics and Grafana panels; runbook in
-   `docs/operations/hermes.md`; user notes (including `/skills`) in
+   `docs/operations/agents.md`; user notes (including `/skills`) in
    `docs/clients/README.md`.
 8. Status to Accepted (for the `pods` backend).
 9. Optional, afterwards: stage VS; `substrate` backend, profile-bundle

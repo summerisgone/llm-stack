@@ -1,0 +1,21 @@
+# Remote single-GPU profile (k3d on WSL2): k8s/agents with the issuer the
+# browser reaches Keycloak under, Keycloak's /sso relative path, and agents
+# under gVisor.
+# Deployed by `make agents-up AGENTS_OVERLAY=k8s/overlays/remote-wsl-agents`.
+resources:
+  - ../../agents
+  - runtimeclass.yaml
+patches:
+  - target:
+      kind: ConfigMap
+      name: agent-broker
+    patch: |-
+      - op: replace
+        path: /data/OIDC_ISSUER
+        value: https://ai.example.com/sso/realms/ai-stack
+      - op: replace
+        path: /data/OIDC_JWKS_URL
+        value: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+      - op: replace
+        path: /data/AGENT_RUNTIME_CLASS
+        value: gvisor

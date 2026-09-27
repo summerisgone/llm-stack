@@ -1,5 +1,5 @@
 // opencode backend: `opencode serve` on loopback, driven over its HTTP API.
-// hermes-sync has written <home>/opencode/opencode.json (provider, MCP,
+// agent-sync has written <home>/opencode/opencode.json (provider, MCP,
 // skills, AGENTS.md); sessions live in opencode's own database under
 // <home>/opencode-data, and <home>/opencode-sessions.json maps chat keys to
 // session ids.

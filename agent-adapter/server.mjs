@@ -1,5 +1,5 @@
-// agent-adapter puts the broker's agent contract (hermes-broker/cmd/
-// hermes-broker/backend.go) in front of agents without an OpenAI-compatible
+// agent-adapter puts the broker's agent contract (agent-broker/cmd/
+// agent-broker/backend.go) in front of agents without an OpenAI-compatible
 // server of their own: POST /v1/chat/completions (bearer API_SERVER_KEY) and
 // GET /health on AGENT_PORT. AGENT_RUNTIME picks the backend (pi.mjs,
 // opencode.mjs). Open WebUI resends the whole conversation on every turn;

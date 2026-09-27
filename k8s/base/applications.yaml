@@ -153,8 +153,8 @@ spec:
       port: 9090
       targetPort: metrics
 ---
-# Writes hermes-cred-<id> and restarts the agent pod when a user issues a
-# Hermes key on /platform; its Role lives in k8s/hermes/rbac.yaml.
+# Writes agent-cred-<id> and restarts the agent pod when a user issues a
+# agent key on /platform; its Role lives in k8s/agents/rbac.yaml.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

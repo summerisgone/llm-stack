@@ -51,7 +51,7 @@ What the repository adds since 0016:
 - The broker's `Backend` interface
   (`hermes-broker/cmd/hermes-broker/backend.go`) already names a kagent
   backend -- one `AgentHarness` (`backend: hermes`) per user -- as a
-  planned implementation; `docs/operations/hermes.md` maps its operations.
+  planned implementation; `docs/operations/agents.md` maps its operations.
   kagent is not installed anywhere in the repo yet.
 - pat-service already validates PATs (`proxy`,
   `pat-service/cmd/pat-service/main.go`) and Keycloak access tokens
@@ -153,12 +153,12 @@ Consequences of placing it here:
   kmcp-managed `MCPServer` that would own the Deployment is not used.
 - The broker gets a third backend, `HERMES_BACKEND=kagent`: one
   `AgentHarness` (`backend: hermes`) per user, mapped as in
-  `docs/operations/hermes.md` ("Moving to Agent Substrate or kagent
+  `docs/operations/agents.md` ("Moving to Agent Substrate or kagent
   AgentHarness"). Everything above the `Backend` interface is unchanged.
   The per-user credential is `hermes-cred-<id>`, the same Secret
   `/api/hermes-token` writes, referenced through the harness's gateway
   token Secret reference.
-- Runtime. The table in `docs/operations/hermes.md` assumes
+- Runtime. The table in `docs/operations/agents.md` assumes
   `runtime: substrate`, which is gated by ADR 0014 stage VS and has not
   passed. `kagent` is adopted only with a runtime that does not need
   Substrate, if the pinned kagent offers one (V1). If it does not, VS

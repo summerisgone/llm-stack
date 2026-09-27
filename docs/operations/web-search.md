@@ -35,7 +35,7 @@ Yandex from the site's egress address. Never enable on an air-gapped install.
 | --- | --- | --- |
 | `helm/web-search` release (OpenSERP, sidecar, web-search-mcp) | installed or not | `make websearch-up` / `make websearch-down` (`stack-up` runs `websearch-up` when true) |
 | pat-service `/mcp/web-search/` | `airgap-runtime` Secret key; 404 unless `true` | `make helm-up`, then `kubectl -n airgap-ai-stack rollout restart deploy/pat-service` |
-| Hermes profile `mcp_servers.web-search` | `hermes-images` ConfigMap -> broker -> agent sync container | `make hermes-up`; agents pick it up at their next start |
+| Hermes profile `mcp_servers.web-search` | `agent-images` ConfigMap -> broker -> agent sync container | `make agents-up`; agents pick it up at their next start |
 | Open WebUI tool server | entry in the `openwebui-tool-servers` ConfigMap rendered by `helm/airgap-stack` (docs/adr/0018 section 7), read through an optional `configMapKeyRef` | `make helm-up`; `websearch-up` / `websearch-down` restart Open WebUI |
 
 On:
@@ -43,7 +43,7 @@ On:
     # .env: WEB_SEARCH_ENABLED=true
     make helm-up && kubectl -n airgap-ai-stack rollout restart deploy/pat-service
     make websearch-up
-    HERMES_OVERLAY=k8s/overlays/remote-wsl-hermes make hermes-up
+    AGENTS_OVERLAY=k8s/overlays/remote-wsl-agents make agents-up
 
 Off: set `false`, then the same three steps with `make websearch-down`.
 
@@ -53,12 +53,12 @@ Off: set `false`, then the same three steps with `make websearch-down`.
       make websearch-smoke
 
 Unit tests: `make web-search-mcp-test`, `cd pat-service && go test ./...`,
-`make hermes-test`.
+`make agents-test`.
 
 ## Troubleshooting
 
-- **Agent has no web tools.** `kubectl -n hermes-agents exec hermes-agent-<id> -c hermes -- grep -A4 mcp_servers /opt/data/home/config.yaml`.
-  No entry: the broker's `WEB_SEARCH_ENABLED` is not `true` (`make hermes-up`,
+- **Agent has no web tools.** `kubectl -n agents exec hermes-agent-<id> -c hermes -- grep -A4 mcp_servers /opt/data/home/config.yaml`.
+  No entry: the broker's `WEB_SEARCH_ENABLED` is not `true` (`make agents-up`,
   then stop the agent so it re-syncs). Entry present: check the agent's
   `INFERENCE_KEY` is a live PAT (`/platform` -> Hermes token).
 - **401 on `/mcp/`.** Revoked or expired PAT, or an Open WebUI token whose

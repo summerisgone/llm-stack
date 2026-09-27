@@ -1,0 +1,17 @@
+# Cloud agent fleet (docs/adr/0009, docs/adr/0014): the broker and the
+# namespace, RBAC, quota and network policy its per-user agents run under.
+# Deployed by `make agents-up`, which also writes the `agent-images`
+# ConfigMap and the broker's catalog image from versions.lock.env -- apply it
+# through make, not with a bare `kubectl apply -k`.
+#
+# Agent Pods, profile PVCs and agent-cred-* Secrets are created at runtime
+# by the broker (app.kubernetes.io/managed-by: agent-broker) and are not
+# owned here, so deleting or re-applying this kustomization never touches a
+# user's profile.
+namespace: agents
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - quota.yaml
+  - broker.yaml
+  - networkpolicy.yaml

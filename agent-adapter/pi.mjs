@@ -1,4 +1,4 @@
-// pi backend: the pi SDK in-process. hermes-sync has written the agent dir
+// pi backend: the pi SDK in-process. agent-sync has written the agent dir
 // <home>/pi (settings.json, models.json, mcp.json, AGENTS.md); pi-mcp-adapter
 // from this image is loaded as an extension because pi has no MCP client.
 // Each chat is a persistent pi session under <home>/pi-sessions/<key>/.

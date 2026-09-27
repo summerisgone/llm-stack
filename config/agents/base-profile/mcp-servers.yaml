@@ -1,0 +1,17 @@
+# The one MCP server list for every agent runtime (hermes, pi, opencode).
+# agent-sync renders each entry into the runtime's own config format,
+# reached through pat-service /mcp/<name>/ with the user's PAT, and keeps it
+# only when the sync container has the entry's flag set to "true" (from .env
+# through the agent-images ConfigMap). Entries are locked: a user's own
+# config cannot replace or re-add them.
+pat_service: http://pat-service.airgap-ai-stack.svc.cluster.local:8080
+servers:
+  # Web search (docs/adr/0017 section 5).
+  web-search:
+    flag: WEB_SEARCH_ENABLED
+    timeout: 60
+  # Codebase intelligence (docs/adr/0018 section 7). get_answer runs the
+  # LLM, hence the longer timeout.
+  repowise:
+    flag: REPOWISE_ENABLED
+    timeout: 180

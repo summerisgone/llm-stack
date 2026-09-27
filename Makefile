@@ -12,7 +12,7 @@ include versions.lock.env
 # Local/site-specific overrides (gitignored). Not required to exist.
 -include .env
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up hermes-catalog hermes-broker-image agent-images hermes-k3d-load hermes-up hermes-down hermes-smoke hermes-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -37,7 +37,7 @@ GRAFANA_BASE_URL ?= http://grafana.gpu-host.local:32030
 # The browser-facing origin (.env STACK_BASE_URL, no trailing slash). Tracked
 # manifests carry the placeholder origin below instead of the site's own;
 # helm-render turns it into .Values.oidc.publicBaseURL, which helm-up sets
-# from here, and hermes-up/monitoring-up substitute it the same way.
+# from here, and agents-up/monitoring-up substitute it the same way.
 STACK_ORIGIN = $(patsubst %/,%,$(STACK_BASE_URL))
 PLACEHOLDER_ORIGIN = https://ai.example.com
 
@@ -282,8 +282,8 @@ embeddings-down:
 # Web search (docs/adr/0017-web-search-mcp-openserp-kagent.md): OpenSERP,
 # its engine-pinning sidecar and web-search-mcp. Open WebUI's MCP tool
 # connection (ConfigMap openwebui-tool-servers, helm/airgap-stack since
-# docs/adr/0018 section 7), pat-service /mcp/ and the Hermes profile entry
-# follow WEB_SEARCH_ENABLED in .env (helm-up, hermes-up), not this release.
+# docs/adr/0018 section 7), pat-service /mcp/ and the agent profile entry
+# follow WEB_SEARCH_ENABLED in .env (helm-up, agents-up), not this release.
 # Open WebUI reads the tool connections only at start, hence the restart.
 WEBSEARCH_CHART = helm/web-search
 WEBSEARCH_RELEASE = web-search
@@ -308,7 +308,7 @@ websearch-smoke:
 # REPOWISE_ENABLED=true and the embeddings run on the GPU with one Ready
 # replica (section 6a). Secrets come from .env. Open WebUI reads its tool
 # connections only at start, hence the restart; pat-service /mcp/repowise/
-# and the Hermes entry follow REPOWISE_ENABLED (helm-up, hermes-up).
+# and the agent entry follow REPOWISE_ENABLED (helm-up, agents-up).
 REPOWISE_CHART = helm/repowise
 REPOWISE_RELEASE = repowise
 
@@ -476,76 +476,76 @@ render-check:
 		|| { printf '%s\n' 'helm-render output differs from the committed chart; commit the regenerated files.' >&2; \
 		     git --no-pager diff --stat -- $(HELM_CHART)/templates/resources.yaml $(HELM_CHART)/manifest.yaml >&2; exit 1; }
 
-# --- Cloud Hermes fleet (docs/adr/0009, docs/adr/0014) ----------------------
+# --- Cloud agent fleet: Hermes, pi, opencode (docs/adr/0009, docs/adr/0014) --
 # Catalog image tag = content hash of the base profile and the sync code, so
 # the same catalog always has the same tag. Records it in versions.lock.env.
-HERMES_CATALOG_SRC = config/hermes/base-profile hermes-catalog/Dockerfile hermes-catalog/hermes_sync.py
-# Remote profile: HERMES_OVERLAY=k8s/overlays/remote-wsl-hermes and
-# HERMES_PLATFORM=linux/amd64, then `make hermes-k3d-load` before hermes-up.
-HERMES_OVERLAY ?= k8s/hermes
-HERMES_PLATFORM ?=
-HERMES_BUILD_FLAGS = $(if $(HERMES_PLATFORM),--platform $(HERMES_PLATFORM))
-hermes-catalog:
-	python3 -m unittest discover -s hermes-catalog -p 'test_*.py'
-	tag=$$(find $(HERMES_CATALOG_SRC) -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -c1-12); \
-	image=llm-stack/hermes-catalog:$$tag; \
-	docker buildx build --load $(HERMES_BUILD_FLAGS) --build-context profile=config/hermes/base-profile --tag $$image hermes-catalog && \
-	perl -pi -e "s|^HERMES_CATALOG_IMAGE=.*|HERMES_CATALOG_IMAGE=$$image|" versions.lock.env && \
-	printf 'HERMES_CATALOG_IMAGE=%s\n' "$$image"
+AGENT_CATALOG_SRC = config/agents/base-profile agent-catalog/Dockerfile agent-catalog/agent_sync.py
+# Remote profile: AGENTS_OVERLAY=k8s/overlays/remote-wsl-agents and
+# AGENTS_PLATFORM=linux/amd64, then `make agents-k3d-load` before agents-up.
+AGENTS_OVERLAY ?= k8s/agents
+AGENTS_PLATFORM ?=
+AGENTS_BUILD_FLAGS = $(if $(AGENTS_PLATFORM),--platform $(AGENTS_PLATFORM))
+agent-catalog:
+	python3 -m unittest discover -s agent-catalog -p 'test_*.py'
+	tag=$$(find $(AGENT_CATALOG_SRC) -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -c1-12); \
+	image=llm-stack/agent-catalog:$$tag; \
+	docker buildx build --load $(AGENTS_BUILD_FLAGS) --build-context profile=config/agents/base-profile --tag $$image agent-catalog && \
+	perl -pi -e "s|^AGENT_CATALOG_IMAGE=.*|AGENT_CATALOG_IMAGE=$$image|" versions.lock.env && \
+	printf 'AGENT_CATALOG_IMAGE=%s\n' "$$image"
 
-hermes-broker-image:
-	docker buildx build --load $(HERMES_BUILD_FLAGS) --tag $(HERMES_BROKER_IMAGE) hermes-broker
+agent-broker-image:
+	docker buildx build --load $(AGENTS_BUILD_FLAGS) --tag $(AGENT_BROKER_IMAGE) agent-broker
 
-# pi and opencode agents behind hermes-broker (agent-adapter/Dockerfile, one
+# pi and opencode agents behind agent-broker (agent-adapter/Dockerfile, one
 # target each). Tag = content hash of the adapter sources, recorded as
 # PI_IMAGE / OPENCODE_IMAGE in versions.lock.env. An empty PI_IMAGE or
 # OPENCODE_IMAGE (e.g. in .env) leaves that agent out of Open WebUI.
 AGENT_ADAPTER_SRC = agent-adapter/Dockerfile agent-adapter/package.json agent-adapter/server.mjs
-agent-images:
+agent-adapter-images:
 	cd agent-adapter && node --test
 	for rt in pi opencode; do \
 		tag=$$(shasum -a 256 $(AGENT_ADAPTER_SRC) agent-adapter/$$rt.mjs | shasum -a 256 | cut -c1-12); \
 		image=llm-stack/agent-$$rt:$$tag; \
 		var=$$(printf %s $$rt | tr a-z A-Z)_IMAGE; \
-		docker buildx build --load $(HERMES_BUILD_FLAGS) --target $$rt --tag $$image agent-adapter && \
+		docker buildx build --load $(AGENTS_BUILD_FLAGS) --target $$rt --tag $$image agent-adapter && \
 		perl -pi -e "s|^$$var=.*|$$var=$$image|" versions.lock.env && \
 		printf '%s=%s\n' "$$var" "$$image" || exit 1; \
 	done
 
-hermes-k3d-load:
-	WSL_SSH_HOST=$(WSL_SSH_HOST) WSL_SSH_PORT=$(WSL_SSH_PORT) ./scripts/hermes-k3d-load $(HERMES_CATALOG_IMAGE) $(HERMES_BROKER_IMAGE) $(PI_IMAGE) $(OPENCODE_IMAGE)
+agents-k3d-load:
+	WSL_SSH_HOST=$(WSL_SSH_HOST) WSL_SSH_PORT=$(WSL_SSH_PORT) ./scripts/agents-k3d-load $(AGENT_CATALOG_IMAGE) $(AGENT_BROKER_IMAGE) $(PI_IMAGE) $(OPENCODE_IMAGE)
 
-hermes-test:
-	python3 -m unittest discover -s hermes-catalog -p 'test_*.py'
-	cd hermes-broker && go vet ./... && go test ./...
+agents-test:
+	python3 -m unittest discover -s agent-catalog -p 'test_*.py'
+	cd agent-broker && go vet ./... && go test ./...
 	cd agent-adapter && node --test
 
-# Applies k8s/hermes, then the values it cannot hold itself because they
+# Applies k8s/agents, then the values it cannot hold itself because they
 # come from versions.lock.env and .env (WEB_SEARCH_ENABLED, docs/adr/0017;
 # REPOWISE_ENABLED, docs/adr/0018).
 # Restarts the broker so it picks up a new catalog; running agents move to it
 # at their next idle point.
-hermes-up:
-	@[ -n "$(STACK_ORIGIN)" ] || { echo "hermes-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }
-	$(KUBECTL) kustomize $(HERMES_OVERLAY) | sed 's#$(PLACEHOLDER_ORIGIN)#$(STACK_ORIGIN)#g' | $(KUBECTL) apply -f -
-	$(KUBECTL) -n hermes-agents create configmap hermes-images \
+agents-up:
+	@[ -n "$(STACK_ORIGIN)" ] || { echo "agents-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }
+	$(KUBECTL) kustomize $(AGENTS_OVERLAY) | sed 's#$(PLACEHOLDER_ORIGIN)#$(STACK_ORIGIN)#g' | $(KUBECTL) apply -f -
+	$(KUBECTL) -n agents create configmap agent-images \
 		--from-literal=HERMES_IMAGE=$(HERMES_IMAGE) \
-		--from-literal=HERMES_CATALOG_IMAGE=$(HERMES_CATALOG_IMAGE) \
+		--from-literal=AGENT_CATALOG_IMAGE=$(AGENT_CATALOG_IMAGE) \
 		--from-literal=PI_IMAGE=$(PI_IMAGE) \
 		--from-literal=OPENCODE_IMAGE=$(OPENCODE_IMAGE) \
 		--from-literal=WEB_SEARCH_ENABLED=$(or $(WEB_SEARCH_ENABLED),false) \
 		--from-literal=REPOWISE_ENABLED=$(or $(REPOWISE_ENABLED),false) \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n hermes-agents set image deployment/hermes-broker catalog-index=$(HERMES_CATALOG_IMAGE) broker=$(HERMES_BROKER_IMAGE)
-	$(KUBECTL) -n hermes-agents rollout restart deployment/hermes-broker
-	$(KUBECTL) -n hermes-agents rollout status deployment/hermes-broker --timeout=120s
+	$(KUBECTL) -n agents set image deployment/agent-broker catalog-index=$(AGENT_CATALOG_IMAGE) broker=$(AGENT_BROKER_IMAGE)
+	$(KUBECTL) -n agents rollout restart deployment/agent-broker
+	$(KUBECTL) -n agents rollout status deployment/agent-broker --timeout=120s
 
 # Stops the broker and every running agent (Hermes, pi, opencode). Profiles
-# (PVCs) and credentials stay; hermes-up brings everything back.
-hermes-down:
-	-$(KUBECTL) -n hermes-agents scale deployment/hermes-broker --replicas=0
-	-$(KUBECTL) -n hermes-agents delete pod -l app.kubernetes.io/managed-by=hermes-broker --wait=true
+# (PVCs) and credentials stay; agents-up brings everything back.
+agents-down:
+	-$(KUBECTL) -n agents scale deployment/agent-broker --replicas=0
+	-$(KUBECTL) -n agents delete pod -l app.kubernetes.io/managed-by=agent-broker --wait=true
 
-hermes-smoke:
-	./scripts/hermes-smoke-test
+agents-smoke:
+	./scripts/agents-smoke-test
 

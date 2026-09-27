@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+set -eu
+
+# Operator fallback for the /platform agent key (docs/adr/0014 section 8):
+# store a user's own pat-service PAT (scripts/kc-pat-issue) as INFERENCE_KEY
+# in agent-cred-<id>. A running agent is stopped so its next start reads it.
+#
+#   scripts/kc-pat-issue <user> <password> hermes | awk '/^token:/{print $2}' |
+#     scripts/agent-inference-key <keycloak-sub | 16-hex profile id>
+
+namespace=${AGENTS_NAMESPACE:-agents}
+
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "usage: $0 <keycloak-sub | profile-id> < pat" >&2
+  exit 2
+fi
+
+case "$1" in
+  *[!0-9a-f]* | "") id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16) ;;
+  *) if [ "${#1}" -eq 16 ]; then id=$1; else id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16); fi ;;
+esac
+
+IFS= read -r pat || true
+if [ -z "$pat" ]; then
+  printf '%s\n' "no PAT on stdin" >&2
+  exit 2
+fi
+
+key=$(printf '%s' "$pat" | base64 | tr -d '\n')
+if kubectl -n "$namespace" get secret "agent-cred-$id" >/dev/null 2>&1; then
+  kubectl -n "$namespace" patch secret "agent-cred-$id" --type=merge \
+    -p "{\"data\":{\"INFERENCE_KEY\":\"$key\"}}" >/dev/null
+else
+  kubectl -n "$namespace" create secret generic "agent-cred-$id" \
+    --from-literal="INFERENCE_KEY=$pat" >/dev/null
+  kubectl -n "$namespace" label secret "agent-cred-$id" \
+    app.kubernetes.io/managed-by=agent-broker "agents.llm-stack/user-id=$id" app.kubernetes.io/name=agent >/dev/null
+fi
+kubectl -n "$namespace" delete pod -l "agents.llm-stack/user-id=$id,app.kubernetes.io/managed-by=agent-broker" --ignore-not-found --wait=true >/dev/null
+printf 'Inference key set for agent profile %s.\n' "$id"

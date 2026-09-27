@@ -143,10 +143,10 @@ type config struct {
 	// dashboard can show spend-vs-limit ahead of that policy being
 	// decided.
 	qosMonthlyLimit float64
-	// hermesNamespace and hermesTTLDays configure dashboard issuance of the
-	// Hermes agent's inference key (hermes.go, docs/adr/0014 section 8).
-	hermesNamespace string
-	hermesTTLDays   int
+	// agentsNamespace and agentTTLDays configure dashboard issuance of the
+	// agents' inference key (agents.go, docs/adr/0014 section 8).
+	agentsNamespace string
+	agentTTLDays    int
 	// mcpServers maps an enabled /mcp/<name>/ to its upstream URL (mcp.go,
 	// docs/adr/0017, docs/adr/0018 section 5). A name is present only when
 	// its flag (WEB_SEARCH_ENABLED, REPOWISE_ENABLED) is true in .env,
@@ -164,7 +164,7 @@ type app struct {
 	gateway   gatewayToken
 	qos       *qos.Tracker
 	pricing   pricing
-	hermes    *hermesKube
+	agents    *agentKube
 	// mcpLimiter backs the per-user MCP call limit (mcp.go).
 	mcpLimiter windowCounter
 }
@@ -223,7 +223,7 @@ type tokenRecord struct {
 	// for requests authenticated with it), in a.pricing.Currency -- the
 	// /platform token table's per-key usage total.
 	CostAmount float64 `json:"cost_amount"`
-	// IssuedBy is "user" or "hermes" (the Hermes agent's key, hermes.go).
+	// IssuedBy is "user" or "agents" (the agents' key, agents.go).
 	IssuedBy string `json:"issued_by"`
 }
 
@@ -251,7 +251,7 @@ func main() {
 		proxyHTTP:  &http.Client{},
 		qos:        qos.NewTracker(qosStore, qosMetrics, cfg.qosSessionTTL, cfg.qosWarmTTL, cfg.qosDemoteAfterSteps, cfg.qosCostAlpha, cfg.qosCostBeta, cfg.qosSpendDemoteThreshold, cfg.qosSpendWindow),
 		pricing:    loadPricing(cfg.pricingFile),
-		hermes:     newHermesKube(cfg.hermesNamespace),
+		agents:     newAgentKube(cfg.agentsNamespace),
 		mcpLimiter: qosStore,
 	}
 	if err := a.migrate(ctx); err != nil {
@@ -286,7 +286,7 @@ func newMux(a *app) *http.ServeMux {
 	mux.HandleFunc("GET /api/tokens", a.listTokens)
 	mux.HandleFunc("POST /api/tokens", a.createToken)
 	mux.HandleFunc("POST /api/tokens/", a.revokeToken)
-	mux.HandleFunc("POST /api/hermes-token", a.issueHermesToken)
+	mux.HandleFunc("POST /api/agent-token", a.issueAgentToken)
 	mux.HandleFunc("GET /api/usage/daily", a.usageDaily)
 	mux.HandleFunc("GET /api/usage/sessions", a.usageSessions)
 	mux.HandleFunc("GET /api/usage/limit", a.usageLimit)
@@ -373,11 +373,11 @@ func loadConfig() (config, error) {
 	qosEventTimeout := time.Duration(readIntEnv("QOS_EVENT_TIMEOUT_MS", 1000)) * time.Millisecond
 	pricingFile := os.Getenv("QOS_PRICING_FILE")
 	qosMonthlyLimit := readFloatEnv("QOS_MONTHLY_LIMIT", 0)
-	hermesNamespace := os.Getenv("HERMES_NAMESPACE")
-	if hermesNamespace == "" {
-		hermesNamespace = "hermes-agents"
+	agentsNamespace := os.Getenv("AGENTS_NAMESPACE")
+	if agentsNamespace == "" {
+		agentsNamespace = "agents"
 	}
-	hermesTTLDays := readIntEnv("HERMES_PAT_TTL_DAYS", 7)
+	agentTTLDays := readIntEnv("AGENT_PAT_TTL_DAYS", 7)
 	mcpServers := map[string]string{}
 	for _, s := range []struct{ name, flag, urlVar, def string }{
 		{"web-search", "WEB_SEARCH_ENABLED", "WEB_SEARCH_MCP_URL", "http://web-search-mcp.airgap-ai-stack.svc.cluster.local:8080"},
@@ -393,7 +393,7 @@ func loadConfig() (config, error) {
 		mcpServers[s.name] = u
 	}
 	mcpCallsPerMinute := readIntEnv("MCP_CALLS_PER_MINUTE", 30)
-	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, hermesNamespace, hermesTTLDays, mcpServers, mcpCallsPerMinute}, nil
+	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, agentsNamespace, agentTTLDays, mcpServers, mcpCallsPerMinute}, nil
 }
 
 // readIntEnv reads an optional integer threshold, falling back to def when

@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+set -eu
+
+# Offboarding for the cloud agent fleet (docs/adr/0014 section 8): the only
+# path that deletes a user's agent profiles. Removes the user's agent pods,
+# credential Secret and profile PVCs of every runtime (Hermes, pi, opencode).
+# The broker never deletes PVCs.
+#
+#   scripts/agent-profile-delete <keycloak-sub | 16-hex profile id>
+
+namespace=${AGENTS_NAMESPACE:-agents}
+
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "usage: $0 <keycloak-sub | profile-id>" >&2
+  exit 2
+fi
+
+case "$1" in
+  *[!0-9a-f]* | "") id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16) ;;
+  *) if [ "${#1}" -eq 16 ]; then id=$1; else id=$(printf '%s' "$1" | shasum -a 256 | cut -c1-16); fi ;;
+esac
+
+sel="agents.llm-stack/user-id=$id,app.kubernetes.io/managed-by=agent-broker"
+kubectl -n "$namespace" delete pod -l "$sel" --ignore-not-found --wait=true
+kubectl -n "$namespace" delete secret "agent-cred-$id" --ignore-not-found
+kubectl -n "$namespace" delete pvc -l "$sel" --ignore-not-found --wait=true
+printf 'Deleted agent profiles %s.\n' "$id"

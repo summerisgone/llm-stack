@@ -12,7 +12,7 @@ set -eu
 # Without it only the unauthenticated and network checks run.
 
 namespace=${K8S_NAMESPACE:-airgap-ai-stack}
-hns=${HERMES_NAMESPACE:-hermes-agents}
+hns=${AGENTS_NAMESPACE:-agents}
 pat=${WEBSEARCH_SMOKE_PAT:-}
 
 fail() {

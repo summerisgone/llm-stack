@@ -18,7 +18,7 @@ import (
 
 // /mcp/<name>/ proxies to the MCP server cfg.mcpServers[name]
 // (docs/adr/0017-web-search-mcp-openserp-kagent.md section 3, docs/adr/0018
-// section 5). Callers are Hermes agents (their PAT) and Open WebUI (the chat
+// section 5). Callers are the cloud agents (their PAT) and Open WebUI (the chat
 // user's Keycloak access token, auth_type system_oauth). Upstreams trust the
 // identity headers set here because their NetworkPolicy admits pat-service
 // only.

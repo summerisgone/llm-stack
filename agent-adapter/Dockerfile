@@ -1,9 +1,9 @@
-# Agent images for the pi and opencode runtimes behind hermes-broker: the
+# Agent images for the pi and opencode runtimes behind agent-broker: the
 # agent plus agent-adapter, which serves the broker's agent contract on
-# :8642. One target per runtime, built by `make agent-images`:
+# :8642. One target per runtime, built by `make agent-adapter-images`:
 #   docker buildx build --target pi --tag llm-stack/agent-pi:<tag> agent-adapter
 # The pod runs it as uid 10000 with a read-only root filesystem; the profile
-# PVC, /work and /tmp are the writable paths (hermes-broker pods.go).
+# PVC, /work and /tmp are the writable paths (agent-broker pods.go).
 FROM node:22.23.1-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS base
 # ripgrep: opencode's grep/glob tools, which would otherwise download it.
 RUN apt-get update \

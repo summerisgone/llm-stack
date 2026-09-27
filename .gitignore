@@ -11,3 +11,6 @@ models/*
 helm/airgap-stack/runtime.secret.yaml
 .claude/*.lock
 .claude/settings.local.json
+
+# go build output
+agent-broker/agent-broker
