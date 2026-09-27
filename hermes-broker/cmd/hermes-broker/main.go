@@ -1,7 +1,9 @@
-// hermes-broker is Open WebUI's only path to per-user Hermes agents
-// (docs/adr/0009, docs/adr/0014 section 6). It validates the user's Keycloak
-// token, answers `/skills` commands itself, starts the user's agent in one
-// of K slots and streams the chat completion through to it.
+// hermes-broker is Open WebUI's only path to per-user agents (docs/adr/0009,
+// docs/adr/0014 section 6): Hermes, and pi / opencode when their images are
+// configured, each listed as a model. It validates the user's Keycloak
+// token, answers `/skills` commands itself, starts the user's agent for the
+// requested model in one of K shared slots and streams the chat completion
+// through to it.
 package main
 
 import (
@@ -22,14 +24,13 @@ import (
 	"time"
 )
 
-const modelID = "hermes-agent"
-
 type server struct {
-	auth    *Verifier
-	slots   *Slots
-	backend Backend
-	catalog *Catalog
-	client  *http.Client
+	runtimes []Runtime
+	auth     *Verifier
+	slots    *Slots
+	backend  Backend
+	catalog  *Catalog
+	client   *http.Client
 }
 
 func env(key, def string) string {
@@ -67,6 +68,21 @@ func main() {
 	}
 	catalogImage := mustEnv("HERMES_CATALOG_IMAGE")
 	k, _ := strconv.Atoi(env("AGENT_SLOTS", "3"))
+	runtimes := []Runtime{{Name: "hermes", ModelID: "hermes-agent", Image: mustEnv("HERMES_IMAGE"),
+		Title:       "Hermes agent",
+		Description: "Your personal Hermes agent with the curated skill catalog. Type /skills to see and switch skills."}}
+	// pi and opencode run behind agent-adapter; each is offered only when its
+	// image is configured (hermes-images ConfigMap).
+	if img := os.Getenv("PI_IMAGE"); img != "" {
+		runtimes = append(runtimes, Runtime{Name: "pi", ModelID: "pi-agent", Image: img,
+			Title:       "Pi agent",
+			Description: "Your personal pi coding agent with the curated skill catalog. Type /skills to see and switch skills."})
+	}
+	if img := os.Getenv("OPENCODE_IMAGE"); img != "" {
+		runtimes = append(runtimes, Runtime{Name: "opencode", ModelID: "opencode-agent", Image: img,
+			Title:       "OpenCode agent",
+			Description: "Your personal OpenCode agent with the curated skill catalog. Type /skills to see and switch skills."})
+	}
 	stopGrace, _ := strconv.ParseInt(env("AGENT_STOP_GRACE_SECONDS", "30"), 10, 64)
 
 	var backend Backend
@@ -78,7 +94,7 @@ func main() {
 			os.Exit(1)
 		}
 		backend = NewPodsBackend(kc, PodsConfig{
-			HermesImage:  mustEnv("HERMES_IMAGE"),
+			Runtimes:     runtimes,
 			RuntimeClass: os.Getenv("AGENT_RUNTIME_CLASS"),
 			StorageClass: os.Getenv("PROFILE_STORAGE_CLASS"),
 			ProfileSize:  env("PROFILE_SIZE", "2Gi"),
@@ -126,6 +142,7 @@ func main() {
 	}()
 
 	s := &server{
+		runtimes: runtimes,
 		auth: NewVerifier(mustEnv("OIDC_ISSUER"), mustEnv("OIDC_JWKS_URL"),
 			strings.Split(env("ALLOWED_ROLES", "ai-user,ai-admin"), ",")),
 		slots:   slots,
@@ -192,18 +209,28 @@ func (s *server) withUser(h func(http.ResponseWriter, *http.Request, User)) http
 }
 
 func (s *server) models(w http.ResponseWriter, _ *http.Request, _ User) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"object": "list",
-		"data": []map[string]any{{
-			"id": modelID, "object": "model", "owned_by": "hermes-broker",
-			"name":        "Hermes agent (personal)",
-			"description": "Your personal Hermes agent with the curated skill catalog. Type /skills to see and switch skills.",
-		}},
-	})
+	data := []map[string]any{}
+	for _, rt := range s.runtimes {
+		data = append(data, map[string]any{
+			"id": rt.ModelID, "object": "model", "owned_by": "hermes-broker",
+			"name": rt.Title + " (personal)", "description": rt.Description,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+func (s *server) runtime(model string) (Runtime, bool) {
+	for _, rt := range s.runtimes {
+		if rt.ModelID == model {
+			return rt, true
+		}
+	}
+	return Runtime{}, false
 }
 
 type chatRequest struct {
-	Stream   bool `json:"stream"`
+	Model    string `json:"model"`
+	Stream   bool   `json:"stream"`
 	Messages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -251,32 +278,38 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request, u User) {
 		openAIError(w, http.StatusBadRequest, "invalid_request_error", "body is not a chat completion request")
 		return
 	}
+	rt, ok := s.runtime(req.Model)
+	if !ok {
+		openAIError(w, http.StatusNotFound, "model_not_found", "unknown model "+strconv.Quote(req.Model))
+		return
+	}
+	ref := AgentRef{Runtime: rt.Name, ID: u.ID}
 	ctx := r.Context()
 
-	created, err := s.backend.EnsureProfile(ctx, u)
+	created, err := s.backend.EnsureProfile(ctx, u, ref)
 	if err != nil {
-		slog.Error("ensure profile", "user", u.ID, "err", err)
+		slog.Error("ensure profile", "agent", ref.String(), "err", err)
 		openAIError(w, http.StatusInternalServerError, "server_error", "cannot create the agent profile")
 		return
 	}
 	if verb, args, ok := parseSkillsCommand(req.lastUserText()); ok {
-		s.reply(w, req.Stream, s.skillsCommand(ctx, u, verb, args))
+		s.reply(w, req.Stream, rt.ModelID, s.skillsCommand(ctx, ref, verb, args))
 		return
 	}
 	if created {
-		slog.Info("profile created", "user", u.ID, "username", u.Name)
-		s.reply(w, req.Stream, onboardingText(s.catalog))
+		slog.Info("profile created", "agent", ref.String(), "username", u.Name)
+		s.reply(w, req.Stream, rt.ModelID, onboardingText(s.catalog, rt.Title))
 		return
 	}
 
 	var sw *sseWriter
 	if req.Stream {
-		sw = newSSE(w)
+		sw = newSSE(w, rt.ModelID)
 	}
 	// Second attempt only after the agent could not be dialled: its pod was
 	// removed outside the broker and the next reconcile has not seen it yet.
 	for attempt := 0; ; attempt++ {
-		if !s.chatOnce(ctx, w, r, u, body, req.Stream, sw) || attempt > 0 {
+		if !s.chatOnce(ctx, w, r, u, ref, body, req.Stream, sw) || attempt > 0 {
 			return
 		}
 		s.slots.reconcile(ctx)
@@ -285,8 +318,8 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request, u User) {
 
 // chatOnce serves one turn through the user's agent. It returns true, having
 // written nothing to the agent's reply, when the agent was unreachable.
-func (s *server) chatOnce(ctx context.Context, w http.ResponseWriter, r *http.Request, u User, body []byte, stream bool, sw *sseWriter) bool {
-	agent, notice, err := s.slots.Acquire(ctx, u, func() {
+func (s *server) chatOnce(ctx context.Context, w http.ResponseWriter, r *http.Request, u User, ref AgentRef, body []byte, stream bool, sw *sseWriter) bool {
+	agent, notice, err := s.slots.Acquire(ctx, u, ref, func() {
 		if sw != nil {
 			sw.text("All agent slots are busy; your request is queued...\n\n")
 		}
@@ -305,17 +338,17 @@ func (s *server) chatOnce(ctx context.Context, w http.ResponseWriter, r *http.Re
 		openAIError(w, status, "agent_unavailable", msg)
 		return false
 	}
-	defer s.slots.Release(u.ID)
+	defer s.slots.Release(ref)
 
 	prefix := ""
 	if len(notice) > 0 {
 		prefix = newSkillsNotice(notice)
 	}
-	return s.proxy(w, r.WithContext(ctx), agent, body, stream, sw, prefix)
+	return s.proxy(w, r.WithContext(ctx), agent, ref.Runtime, body, stream, sw, prefix)
 }
 
-func (s *server) skillsCommand(ctx context.Context, u User, verb string, args []string) string {
-	report, err := s.backend.Profile(ctx, u.ID)
+func (s *server) skillsCommand(ctx context.Context, ref AgentRef, verb string, args []string) string {
+	report, err := s.backend.Profile(ctx, ref)
 	if err != nil {
 		return "Cannot read your skill selection right now: " + err.Error()
 	}
@@ -323,7 +356,7 @@ func (s *server) skillsCommand(ctx context.Context, u User, verb string, args []
 	if report != nil {
 		sel = report.Sel
 	}
-	if p := s.slots.Pending(u.ID); p != nil {
+	if p := s.slots.Pending(ref); p != nil {
 		sel = *p
 	}
 	switch verb {
@@ -343,12 +376,12 @@ func (s *server) skillsCommand(ctx context.Context, u User, verb string, args []
 			msg = "Not changed: " + strings.Join(refused, ", ") + ".\n\n"
 		}
 		if len(refused) < len(args) {
-			s.slots.SetPending(u.ID, next)
+			s.slots.SetPending(ref, next)
 			msg += "Saved. Your agent restarts with the new selection before your next message.\n\n"
 		}
 		return msg + s.catalog.List(next, nil)
 	case "reset":
-		s.slots.SetPending(u.ID, Selection{})
+		s.slots.SetPending(ref, Selection{})
 		return "Catalog defaults restored; applied before your next message.\n\n" + s.catalog.List(Selection{}, nil)
 	default:
 		return skillsHelp
@@ -357,22 +390,22 @@ func (s *server) skillsCommand(ctx context.Context, u User, verb string, args []
 
 // reply answers a request directly from the broker, in the shape the client
 // asked for.
-func (s *server) reply(w http.ResponseWriter, stream bool, text string) {
+func (s *server) reply(w http.ResponseWriter, stream bool, model, text string) {
 	if stream {
-		sw := newSSE(w)
+		sw := newSSE(w, model)
 		sw.text(text)
 		sw.done()
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": fmt.Sprintf("chatcmpl-broker-%d", time.Now().UnixNano()), "object": "chat.completion",
-		"created": time.Now().Unix(), "model": modelID,
+		"created": time.Now().Unix(), "model": model,
 		"choices": []map[string]any{{"index": 0, "finish_reason": "stop",
 			"message": map[string]string{"role": "assistant", "content": text}}},
 	})
 }
 
-func (s *server) proxy(w http.ResponseWriter, r *http.Request, a *Agent, body []byte, stream bool, sw *sseWriter, prefix string) (unreachable bool) {
+func (s *server) proxy(w http.ResponseWriter, r *http.Request, a *Agent, model string, body []byte, stream bool, sw *sseWriter, prefix string) (unreachable bool) {
 	up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, a.Endpoint+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		openAIError(w, http.StatusInternalServerError, "server_error", err.Error())
@@ -380,9 +413,13 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request, a *Agent, body []
 	}
 	up.Header.Set("Content-Type", "application/json")
 	up.Header.Set("Authorization", "Bearer "+a.APIKey)
+	// agent-adapter keeps one pi / opencode session per Open WebUI chat.
+	if id := r.Header.Get("X-OpenWebUI-Chat-Id"); id != "" {
+		up.Header.Set("X-OpenWebUI-Chat-Id", id)
+	}
 	resp, err := s.client.Do(up)
 	if err != nil {
-		slog.Error("agent request", "user", a.UserID, "err", err)
+		slog.Error("agent request", "agent", a.Ref.String(), "err", err)
 		if opErr := (*net.OpError)(nil); errors.As(err, &opErr) && opErr.Op == "dial" {
 			return true
 		}
@@ -413,7 +450,7 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request, a *Agent, body []
 		return false
 	}
 	if sw == nil {
-		sw = newSSE(w)
+		sw = newSSE(w, model)
 	}
 	if prefix != "" {
 		sw.text(prefix)
@@ -484,11 +521,12 @@ type sseWriter struct {
 	f       http.Flusher
 	started bool
 	id      string
+	model   string
 }
 
-func newSSE(w http.ResponseWriter) *sseWriter {
+func newSSE(w http.ResponseWriter, model string) *sseWriter {
 	f, _ := w.(http.Flusher)
-	return &sseWriter{w: w, f: f, id: fmt.Sprintf("chatcmpl-broker-%d", time.Now().UnixNano())}
+	return &sseWriter{w: w, f: f, id: fmt.Sprintf("chatcmpl-broker-%d", time.Now().UnixNano()), model: model}
 }
 
 func (s *sseWriter) begin() {
@@ -512,7 +550,7 @@ func (s *sseWriter) flush() {
 func (s *sseWriter) text(t string) {
 	s.begin()
 	chunk := map[string]any{
-		"id": s.id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": modelID,
+		"id": s.id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": s.model,
 		"choices": []map[string]any{{"index": 0, "delta": map[string]string{"role": "assistant", "content": t}}},
 	}
 	raw, _ := json.Marshal(chunk)
@@ -523,7 +561,7 @@ func (s *sseWriter) text(t string) {
 func (s *sseWriter) done() {
 	s.begin()
 	chunk := map[string]any{
-		"id": s.id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": modelID,
+		"id": s.id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": s.model,
 		"choices": []map[string]any{{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}},
 	}
 	raw, _ := json.Marshal(chunk)

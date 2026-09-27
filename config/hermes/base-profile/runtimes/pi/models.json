@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "pat": {
+      "baseUrl": "http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "${AGENT_INFERENCE_KEY}",
+      "models": [
+        {
+          "id": "qwen-3.8-27b",
+          "name": "Qwen 3.8 27B",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 196608,
+          "maxTokens": 32768,
+          "compat": {"thinkingFormat": "qwen-chat-template"}
+        }
+      ]
+    }
+  }
+}

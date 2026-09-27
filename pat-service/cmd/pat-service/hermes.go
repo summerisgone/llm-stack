@@ -12,16 +12,18 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 )
 
-// Dashboard issuance of the Hermes agent's inference key (docs/adr/0014
-// section 8, user-initiated instead of broker-initiated): mint a
-// `hermes-agent` PAT, revoke the previous one, write it as INFERENCE_KEY
-// into hermes-cred-<id> and delete the running agent pod so its next start
-// reads the new key. Replaces scripts/hermes-inference-key.
+// Dashboard issuance of the agents' inference key (docs/adr/0014 section 8,
+// user-initiated instead of broker-initiated): mint a `hermes-agent` PAT,
+// revoke the previous one, write it as INFERENCE_KEY into hermes-cred-<id>,
+// which all of the user's agents (Hermes, pi, opencode) read, and delete
+// their running pods so the next start reads the new key. Replaces
+// scripts/hermes-inference-key.
 
 const (
 	hermesTokenName = "hermes-agent"
@@ -54,9 +56,9 @@ func newHermesKube(ns string) *hermesKube {
 	}
 }
 
-// do returns the response status; 404 is not an error so callers can
-// upsert and ignore missing pods.
-func (k *hermesKube) do(ctx context.Context, method, resource, name, contentType string, body any) (int, error) {
+// do returns the response status and decodes a 2xx body into out if set;
+// 404 is not an error so callers can upsert and ignore missing pods.
+func (k *hermesKube) do(ctx context.Context, method, resource, name, contentType string, body, out any) (int, error) {
 	// Projected ServiceAccount tokens rotate; read the current one each call.
 	token, err := os.ReadFile(k.tokenFile)
 	if err != nil {
@@ -91,6 +93,11 @@ func (k *hermesKube) do(ctx context.Context, method, resource, name, contentType
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return resp.StatusCode, fmt.Errorf("%s %s/%s: %d %s", method, resource, name, resp.StatusCode, msg)
 	}
+	if out != nil && resp.StatusCode < 300 {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return resp.StatusCode, err
+		}
+	}
 	return resp.StatusCode, nil
 }
 
@@ -102,12 +109,12 @@ func hermesProfileID(sub string) string {
 }
 
 // storeInferenceKey upserts INFERENCE_KEY into hermes-cred-<id>, keeping the
-// broker's API_SERVER_KEY, then deletes the agent pod. Reports whether a pod
-// was running.
+// broker's API_SERVER_KEY, then deletes the user's agent pods. Reports
+// whether any was running.
 func (k *hermesKube) storeInferenceKey(ctx context.Context, id, key string, expires time.Time) (bool, error) {
 	secret := "hermes-cred-" + id
 	meta := map[string]any{"annotations": map[string]string{"hermes.llm-stack/inference-key-expires-at": expires.Format(time.RFC3339)}}
-	status, err := k.do(ctx, http.MethodGet, "secrets", secret, "", nil)
+	status, err := k.do(ctx, http.MethodGet, "secrets", secret, "", nil, nil)
 	if err != nil {
 		return false, err
 	}
@@ -116,16 +123,22 @@ func (k *hermesKube) storeInferenceKey(ctx context.Context, id, key string, expi
 		meta["name"] = secret
 		meta["labels"] = map[string]string{"hermes.llm-stack/user-id": id, "app.kubernetes.io/managed-by": "hermes-broker", "app.kubernetes.io/name": "hermes"}
 		_, err = k.do(ctx, http.MethodPost, "secrets", "", "application/json", map[string]any{
-			"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": meta, "stringData": map[string]string{"INFERENCE_KEY": key}})
+			"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": meta, "stringData": map[string]string{"INFERENCE_KEY": key}}, nil)
 	} else {
 		_, err = k.do(ctx, http.MethodPatch, "secrets", secret, "application/merge-patch+json", map[string]any{
-			"metadata": meta, "stringData": map[string]string{"INFERENCE_KEY": key}})
+			"metadata": meta, "stringData": map[string]string{"INFERENCE_KEY": key}}, nil)
 	}
 	if err != nil {
 		return false, err
 	}
-	status, err = k.do(ctx, http.MethodDelete, "pods", "hermes-agent-"+id, "", nil)
-	return err == nil && status != http.StatusNotFound, err
+	// Agent pods only: the broker labels its PVCs and Secrets with the user
+	// id too, but those are not pods.
+	var deleted struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	sel := url.QueryEscape("hermes.llm-stack/user-id=" + id + ",app.kubernetes.io/managed-by=hermes-broker")
+	_, err = k.do(ctx, http.MethodDelete, "pods?labelSelector="+sel, "", "", nil, &deleted)
+	return err == nil && len(deleted.Items) > 0, err
 }
 
 func (a *app) issueHermesToken(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +186,7 @@ func (a *app) issueHermesToken(w http.ResponseWriter, r *http.Request) {
 	restarted, err := a.hermes.storeInferenceKey(r.Context(), profile, value, expires)
 	if err != nil {
 		log.Printf("hermes key for profile %s: %v", profile, err)
-		http.Error(w, "could not deliver key to the Hermes agent", 502)
+		http.Error(w, "could not deliver key to the agents", 502)
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {

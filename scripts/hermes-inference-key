@@ -36,5 +36,5 @@ else
   kubectl -n "$namespace" label secret "hermes-cred-$id" \
     app.kubernetes.io/managed-by=hermes-broker "hermes.llm-stack/user-id=$id" app.kubernetes.io/name=hermes >/dev/null
 fi
-kubectl -n "$namespace" delete pod "hermes-agent-$id" --ignore-not-found --wait=true >/dev/null
+kubectl -n "$namespace" delete pod -l "hermes.llm-stack/user-id=$id,app.kubernetes.io/managed-by=hermes-broker" --ignore-not-found --wait=true >/dev/null
 printf 'Inference key set for Hermes profile %s.\n' "$id"

@@ -113,8 +113,8 @@ func (c *Catalog) List(sel Selection, marked []string) string {
 const skillsHelp = "Commands: `/skills` lists the catalog, `/skills off <name>...` and " +
 	"`/skills on <name>...` switch optional skills, `/skills reset` returns to the defaults."
 
-func onboardingText(c *Catalog) string {
-	return "Your personal Hermes agent has been created. These catalog skills are available:\n\n" +
+func onboardingText(c *Catalog, title string) string {
+	return "Your personal " + title + " has been created. These catalog skills are available:\n\n" +
 		c.List(Selection{}, nil) + "\n" + skillsHelp +
 		"\n\nSend any other message to start with these defaults."
 }

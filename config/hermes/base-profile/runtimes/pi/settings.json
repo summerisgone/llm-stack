@@ -1,0 +1,6 @@
+{
+  "defaultProvider": "pat",
+  "defaultModel": "qwen-3.8-27b",
+  "defaultThinkingLevel": "medium",
+  "enableSkillCommands": false
+}

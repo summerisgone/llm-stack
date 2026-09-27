@@ -912,7 +912,7 @@ spec:
         - name: OPENID_REDIRECT_URI
           value: {{ .Values.oidc.publicBaseURL }}/oauth/oidc/callback
         - name: OPENAI_API_CONFIGS
-          value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent"]}}'
+          value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent","pi-agent","opencode-agent"]}}'
         - name: OPENAI_API_BASE_URLS
           value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://hermes-broker.hermes-agents.svc.cluster.local:8080/v1
         - name: OPENWEBUI_AUTOMATIONS_PAT

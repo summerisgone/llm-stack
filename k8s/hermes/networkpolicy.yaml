@@ -1,5 +1,5 @@
-# Default deny in the agent namespace, then: Open WebUI -> broker -> agents,
-# agents -> pat-service only (inference, ADR 0014 section 8; GitLab is added
+# Default deny in the agent namespace, then: Open WebUI -> broker -> agents
+# (Hermes, pi, opencode), agents -> pat-service only (inference, ADR 0014 section 8; GitLab is added
 # here when the repo-reader skill gets a real target). Enforcement depends on
 # the cluster CNI; see docs/operations/hermes.md.
 apiVersion: networking.k8s.io/v1
@@ -55,8 +55,10 @@ spec:
         - port: 8080
     - to:
         - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: hermes-agent
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [hermes-agent, pi-agent, opencode-agent]
       ports:
         - port: 8642
 ---
@@ -66,8 +68,10 @@ metadata:
   name: hermes-agent
 spec:
   podSelector:
-    matchLabels:
-      app.kubernetes.io/component: hermes-agent
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [hermes-agent, pi-agent, opencode-agent]
   policyTypes: [Ingress, Egress]
   ingress:
     - from:

@@ -1,5 +1,6 @@
 # Dotted config keys a user's config.user.yaml cannot override. hermes-sync
 # always writes the catalog value (or removes the key if the catalog has none).
+# Every mcp_servers entry named in mcp-servers.yaml is locked as well.
 - model.provider
 - model.base_url
 - model.api_key
@@ -7,8 +8,6 @@
 - terminal.cwd
 - skills.external_dirs
 - agent.disabled_toolsets
-- mcp_servers.web-search
-- mcp_servers.repowise
 - curator.enabled
 - updates.check
 - telemetry

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hermes catalog build and per-start profile sync (docs/adr/0014 sections 1-4).
+"""Agent catalog build and per-start profile sync (docs/adr/0014 sections 1-4).
 
 build <profile-dir>
     Validates the base profile and writes catalog.json (the index the broker
@@ -10,11 +10,12 @@ sync
     agent's, so the catalog layer it writes is read-only to the agent:
       1. applies the selection passed by the broker (HERMES_SELECTION),
       2. replaces catalog/ with the image's copy,
-      3. rebuilds catalog-enabled/ (the Hermes external skills dir) and the
-         merged config.yaml / SOUL.md,
-      4. moves personal skills shadowed by an enabled catalog skill into
-         skills/.archive/ (Hermes does not scan it),
-      5. prints a compact JSON report to the termination log for the broker.
+      3. rebuilds catalog-enabled/ (the skills dir every runtime reads),
+      4. renders the runtime's config (AGENT_RUNTIME: hermes, pi or opencode)
+         with the MCP servers of mcp-servers.yaml,
+      5. hermes only: moves personal skills shadowed by an enabled catalog
+         skill into skills/.archive/ (Hermes does not scan it),
+      6. prints a compact JSON report to the termination log for the broker.
 """
 
 import copy
@@ -30,15 +31,12 @@ import yaml
 CATALOG_DIR = os.environ.get("CATALOG_DIR", "/catalog")
 HERMES_HOME = os.environ.get("HERMES_HOME", "/opt/data/home")
 REPORT_PATH = os.environ.get("REPORT_PATH", "/dev/termination-log")
+RUNTIMES = ("hermes", "pi", "opencode")
 
 # Personal-layer directories the agent writes into. Group-writable + setgid so
 # files created by either uid stay in the shared group.
 PERSONAL_DIRS = ("skills", "memories", "sessions", "logs")
 PERSONAL_FILES = ("config.user.yaml", "SOUL.user.md")
-
-# Catalog mcp_servers entry -> env flag that keeps it (set by hermes-broker).
-MCP_SERVER_FLAGS = {"web-search": "WEB_SEARCH_ENABLED", "repowise": "REPOWISE_ENABLED"}
-
 
 def load_yaml(path, default):
     try:
@@ -106,6 +104,10 @@ def build(profile_dir):
     for key in load_yaml(os.path.join(profile_dir, "locked-keys.yaml"), []):
         if not isinstance(key, str):
             sys.exit(f"locked-keys.yaml: not a dotted key: {key!r}")
+    registry = load_yaml(os.path.join(profile_dir, "mcp-servers.yaml"), {})
+    for name, spec in (registry.get("servers") or {}).items():
+        if not registry.get("pat_service") or not (spec or {}).get("flag") or not (spec or {}).get("timeout"):
+            sys.exit(f"mcp-servers.yaml: {name} needs pat_service, flag and timeout")
     index = []
     for name in present:
         entry = meta.get(name) or {}
@@ -217,6 +219,138 @@ def personal_skill_dirs(skills_root):
             yield dirpath
 
 
+def mcp_servers(catalog):
+    """Enabled servers of mcp-servers.yaml as {name: (url, timeout seconds)},
+    plus every name the registry knows."""
+    registry = load_yaml(os.path.join(catalog, "mcp-servers.yaml"), {})
+    base = str(registry.get("pat_service", "")).rstrip("/")
+    known = registry.get("servers") or {}
+    enabled = {
+        name: (f"{base}/mcp/{name}/", int(spec["timeout"]))
+        for name, spec in known.items()
+        if os.environ.get(spec["flag"]) == "true"
+    }
+    return enabled, list(known)
+
+
+def soul_text(catalog, home):
+    """Catalog SOUL.md plus the user's SOUL.user.md addendum."""
+    with open(os.path.join(catalog, "SOUL.md"), encoding="utf-8") as fh:
+        soul = fh.read()
+    try:
+        with open(os.path.join(home, "SOUL.user.md"), encoding="utf-8") as fh:
+            addendum = fh.read().strip()
+    except FileNotFoundError:
+        addendum = ""
+    if addendum:
+        soul = soul.rstrip() + "\n\n" + addendum + "\n"
+    return soul
+
+
+def load_json(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def catalog_owned_dir(path):
+    """A config dir the agent can add files to but whose catalog files it
+    cannot replace (sticky, group-writable)."""
+    os.makedirs(path, exist_ok=True)
+    try:
+        os.chmod(path, 0o3775)
+    except PermissionError:
+        pass
+
+
+def render_hermes(catalog, home, soul, servers, all_servers):
+    locked = load_yaml(os.path.join(catalog, "locked-keys.yaml"), [])
+    catalog_cfg = load_yaml(os.path.join(catalog, "config.yaml"), {})
+    # MCP servers are opt-in per install (docs/adr/0017 section 7, 0018
+    # section 7). Every registry name is locked, so a disabled entry also
+    # removes a user's copy of it.
+    if servers:
+        catalog_cfg["mcp_servers"] = {
+            name: {"url": url, "headers": {"Authorization": "Bearer ${HERMES_INFERENCE_KEY}"},
+                   "timeout": timeout}
+            for name, (url, timeout) in servers.items()
+        }
+    locked = list(locked) + ["mcp_servers." + name for name in all_servers]
+    cfg = merged_config(
+        catalog_cfg,
+        load_yaml(os.path.join(home, "config.user.yaml"), {}),
+        locked)
+    if cfg.get("mcp_servers") == {}:
+        del cfg["mcp_servers"]
+    write_atomic(os.path.join(home, "config.yaml"), yaml.safe_dump(cfg, sort_keys=False))
+    write_atomic(os.path.join(home, "SOUL.md"), soul)
+
+
+def render_pi(catalog, home, soul, servers):
+    """PI_CODING_AGENT_DIR is <home>/pi (agent-adapter). pi has no MCP
+    client of its own; pi-mcp-adapter, shipped in the agent image, reads
+    mcp.json from the agent dir."""
+    src = os.path.join(catalog, "runtimes", "pi")
+    agent_dir = os.path.join(home, "pi")
+    catalog_owned_dir(agent_dir)
+    settings = load_json(os.path.join(src, "settings.json"))
+    settings["skills"] = [os.path.join(home, "catalog-enabled")]
+    write_atomic(os.path.join(agent_dir, "settings.json"), json.dumps(settings, indent=2) + "\n")
+    shutil.copyfile(os.path.join(src, "models.json"), os.path.join(agent_dir, "models.json.tmp"))
+    os.replace(os.path.join(agent_dir, "models.json.tmp"), os.path.join(agent_dir, "models.json"))
+    mcp = {
+        "settings": {"allowInstall": False, "hostConfigDiscovery": "off"},
+        "mcpServers": {
+            name: {"url": url, "headers": {"Authorization": "Bearer ${AGENT_INFERENCE_KEY}"},
+                   # Connected at start, so the model sees the server's tools
+                   # themselves rather than only the adapter's `mcp` proxy.
+                   "lifecycle": "keep-alive", "directTools": True,
+                   "requestTimeoutMs": timeout * 1000}
+            for name, (url, timeout) in servers.items()
+        },
+    }
+    write_atomic(os.path.join(agent_dir, "mcp.json"), json.dumps(mcp, indent=2) + "\n")
+    write_atomic(os.path.join(agent_dir, "AGENTS.md"), soul)
+
+
+def render_opencode(catalog, home, soul, servers):
+    """OPENCODE_CONFIG is <home>/opencode/opencode.json (agent-adapter)."""
+    config_dir = os.path.join(home, "opencode")
+    catalog_owned_dir(config_dir)
+    cfg = load_json(os.path.join(catalog, "runtimes", "opencode", "opencode.json"))
+    cfg["skills"] = {"paths": [os.path.join(home, "catalog-enabled")]}
+    cfg["instructions"] = [os.path.join(config_dir, "AGENTS.md")]
+    cfg["mcp"] = {
+        name: {"type": "remote", "url": url, "enabled": True, "oauth": False,
+               "headers": {"Authorization": "Bearer {env:AGENT_INFERENCE_KEY}"},
+               "timeout": timeout * 1000}
+        for name, (url, timeout) in servers.items()
+    }
+    write_atomic(os.path.join(config_dir, "opencode.json"), json.dumps(cfg, indent=2) + "\n")
+    write_atomic(os.path.join(config_dir, "AGENTS.md"), soul)
+
+
+def archive_shadowed(home, enabled):
+    # Catalog wins on a name collision (ADR 0014 section 2); Hermes itself
+    # prefers the local copy, so the personal one is moved out of its scan.
+    shadowed, shadow_failed = [], []
+    skills_root = os.path.join(home, "skills")
+    enabled_set = set(enabled)
+    for path in list(personal_skill_dirs(skills_root)):
+        name = skill_name(path)
+        if name not in enabled_set:
+            continue
+        dest_root = os.path.join(skills_root, ".archive", "shadowed-by-catalog")
+        dest = os.path.join(dest_root, f"{name}-{int(time.time())}")
+        try:
+            os.makedirs(dest_root, exist_ok=True)
+            os.rename(path, dest)
+            shadowed.append(name)
+        except OSError as exc:
+            shadow_failed.append(name)
+            print(f"cannot move shadowed personal skill {path}: {exc}", file=sys.stderr)
+    return shadowed, shadow_failed
+
+
 def sync():
     home = HERMES_HOME
     os.makedirs(home, exist_ok=True)
@@ -275,51 +409,19 @@ def sync():
     os.chmod(new, 0o755)
     swap_dir(new, os.path.join(home, "catalog-enabled"))
 
-    locked = load_yaml(os.path.join(catalog, "locked-keys.yaml"), [])
-    catalog_cfg = load_yaml(os.path.join(catalog, "config.yaml"), {})
-    # MCP servers are opt-in per install (docs/adr/0017 section 7, 0018
-    # section 7). Dropping an entry here lets the lock remove a user's copy of
-    # it as well.
-    for entry, flag in MCP_SERVER_FLAGS.items():
-        if os.environ.get(flag) != "true":
-            set_path(catalog_cfg, "mcp_servers." + entry, None, False)
-    if catalog_cfg.get("mcp_servers") == {}:
-        del catalog_cfg["mcp_servers"]
-    cfg = merged_config(
-        catalog_cfg,
-        load_yaml(os.path.join(home, "config.user.yaml"), {}),
-        locked)
-    write_atomic(os.path.join(home, "config.yaml"), yaml.safe_dump(cfg, sort_keys=False))
-
-    with open(os.path.join(catalog, "SOUL.md"), encoding="utf-8") as fh:
-        soul = fh.read()
-    try:
-        with open(os.path.join(home, "SOUL.user.md"), encoding="utf-8") as fh:
-            addendum = fh.read().strip()
-    except FileNotFoundError:
-        addendum = ""
-    if addendum:
-        soul = soul.rstrip() + "\n\n" + addendum + "\n"
-    write_atomic(os.path.join(home, "SOUL.md"), soul)
-
-    # Catalog wins on a name collision (ADR 0014 section 2); Hermes itself
-    # prefers the local copy, so the personal one is moved out of its scan.
+    runtime = os.environ.get("AGENT_RUNTIME", "hermes")
+    if runtime not in RUNTIMES:
+        sys.exit(f"unknown AGENT_RUNTIME {runtime!r}")
+    soul = soul_text(catalog, home)
+    servers, all_servers = mcp_servers(catalog)
     shadowed, shadow_failed = [], []
-    skills_root = os.path.join(home, "skills")
-    enabled_set = set(enabled)
-    for path in list(personal_skill_dirs(skills_root)):
-        name = skill_name(path)
-        if name not in enabled_set:
-            continue
-        dest_root = os.path.join(skills_root, ".archive", "shadowed-by-catalog")
-        dest = os.path.join(dest_root, f"{name}-{int(time.time())}")
-        try:
-            os.makedirs(dest_root, exist_ok=True)
-            os.rename(path, dest)
-            shadowed.append(name)
-        except OSError as exc:
-            shadow_failed.append(name)
-            print(f"cannot move shadowed personal skill {path}: {exc}", file=sys.stderr)
+    if runtime == "hermes":
+        render_hermes(catalog, home, soul, servers, all_servers)
+        shadowed, shadow_failed = archive_shadowed(home, enabled)
+    elif runtime == "pi":
+        render_pi(catalog, home, soul, servers)
+    else:
+        render_opencode(catalog, home, soul, servers)
 
     optional = [s["name"] for s in index["skills"] if not s["required"]]
     seen_path = os.path.join(home, ".catalog-seen")

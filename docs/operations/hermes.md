@@ -1,6 +1,6 @@
 # Hermes agent fleet
 
-Per-user Hermes agents behind `hermes-broker`
+Per-user Hermes, pi and opencode agents behind `hermes-broker`
 ([ADR 0009](../adr/0009-cloud-hermes-fleet-per-user-profiles.md),
 [ADR 0014](../adr/0014-hermes-curated-catalog-and-worker-slots.md)). This
 page is the runbook for the `pods` backend as implemented; ADR 0014 records
@@ -12,8 +12,9 @@ the decisions and the V1 findings.
 | --- | --- | --- |
 | Namespace `hermes-agents`, broker Deployment/Service/ConfigMap, RBAC, ResourceQuota, NetworkPolicies | `k8s/hermes` | `make hermes-up` |
 | ConfigMap `hermes-images`, broker catalog image | `versions.lock.env` | `make hermes-up` |
-| Catalog content | `config/hermes/base-profile/` | image `HERMES_CATALOG_IMAGE`, built by `make hermes-catalog` |
-| Pod `hermes-agent-<id>`, PVC `hermes-profile-<id>`, Secret `hermes-cred-<id>` | broker, at runtime | label `app.kubernetes.io/managed-by: hermes-broker` |
+| Catalog content, MCP server list (`mcp-servers.yaml`) | `config/hermes/base-profile/` | image `HERMES_CATALOG_IMAGE`, built by `make hermes-catalog` |
+| pi / opencode images (`PI_IMAGE`, `OPENCODE_IMAGE`) | `agent-adapter/` | `make agent-images` |
+| Pod `<runtime>-agent-<id>`, PVC `<runtime>-profile-<id>` (runtime `hermes`, `pi`, `opencode`), Secret `hermes-cred-<id>` (one per user) | broker, at runtime | label `app.kubernetes.io/managed-by: hermes-broker` |
 
 `<id>` is the first 16 hex characters of `sha256(keycloak sub)`. The PVC
 annotation `hermes.llm-stack/username` names the user.
@@ -37,10 +38,51 @@ Agent pod layout:
   `SOUL.md`) is owned by uid 10001 in a sticky directory, so the agent can
   read it but not change, rename or delete it.
 
+## pi and opencode
+
+The broker lists one model per runtime whose image is set: `hermes-agent`,
+`pi-agent` (`PI_IMAGE`), `opencode-agent` (`OPENCODE_IMAGE`); Open WebUI's
+connection 2 declares all three. A user gets one agent and one profile PVC
+per runtime; the K slots are shared, so one user with all three agents
+running holds three slots.
+
+- Neither agent has an OpenAI-compatible server, so the image runs
+  `agent-adapter` on `:8642` (same `API_SERVER_KEY` bearer and `/health` as
+  Hermes). opencode runs as `opencode serve` on loopback, driven over its
+  HTTP API; pi runs in-process through its SDK. The adapter keeps one agent
+  session per Open WebUI chat (`X-OpenWebUI-Chat-Id`, forwarded by the
+  broker) and sends only the latest user message; sessions persist on the
+  PVC.
+- `hermes-sync` (`AGENT_RUNTIME`) renders the runtime's config into the
+  profile: `opencode/opencode.json` + `AGENTS.md`, or the pi agent dir
+  `pi/` (`settings.json`, `models.json`, `mcp.json`, `AGENTS.md`). Both use
+  pat-service `/v1` with `AGENT_INFERENCE_KEY` (the same `INFERENCE_KEY`
+  from `hermes-cred-<id>`), `catalog-enabled/` as a skills directory and
+  `SOUL.md` (+ `SOUL.user.md`) as instructions.
+- MCP servers come from `mcp-servers.yaml` for every runtime: Hermes
+  `mcp_servers`, opencode `mcp` (remote), pi through `pi-mcp-adapter`
+  (shipped in the image; pi has no MCP client). Each entry is pat-service
+  `/mcp/<name>/` with the user's PAT, kept only when its flag
+  (`WEB_SEARCH_ENABLED`, `REPOWISE_ENABLED`) is `true`. Adding a server:
+  one entry there plus its pat-service upstream.
+- Egress is pat-service only: opencode runs with `OPENCODE_PURE=1` and
+  the update, models.dev, LSP-download and share switches off; pi with
+  `PI_OFFLINE=1`. opencode's built-in `webfetch`/`websearch` are denied, as
+  Hermes' `web` toolset is.
+- Issuing a key on `/platform` restarts all of the user's agents.
+
+```sh
+make agent-images HERMES_PLATFORM=linux/amd64   # pins PI_IMAGE / OPENCODE_IMAGE
+make hermes-k3d-load                            # also loads both images
+```
+
+An empty `PI_IMAGE` or `OPENCODE_IMAGE` (in `.env`) leaves that agent out of
+the broker's model list; Open WebUI still shows the model and gets a 404.
+
 ## Deploy and update
 
 ```sh
-make hermes-test          # hermes-sync unit tests, broker go vet + go test
+make hermes-test          # hermes-sync, broker and agent-adapter tests
 make hermes-catalog       # build catalog image, pin HERMES_CATALOG_IMAGE
 make hermes-broker-image  # build llm-stack/hermes-broker:local
 make hermes-up            # apply k8s/hermes + images, restart broker
@@ -85,7 +127,7 @@ kubectl -n hermes-agents logs deploy/hermes-broker | grep '"agent started"'   # 
 ```
 
 - Offboarding: `scripts/hermes-profile-delete <keycloak-sub|id>` deletes the
-  pod, Secret and PVC. It is the only path that deletes a profile; the
+  user's pods, Secret and PVCs of every runtime. It is the only path that deletes a profile; the
   broker's Role has no PVC delete.
 - `make hermes-down` stops the broker and all agents; profiles stay.
 - Broker restart: agents keep running; the new broker adopts them and treats
@@ -146,17 +188,13 @@ test. Test through a Pod with `runtimeClassName: gvisor`.
 - Inference credentials: agents call pat-service `/v1` with
   `INFERENCE_KEY` from `hermes-cred-<id>` (`model.api_key:
   ${HERMES_INFERENCE_KEY}`, a locked key). The user issues it on `/platform`
-  ("Issue Hermes key", `POST /api/hermes-token`): pat-service mints a
+  ("Issue agent key", `POST /api/hermes-token`): pat-service mints a
   `hermes-agent` PAT (`issued_by = hermes`, `HERMES_PAT_TTL_DAYS`, default
-  7), revokes the previous one, writes the Secret and deletes a running
-  agent pod. The broker does not mint or renew it yet (ADR 0014 section 8,
+  7), revokes the previous one, writes the Secret and deletes the user's
+  running agent pods. The broker does not mint or renew it yet (ADR 0014 section 8,
   `POST /internal/hermes-tokens`); on expiry the user issues a new one.
   `scripts/hermes-inference-key` remains as an operator fallback. Without a
   key a turn ends with Hermes' `HTTP 401` error.
-- Open WebUI second connection (`OPENAI_API_BASE_URLS` + `system_oauth` on
-  both). Not added because the remote overlay's connection list is being
-  changed in the working tree; the broker already accepts Open WebUI's
-  forwarded Keycloak token.
 - Remote profile: `k8s/hermes` is not folded into the `airgap-stack` chart
   yet; `make hermes-up` works against any cluster, but the remote issuer and
   a pushed broker/catalog image are needed.

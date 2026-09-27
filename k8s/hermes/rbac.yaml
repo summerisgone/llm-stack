@@ -35,9 +35,10 @@ subjects:
   - kind: ServiceAccount
     name: hermes-broker
 ---
-# pat-service issues a user's Hermes inference key from /platform
+# pat-service issues a user's agent inference key from /platform
 # (pat-service/cmd/pat-service/hermes.go): it writes INFERENCE_KEY into
-# hermes-cred-<id> and deletes the agent pod so the next start reads it.
+# hermes-cred-<id> and deletes the user's agent pods (Hermes, pi, opencode)
+# by label so the next start reads it.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -48,7 +49,8 @@ rules:
     verbs: [get, create, patch]
   - apiGroups: [""]
     resources: [pods]
-    verbs: [delete]
+    # delete: pat-service images before the label-selector delete.
+    verbs: [delete, deletecollection]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -5,7 +5,8 @@ set -eu
 # not need inference or Open WebUI): identity at the broker, per-user profile
 # and agent pod, /skills selection applied by the catalog sync, catalog layer
 # read-only to the agent, pod sandbox, network isolation between agents, and
-# agents surviving a broker restart.
+# agents surviving a broker restart. pi and opencode, when the broker lists
+# them, get the same start / answer / sandbox checks for user A.
 #
 # Needs Keycloak and the hermes-agents namespace (`make hermes-up`). Creates
 # three temporary Keycloak users and deletes them, with their profiles, on
@@ -142,9 +143,10 @@ pass "created temporary users (profiles $id_a, $id_b)"
 
 code() { curl -sS -o /dev/null -w '%{http_code}' "$@"; }
 
-# chat <token> <text> [stream]: prints the assistant text of one turn.
+# chat <token> <text> [stream]: prints the assistant text of one turn with
+# model $MODEL (default hermes-agent).
 chat() {
-  body=$(TEXT="$2" STREAM="${3:-false}" python3 -c 'import json,os; print(json.dumps({"model":"hermes-agent","stream":os.environ["STREAM"]=="true","messages":[{"role":"user","content":os.environ["TEXT"]}]}))')
+  body=$(TEXT="$2" STREAM="${3:-false}" MODEL="${MODEL:-hermes-agent}" python3 -c 'import json,os; print(json.dumps({"model":os.environ["MODEL"],"stream":os.environ["STREAM"]=="true","messages":[{"role":"user","content":os.environ["TEXT"]}]}))')
   if [ "${3:-false}" = true ]; then
     curl -fsS -N --max-time 240 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
       -d "$body" "$broker/v1/chat/completions" | python3 -c '
@@ -178,8 +180,8 @@ tampered=$(printf '%s' "$tok_a" | python3 -c 'import sys; h,p,s=sys.stdin.read()
 [ "$(code -H "Authorization: Bearer $tok_norole" "$broker/v1/models")" = 403 ] ||
   fail "token without ai-user/ai-admin must be 403"
 models=$(curl -fsS -H "Authorization: Bearer $tok_a" "$broker/v1/models" | json '",".join(m["id"] for m in d["data"])')
-[ "$models" = hermes-agent ] || fail "models: $models"
-pass "broker: 401 without/forged/tampered token, 403 without role, lists hermes-agent"
+case ",$models," in *,hermes-agent,*) ;; *) fail "models: $models" ;; esac
+pass "broker: 401 without/forged/tampered token, 403 without role, lists $models"
 
 # --- profile creation and /skills (V4) -------------------------------------
 reply=$(chat "$tok_a" "hello")
@@ -209,6 +211,30 @@ if [ "$check_inference" = true ]; then
   printf '%s' "$reply" | grep -q PONG || fail "inference: $reply"
   pass "inference: agent answered from the model with the user's own PAT: $(printf '%s' "$reply" | head -c 100 | tr '\n' ' ')"
 fi
+
+# --- pi / opencode (agent-adapter) -----------------------------------------
+for model in $(printf '%s' "$models" | tr , ' '); do
+  [ "$model" = hermes-agent ] && continue
+  rt=${model%-agent}
+  reply=$(MODEL=$model chat "$tok_a" "hello")
+  printf '%s' "$reply" | grep -q "has been created" || fail "$rt onboarding: $reply"
+  kubectl -n "$hns" get pvc "$rt-profile-$id_a" >/dev/null || fail "$rt profile PVC not created"
+  reply=$(MODEL=$model chat "$tok_a" "Reply with exactly the word PONG and nothing else." true)
+  [ -n "$reply" ] || fail "empty reply from $rt agent"
+  if [ "$check_inference" = true ]; then
+    printf '%s' "$reply" | grep -q PONG || fail "$rt inference: $reply"
+  fi
+  kubectl -n "$hns" wait --for=condition=Ready "pod/$rt-agent-$id_a" --timeout=10s >/dev/null ||
+    fail "$rt agent pod not ready"
+  [ "$(kubectl -n "$hns" get pod "$rt-agent-$id_a" -o jsonpath='{.spec.runtimeClassName}')" = \
+    "$(kubectl -n "$hns" get pod "hermes-agent-$id_a" -o jsonpath='{.spec.runtimeClassName}')" ] ||
+    fail "$rt agent runs in another runtime class than Hermes"
+  kubectl -n "$hns" exec "$rt-agent-$id_a" -c agent -- sh -c 'touch /opt/agent/x' 2>/dev/null &&
+    fail "$rt agent can write its image"
+  pass "$rt: onboarding, on-demand start, answered through the broker: $(printf '%s' "$reply" | head -c 100 | tr '\n' ' ')"
+  # Free the slot for user B's agent below.
+  kubectl -n "$hns" delete pod "$rt-agent-$id_a" --wait=true >/dev/null
+done
 
 report=$(kubectl -n "$hns" get pvc "hermes-profile-$id_a" -o jsonpath='{.metadata.annotations.hermes\.llm-stack/sync-report}')
 on=$(printf '%s' "$report" | json '",".join(d["on"])')

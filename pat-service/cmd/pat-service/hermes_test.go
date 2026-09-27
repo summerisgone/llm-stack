@@ -31,10 +31,19 @@ func fakeKube(t *testing.T, secretExists, podExists bool) (*hermesKube, *[]strin
 			_ = json.NewDecoder(r.Body).Decode(&lastBody)
 		}
 		switch {
-		case r.Method == http.MethodGet && !secretExists, r.Method == http.MethodDelete && !podExists:
+		case r.Method == http.MethodGet && !secretExists:
 			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodDelete:
+			if r.URL.Query().Get("labelSelector") != "hermes.llm-stack/user-id=abc,app.kubernetes.io/managed-by=hermes-broker" {
+				t.Errorf("delete selector %q", r.URL.RawQuery)
+			}
+			if podExists {
+				_, _ = w.Write([]byte(`{"items":[{},{}]}`))
+			} else {
+				_, _ = w.Write([]byte(`{"items":[]}`))
+			}
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -54,7 +63,7 @@ func TestStoreInferenceKeyCreatesSecret(t *testing.T) {
 	want := []string{
 		"GET /api/v1/namespaces/hermes-agents/secrets/hermes-cred-abc",
 		"POST /api/v1/namespaces/hermes-agents/secrets",
-		"DELETE /api/v1/namespaces/hermes-agents/pods/hermes-agent-abc",
+		"DELETE /api/v1/namespaces/hermes-agents/pods",
 	}
 	if len(*calls) != 3 || (*calls)[0] != want[0] || (*calls)[1] != want[1] || (*calls)[2] != want[2] {
 		t.Fatalf("calls = %v", *calls)

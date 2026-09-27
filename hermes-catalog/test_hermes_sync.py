@@ -28,6 +28,7 @@ class SyncTest(unittest.TestCase):
         os.environ.pop("HERMES_SELECTION", None)
         os.environ.pop("WEB_SEARCH_ENABLED", None)
         os.environ.pop("REPOWISE_ENABLED", None)
+        os.environ.pop("AGENT_RUNTIME", None)
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -144,6 +145,43 @@ class SyncTest(unittest.TestCase):
             self.assertTrue(fh.read().rstrip().endswith("Answer in Russian."))
         self.assertFalse(os.path.exists(
             os.path.join(self.home, "catalog", "skills", "change-summary")))
+
+    def test_pi_config_gets_skills_and_mcp(self):
+        os.environ["AGENT_RUNTIME"] = "pi"
+        os.environ["REPOWISE_ENABLED"] = "true"
+        report = self.run_sync()
+        self.assertEqual(report["on"], ["platform-guide", "repo-reader"])
+        agent_dir = os.path.join(self.home, "pi")
+        with open(os.path.join(agent_dir, "settings.json")) as fh:
+            settings = json.load(fh)
+        self.assertEqual(settings["skills"], [os.path.join(self.home, "catalog-enabled")])
+        with open(os.path.join(agent_dir, "mcp.json")) as fh:
+            servers = json.load(fh)["mcpServers"]
+        self.assertEqual(list(servers), ["repowise"])
+        self.assertEqual(servers["repowise"]["headers"]["Authorization"], "Bearer ${AGENT_INFERENCE_KEY}")
+        with open(os.path.join(agent_dir, "models.json")) as fh:
+            self.assertIn("pat-service", fh.read())
+        self.assertTrue(os.path.exists(os.path.join(agent_dir, "AGENTS.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.home, "config.yaml")))
+
+    def test_opencode_config_gets_skills_and_mcp(self):
+        os.environ["AGENT_RUNTIME"] = "opencode"
+        os.environ["WEB_SEARCH_ENABLED"] = "true"
+        os.environ["REPOWISE_ENABLED"] = "true"
+        self.run_sync()
+        with open(os.path.join(self.home, "opencode", "opencode.json")) as fh:
+            cfg = json.load(fh)
+        self.assertEqual(sorted(cfg["mcp"]), ["repowise", "web-search"])
+        entry = cfg["mcp"]["web-search"]
+        self.assertEqual((entry["type"], entry["timeout"]), ("remote", 60000))
+        self.assertEqual(entry["headers"]["Authorization"], "Bearer {env:AGENT_INFERENCE_KEY}")
+        self.assertEqual(cfg["skills"]["paths"], [os.path.join(self.home, "catalog-enabled")])
+        self.assertEqual(cfg["enabled_providers"], ["pat"])
+
+    def test_unknown_runtime_fails(self):
+        os.environ["AGENT_RUNTIME"] = "codex"
+        with self.assertRaises(SystemExit):
+            self.run_sync()
 
     def test_build_rejects_unknown_skill(self):
         with open(os.path.join(self.catalog, "catalog.yaml"), "a") as fh:

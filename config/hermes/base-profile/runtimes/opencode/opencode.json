@@ -1,0 +1,35 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "pat/qwen-3.8-27b",
+  "small_model": "pat/qwen-3.8-27b",
+  "enabled_providers": ["pat"],
+  "provider": {
+    "pat": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "pat-service",
+      "options": {
+        "baseURL": "http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1",
+        "apiKey": "{env:AGENT_INFERENCE_KEY}"
+      },
+      "models": {
+        "qwen-3.8-27b": {
+          "name": "Qwen 3.8 27B",
+          "tool_call": true,
+          "reasoning": true,
+          "limit": {"context": 196608, "output": 32768}
+        }
+      }
+    }
+  },
+  "permission": {
+    "*": "allow",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "question": "deny"
+  },
+  "autoupdate": false,
+  "share": "disabled",
+  "snapshot": false,
+  "lsp": false,
+  "formatter": false
+}
