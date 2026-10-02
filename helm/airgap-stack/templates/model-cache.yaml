@@ -1,0 +1,20 @@
+{{- if .Values.modelCache.checksums }}
+# ADR 0019 decision 4: the scripts and checksums that the engine charts'
+# cache-fill initContainers and scripts/models-upload mount at /scripts.
+# checksums.txt is models/checksums.txt, passed by `make helm-up` with
+# --set-file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-cache
+  namespace: {{ .Values.namespace }}
+data:
+  model-sums.sh: |
+{{ .Files.Get "files/model-sums.sh" | indent 4 }}
+  model-cache-fill.sh: |
+{{ .Files.Get "files/model-cache-fill.sh" | indent 4 }}
+  model-upload.sh: |
+{{ .Files.Get "files/model-upload.sh" | indent 4 }}
+  checksums.txt: |
+{{ .Values.modelCache.checksums | indent 4 }}
+{{- end }}

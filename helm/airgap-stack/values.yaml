@@ -132,6 +132,12 @@ routing:
     grafana: 32030
     langfuse: 32031
 
+# --- Model cache (docs/adr/0019) -------------------------------------------------
+# models/checksums.txt for the model-cache ConfigMap; `make helm-up` sets it
+# with --set-file. Empty renders no ConfigMap.
+modelCache:
+  checksums: ""
+
 # --- OIDC / SSO --------------------------------------------------------------
 # The sole browser-facing origin. Keycloak issuer and OAuth callbacks must be
 # stable absolute URLs; no workload uses the Windows host name as an endpoint.

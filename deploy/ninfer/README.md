@@ -70,15 +70,13 @@ k3d image import ghcr.io/summerisgone/ninfer:latest -c llm-stack
 # 2. Qwen3.8-27B NVFP4 converted to ninfer's own artifact format (its
 #    weight-conversion pipeline, upstream docs/weight-conversion.md -- NOT
 #    the same file as vllm-qwen38-nvfp4-model's safetensors checkpoint) is a
-#    single file, not a per-engine directory like vllm/embeddings: confirmed
-#    live at /var/lib/models/qwen3_8_27b_nvfp4.ninfer (the existing
-#    /var/lib/models bind mount already projects it in from
-#    /home/llm-stack/models/qwen3_8_27b_nvfp4.ninfer on the WSL2 host -- no
-#    extra mount step was needed). ninfer-model-volume.yaml's hostPath
-#    matches this exact file, type File, not Directory.
+#    single file, not a per-engine directory like vllm/embeddings. Its
+#    checksum is in models/checksums.txt (model qwen3_8_27b_nvfp4.ninfer).
 
-# 3. Create the PVC (adds to gpu-objects-up's GPU_OBJECTS list)
-make gpu-objects-up
+# 3. Upload it to MinIO from the GPU node that holds it (the k3d mock
+#    mounts the host's model store at /var/lib/models); the engine pod's
+#    model-cache initContainer fetches and verifies it (ADR 0019)
+scripts/models-upload qwen3_8_27b_nvfp4.ninfer
 
 # 4. Set NINFER_API_KEY in .env, then
 make helm-up      # creates the ninfer-api-key Secret + BackendSecurityPolicy

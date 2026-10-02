@@ -11,7 +11,16 @@ tolerations:
   - key: nvidia.com/gpu
     operator: Exists
     effect: NoSchedule
-modelClaim: vllm-qwen38-nvfp4-model
+# ADR 0019: weights come from MinIO bucket `models` into this node's cache
+# (hostPath), filled and checked against models/checksums.txt by the
+# model-cache initContainer before the engine starts. `model` is the name in
+# models/manifest.yaml; the image is versions.lock.env MODEL_CACHE_IMAGE
+# (rclone, sh, sha256sum).
+modelCache:
+  model: RadixArk-Qwen3.8-27B-NVFP4
+  hostPath: /var/lib/llm-stack/models
+  minioURL: http://minio.airgap-ai-stack.svc.cluster.local
+  image: docker.io/rclone/rclone:1.71.1@sha256:d5971950c2b370fb04dd3292541b5bda6d9103143fd7e345aeb435a399388afc
 inference:
   servedModelName: qwen-3.8-27b
   maxModelLen: 131072

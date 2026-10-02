@@ -191,13 +191,11 @@ embeddings-smoke:
 
 # GPU objects are excluded from the Helm release by scripts/helm-render
 # (GPU_KEEP_OUT) so that a `helm upgrade` never restarts the model server.
-# PV/PVC/RuntimeClass are applied directly; the vLLM Deployment is managed
-# by the vllm-inference Helm release (make vllm-up / vllm-down).
+# The RuntimeClass is applied directly; engines are their own Helm releases,
+# and model weights come from MinIO into each GPU node's cache (ADR 0019,
+# scripts/models-upload).
 GPU_OBJECTS = \
-	k8s/overlays/remote-wsl-vllm-nvfp4/runtimeclass.yaml \
-	k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml \
-	k8s/overlays/remote-wsl-vllm-nvfp4/embeddings-model-volume.yaml \
-	k8s/overlays/remote-wsl-vllm-nvfp4/ninfer-model-volume.yaml
+	k8s/overlays/remote-wsl-vllm-nvfp4/runtimeclass.yaml
 
 gpu-objects-config:
 	$(KUBECTL) apply --dry-run=client $(addprefix -f ,$(GPU_OBJECTS)) >/dev/null
@@ -224,7 +222,7 @@ vllm-down:
 	$(HELM) uninstall $(VLLM_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
 
 # SGLang inference deployment. Edit helm/sglang-inference/values.yaml, then
-# run `make sglang-up` to apply. Requires the model PVC from gpu-objects-up.
+# run `make sglang-up` to apply. Requires the model in MinIO (scripts/models-upload).
 SGLANG_CHART = helm/sglang-inference
 SGLANG_RELEASE = sglang-inference
 
@@ -242,8 +240,7 @@ sglang-down:
 
 # ninfer pilot inference deployment (docs/adr/0015, ~/agent/ninfer-pilot-task.md).
 # Edit helm/ninfer-inference/values.yaml, then run `make ninfer-up`. Requires
-# the ninfer-qwen38-nvfp4-model PVC from gpu-objects-up and the
-# ninfer-api-key Secret from helm-up (NINFER_API_KEY in .env). One GPU on
+# the model in MinIO (scripts/models-upload) and the ninfer-api-key Secret from helm-up (NINFER_API_KEY in .env). One GPU on
 # this node: do not run alongside vllm-up/sglang-up at replicas=1 -- k8s's
 # device plugin refuses to co-schedule both (Risk 1, deploy/ninfer/README.md).
 NINFER_CHART = helm/ninfer-inference
@@ -466,7 +463,8 @@ helm-env-values:
 	./scripts/helm-env-values
 
 HELM_ORIGIN_SETS = --set oidc.publicBaseURL=$(STACK_ORIGIN) \
-	--set oidc.externalIssuer=$(STACK_ORIGIN)/sso/realms/ai-stack
+	--set oidc.externalIssuer=$(STACK_ORIGIN)/sso/realms/ai-stack \
+	--set-file modelCache.checksums=models/checksums.txt
 
 helm-up: helm-render helm-env-values
 	@[ -n "$(STACK_ORIGIN)" ] || { echo "helm-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }

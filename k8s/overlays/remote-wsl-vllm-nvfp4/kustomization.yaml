@@ -19,9 +19,6 @@ namespace: airgap-ai-stack
 resources:
   - ../../base
   - runtimeclass.yaml
-  - model-volume.yaml
-  - embeddings-model-volume.yaml
-  - ninfer-model-volume.yaml
   - vllm.yaml
   - node-exporter.yaml
   - gpu-exporter.yaml

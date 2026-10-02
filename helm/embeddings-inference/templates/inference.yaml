@@ -40,6 +40,25 @@ spec:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:
         {{- toYaml .Values.tolerations | nindent 8 }}
+      initContainers:
+        # ADR 0019: fill this node's model cache from MinIO and verify it
+        # against models/checksums.txt before the engine starts.
+        - name: model-cache
+          image: {{ .Values.modelCache.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "/scripts/model-cache-fill.sh", {{ .Values.modelCache.model | quote }}]
+          env:
+            - name: MINIO_URL
+              value: {{ .Values.modelCache.minioURL | quote }}
+          securityContext:
+            # The hostPath cache directory is created root-owned.
+            runAsUser: 0
+          volumeMounts:
+            - name: model
+              mountPath: /cache
+            - name: model-cache-scripts
+              mountPath: /scripts
+              readOnly: true
       containers:
         - name: embeddings
           {{- if eq .Values.accelerator "gpu" }}
@@ -139,8 +158,13 @@ spec:
           volumeMounts:
             - name: model
               mountPath: /model
+              subPath: {{ .Values.modelCache.model }}
               readOnly: true
       volumes:
         - name: model
-          persistentVolumeClaim:
-            claimName: {{ .Values.modelClaim }}
+          hostPath:
+            path: {{ .Values.modelCache.hostPath }}
+            type: DirectoryOrCreate
+        - name: model-cache-scripts
+          configMap:
+            name: model-cache

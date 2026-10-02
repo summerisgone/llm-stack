@@ -1,0 +1,90 @@
+#!/usr/bin/env sh
+set -eu
+
+# ADR 0019 stage 3: copy models from a GPU node's directory into MinIO bucket
+# `models`, verifying every file against models/checksums.txt first. Runs as
+# a Job on a node labelled node-role/inference=true, in MODEL_CACHE_IMAGE,
+# with the scripts from the model-cache ConfigMap (`make helm-up` creates
+# it). The bucket and its anonymous-read policy are set first with mc inside
+# the MinIO tenant pod.
+#
+#   scripts/models-upload <model>...    # names from models/manifest.yaml
+#
+# MODELS_SRC_DIR is the node directory that holds <model>/ (the k3d mock
+# mounts the host's model store there).
+
+[ $# -gt 0 ] || { printf '%s\n' "usage: $0 <model>..." >&2; exit 2; }
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+src=${MODELS_SRC_DIR:-/var/lib/models}
+image=$(sed -n 's/^MODEL_CACHE_IMAGE=//p' versions.lock.env)
+job=models-upload-$(date +%s)
+
+# Public checkpoints: anonymous read lets engine pods fill their cache without
+# MinIO credentials; writes still need the root user.
+kubectl -n "$namespace" exec statefulset/minio-pool-0 -c minio -- sh -c '
+  set -eu
+  . "$MINIO_CONFIG_ENV_FILE"
+  mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+  mc mb --ignore-existing local/models
+  mc anonymous set download local/models'
+
+args=
+for model in "$@"; do args="$args, \"$model\""; done
+
+kubectl -n "$namespace" apply -f - <<YAML
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $job
+  namespace: $namespace
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node-role/inference: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: upload
+          image: $image
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "/scripts/model-upload.sh"$args]
+          env:
+            - name: MINIO_URL
+              value: http://minio.$namespace.svc.cluster.local
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: minio
+              mountPath: /minio
+              readOnly: true
+            - name: src
+              mountPath: /src
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: model-cache
+        - name: minio
+          secret:
+            secretName: minio-configuration
+        - name: src
+          hostPath:
+            path: $src
+            type: Directory
+YAML
+# Tens of GB: poll instead of one long `kubectl wait`, which the SSH tunnel
+# would not outlive.
+while :; do
+  state=$(kubectl -n "$namespace" get "job/$job" -o jsonpath='{.status.succeeded}/{.status.failed}') || state=/
+  case "$state" in 1/*|*/1) break ;; esac
+  sleep 15
+done
+kubectl -n "$namespace" logs "job/$job" | tail -20
+[ "${state%%/*}" = 1 ]

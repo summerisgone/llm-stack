@@ -56,6 +56,25 @@ spec:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:
         {{- toYaml .Values.tolerations | nindent 8 }}
+      initContainers:
+        # ADR 0019: fill this node's model cache from MinIO and verify it
+        # against models/checksums.txt before the engine starts.
+        - name: model-cache
+          image: {{ .Values.modelCache.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "/scripts/model-cache-fill.sh", {{ .Values.modelCache.model | quote }}]
+          env:
+            - name: MINIO_URL
+              value: {{ .Values.modelCache.minioURL | quote }}
+          securityContext:
+            # The hostPath cache directory is created root-owned.
+            runAsUser: 0
+          volumeMounts:
+            - name: model
+              mountPath: /cache
+            - name: model-cache-scripts
+              mountPath: /scripts
+              readOnly: true
       containers:
         - name: ninfer
           image: {{ .Values.image | quote }}
@@ -124,11 +143,12 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            # PV is a single hostPath File (k8s/overlays/remote-wsl-vllm-nvfp4/ninfer-model-volume.yaml),
-            # not a directory like vllm/sglang's -- mountPath must be the
-            # exact file path, matching the args above.
+            # The cached model is a single file, not a directory like
+            # vllm/sglang's -- mountPath must be the exact file path,
+            # matching the args above.
             - name: model
               mountPath: /model/{{ .Values.modelFile }}
+              subPath: {{ .Values.modelCache.model }}
               readOnly: true
             - name: request-log
               mountPath: {{ dir .Values.inference.requestLogPath }}
@@ -180,8 +200,12 @@ spec:
         {{- end }}
       volumes:
         - name: model
-          persistentVolumeClaim:
-            claimName: {{ .Values.modelClaim }}
+          hostPath:
+            path: {{ .Values.modelCache.hostPath }}
+            type: DirectoryOrCreate
+        - name: model-cache-scripts
+          configMap:
+            name: model-cache
         - name: request-log
           emptyDir: {}
         {{- if .Values.metricsExporter.enabled }}

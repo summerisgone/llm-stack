@@ -110,8 +110,8 @@ targets with `namespace=airgap-ai-stack`); dashboards in
 
 - Chart `helm/ninfer-inference` (engine plus a `jsonl_exporter.py` sidecar),
   image `NINFER_IMAGE` built from `NINFER_UPSTREAM_REF`, model file
-  `ninfer-model-volume.yaml` (its own converted format, not the vLLM
-  checkpoint).
+  `qwen3_8_27b_nvfp4.ninfer` from MinIO through the node model cache (its
+  own converted format, not the vLLM checkpoint).
 - API key: `NINFER_API_KEY` in `.env` -> Secret `ninfer-api-key` (created by
   `make helm-up`), used by both the server and the gateway.
 - Metrics: no native `/metrics`; the sidecar turns the request log into

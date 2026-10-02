@@ -111,8 +111,8 @@ Job-ы сбора лежат в
 
 - Чарт `helm/ninfer-inference` (движок плюс sidecar `jsonl_exporter.py`),
   образ `NINFER_IMAGE`, собранный из `NINFER_UPSTREAM_REF`, файл модели
-  `ninfer-model-volume.yaml` (собственный сконвертированный формат, не
-  чекпойнт vLLM).
+  `qwen3_8_27b_nvfp4.ninfer` из MinIO через кэш моделей на ноде
+  (собственный сконвертированный формат, не чекпойнт vLLM).
 - API-ключ: `NINFER_API_KEY` в `.env` -> Secret `ninfer-api-key` (создаётся
   `make helm-up`), его используют и сервер, и шлюз.
 - Метрики: своих `/metrics` нет; sidecar превращает лог запросов в серии

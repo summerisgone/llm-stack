@@ -35,9 +35,9 @@ next piece of work, tracked in
 | Edge listener port | `helm/airgap-stack/values.yaml` (`routing.edge.externalPort`) |
 | Operator UI hostnames and NodePorts | `helm/airgap-stack/values.yaml` (`routing.nodePorts`), `config/gateway-addons/values.yaml`, `k8s/overlays/remote-wsl-vllm-nvfp4/langfuse-public-url-patch.yaml`, `deploy/vllm-qwen38-nvfp4/systemd/*` |
 | Realm name and client redirect URIs | `k8s/realm-demo.json` |
-| GPU worker selection | No node names: GPU workers carry the label `node-role/inference=true` and the taint `nvidia.com/gpu=present:NoSchedule` (set on `agent-0` by `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia`, [ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)); `nodeSelector`/`tolerations` in the engine chart values and the model volumes' `nodeAffinity` match them |
+| GPU worker selection | No node names: GPU workers carry the label `node-role/inference=true` and the taint `nvidia.com/gpu=present:NoSchedule` (set on `agent-0` by `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia`, [ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)); `nodeSelector`/`tolerations` in the engine chart values match them |
 | k3d API port, model root | `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia` (`K3D_API_PORT`, `K3D_MODEL_ROOT`) |
-| Model directory | `k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml` |
+| Model weights | MinIO bucket `models`, uploaded by `scripts/models-upload` from a GPU node directory (`MODELS_SRC_DIR`, default `/var/lib/models`); `modelCache` in each engine chart; checksums in `models/checksums.txt` |
 | Served model name, GPU sizing, launch flags | `helm/vllm-inference/values.yaml` (and `helm/sglang-inference/values.yaml` if SGLang is used) |
 | Engine replicas | `VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS` in `.env`, applied by `make engines-up` |
 | Which backends the gateway advertises | `helm/airgap-stack/values.yaml` (`inference.*.enabled`), `k8s/overlays/remote-wsl-vllm-nvfp4/openwebui-oidc-patch.yaml` (`OPENAI_API_CONFIGS`) |
@@ -70,16 +70,22 @@ kubectl apply -f k8s/overlays/remote-wsl-vllm-nvfp4/gpu-runtime-smoke.yaml
 kubectl -n airgap-ai-stack logs pod/cuda-runtime-smoke
 kubectl -n airgap-ai-stack delete pod cuda-runtime-smoke
 
-# 6. Deploy. This is the whole stack: prerequisites, GPU objects, the Helm
+# 6. Model weights into MinIO (ADR 0019): the engines' model-cache
+#    initContainers fetch them from there. Needs MinIO and the model-cache
+#    ConfigMap first; files already in the bucket are skipped on a re-run.
+make gateway-up operators-up helm-up
+scripts/models-upload RadixArk-Qwen3.8-27B-NVFP4 bge-m3
+
+# 7. Deploy. This is the whole stack: prerequisites, GPU objects, the Helm
 #    release that owns routing, the engines (*_REPLICAS in .env, one vLLM by
 #    default), llm-d, and Keycloak client reconciliation.
 make stack-up
 
-# 7. Verify.
+# 8. Verify.
 make llmd-nvfp4-smoke                               # needs the GPU free
 make smoke-nogpu                                    # everything except the model calls
 
-# 8. Optional: another engine on the same card, e.g. SGLang.
+# 9. Optional: another engine on the same card, e.g. SGLang.
 #    .env: VLLM_REPLICAS=0 SGLANG_REPLICAS=1, then:
 make engines-up
 ```

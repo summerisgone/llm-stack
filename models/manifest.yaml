@@ -1,7 +1,12 @@
 # Local model weights are intentionally not versioned in Git.
 models:
-  qwen38:
-    path: models/qwen38
+  # The bucket prefix in MinIO (bucket `models`) and the node-cache directory
+  # are the path's last element (docs/adr/0019).
+  RadixArk-Qwen3.8-27B-NVFP4:
+    path: models/RadixArk-Qwen3.8-27B-NVFP4
+    sha256_manifest: models/checksums.txt
+  qwen3_8_27b_nvfp4.ninfer:
+    path: models/qwen3_8_27b_nvfp4.ninfer
     sha256_manifest: models/checksums.txt
   qwen25-0.5b-instruct:
     source: Qwen/Qwen2.5-0.5B-Instruct

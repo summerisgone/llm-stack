@@ -112,10 +112,16 @@ kubectl -n agents logs deploy/agent-broker --tail=100
 
 ## Alerts
 
-One Grafana alert rule is provisioned (`config/gateway-addons/values.yaml`,
-`grafana.alerting`): `adr0012-stale-endpoints` fires when
-`max_over_time(llm_d_epp_flow_control_stale_endpoints[5m]) > 0`, i.e. EPP
-cannot read the engine's metrics and has stopped dispatching to it. No contact
+Three Grafana alert rules are provisioned (`config/gateway-addons/values.yaml`,
+`grafana.alerting`):
+
+| Rule | Fires when | Meaning |
+| --- | --- | --- |
+| `adr0012-stale-endpoints` (critical) | `max_over_time(llm_d_epp_flow_control_stale_endpoints[5m]) > 0` | EPP cannot read an engine's metrics and has stopped dispatching to it |
+| `adr0019-no-ready-endpoints` (critical) | `max_over_time(llm_d_epp_ready_endpoints[5m]) < 1`, or no data | the `qwen-3.8-27b` pool has had no ready pod for 5 minutes; expected only while its replicas are deliberately 0 |
+| `adr0019-metrics-errors` (warning) | EPP poll or extract errors grew over 10 minutes, for 5 minutes | a pool member's `/metrics` is unreachable or unparsable (GPU worker down, missing `llm-d.ai/engine-type`, NetworkPolicy) |
+
+No contact
 point is configured in the repository; set one in Grafana if someone should
 be paged.
 

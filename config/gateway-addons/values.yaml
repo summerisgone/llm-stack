@@ -143,6 +143,74 @@ grafana:
               labels:
                 severity: critical
                 adr: "0012"
+        # ADR 0019 stage 2.5: the qwen-3.8-27b pool as a whole.
+        - orgId: 1
+          name: adr-0019-inference-pool
+          folder: QoS
+          interval: 1m
+          rules:
+            - uid: adr0019-no-ready-endpoints
+              title: "ADR-0019: qwen-3.8-27b pool has no ready endpoints"
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: vllm-prometheus
+                  model:
+                    expr: max_over_time(llm_d_epp_ready_endpoints[5m])
+                    instant: true
+                    refId: A
+                - refId: B
+                  datasourceUid: "-100"
+                  model:
+                    type: threshold
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          type: lt
+                          params: [1]
+                    refId: B
+              noDataState: Alerting
+              execErrState: Alerting
+              for: 0s
+              annotations:
+                summary: "EPP had no ready vLLM/SGLang pod for 5 minutes (or EPP itself is not scraped): every qwen-3.8-27b request queues and times out. Expected only while the pool's replicas are deliberately 0 (e.g. the GPU moved to ninfer); otherwise check the engine pods on the GPU workers."
+              labels:
+                severity: critical
+                adr: "0019"
+            - uid: adr0019-metrics-errors
+              title: "ADR-0019: EPP cannot poll or parse pool member metrics"
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: vllm-prometheus
+                  model:
+                    expr: sum(increase(llm_d_epp_datalayer_poll_errors_total[10m]) or vector(0)) + sum(increase(llm_d_epp_datalayer_extract_errors_total[10m]) or vector(0))
+                    instant: true
+                    refId: A
+                - refId: B
+                  datasourceUid: "-100"
+                  model:
+                    type: threshold
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          type: gt
+                          params: [0]
+                    refId: B
+              noDataState: OK
+              execErrState: Alerting
+              for: 5m
+              annotations:
+                summary: "EPP poll or extract errors kept growing for 5 minutes: a pool member's /metrics is unreachable or unparsable (a GPU worker down, a missing llm-d.ai/engine-type label, the NetworkPolicy). Scores and saturation for that endpoint are stale; see docs/handbook/operations.md."
+              labels:
+                severity: warning
+                adr: "0019"
 
 prometheus:
   server:

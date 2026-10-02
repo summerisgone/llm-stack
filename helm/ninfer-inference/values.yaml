@@ -25,10 +25,19 @@ tolerations:
     effect: NoSchedule
 # ninfer's own `.ninfer` v3 artifact, built via ninfer's weight-conversion
 # pipeline (upstream docs/weight-conversion.md) -- NOT the same file as the
-# safetensors checkpoint on vllm-qwen38-nvfp4-model. Separate PVC created by
-# k8s/overlays/remote-wsl-vllm-nvfp4/ninfer-model-volume.yaml (gpu-objects-up).
-modelClaim: ninfer-qwen38-nvfp4-model
+# safetensors checkpoint vLLM/SGLang load. A single file: modelFile is also
+# its name in models/manifest.yaml.
 modelFile: qwen3_8_27b_nvfp4.ninfer
+# ADR 0019: weights come from MinIO bucket `models` into this node's cache
+# (hostPath), filled and checked against models/checksums.txt by the
+# model-cache initContainer before the engine starts. `model` is the name in
+# models/manifest.yaml; the image is versions.lock.env MODEL_CACHE_IMAGE
+# (rclone, sh, sha256sum).
+modelCache:
+  model: qwen3_8_27b_nvfp4.ninfer
+  hostPath: /var/lib/llm-stack/models
+  minioURL: http://minio.airgap-ai-stack.svc.cluster.local
+  image: docker.io/rclone/rclone:1.71.1@sha256:d5971950c2b370fb04dd3292541b5bda6d9103143fd7e345aeb435a399388afc
 # Secret containing the `apiKey` field; created by inference-backends.yaml
 # when NINFER_API_KEY is set in the airgap-stack release.
 apiKeySecret: ninfer-api-key

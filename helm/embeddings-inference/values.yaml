@@ -1,6 +1,5 @@
-# docs/adr/0013-embeddings-api-bge-m3.md. Model weights are the read-only
-# PV/PVC created by gpu-objects-up (k8s/overlays/remote-wsl-vllm-nvfp4/
-# embeddings-model-volume.yaml), same pattern as the LLM engine charts.
+# docs/adr/0013-embeddings-api-bge-m3.md. Model weights come from the
+# node-local model cache, same pattern as the LLM engine charts (modelCache).
 name: embeddings-bge-m3
 replicas: 1
 # ADR 0019: GPU pods go to any labelled, tainted inference worker, never to
@@ -11,7 +10,16 @@ tolerations:
   - key: nvidia.com/gpu
     operator: Exists
     effect: NoSchedule
-modelClaim: embeddings-bge-m3-model
+# ADR 0019: weights come from MinIO bucket `models` into this node's cache
+# (hostPath), filled and checked against models/checksums.txt by the
+# model-cache initContainer before the engine starts. `model` is the name in
+# models/manifest.yaml; the image is versions.lock.env MODEL_CACHE_IMAGE
+# (rclone, sh, sha256sum).
+modelCache:
+  model: bge-m3
+  hostPath: /var/lib/llm-stack/models
+  minioURL: http://minio.airgap-ai-stack.svc.cluster.local
+  image: docker.io/rclone/rclone:1.71.1@sha256:d5971950c2b370fb04dd3292541b5bda6d9103143fd7e345aeb435a399388afc
 
 # cpu (default) | gpu. Switching modes: edit this value, `make embeddings-up`,
 # then `make vllm-up` (or `make sglang-up`) to apply the paired LLM memory

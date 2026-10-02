@@ -19,11 +19,12 @@ of content:
 Two things are deliberately outside the release:
 
 - **The model servers and their GPU prerequisites.** `helm-render` filters
-  the vLLM Deployment/Service, the `nvidia` RuntimeClass and the model PV/PVC
-  (`GPU_KEEP_OUT`) so a `helm upgrade` of the application stack never
-  restarts a model server or reloads a 27B checkpoint. The two prerequisites
-  are applied directly by `make gpu-objects-up`; the engines themselves are
-  the separate releases below.
+  the vLLM Deployment/Service and the `nvidia` RuntimeClass (`GPU_KEEP_OUT`)
+  so a `helm upgrade` of the application stack never restarts a model
+  server. The RuntimeClass is applied directly by `make gpu-objects-up`; the
+  engines themselves are the separate releases below, and their weights come
+  from MinIO into each GPU node's cache (`scripts/models-upload`,
+  [ADR 0019](../docs/adr/0019-inference-plane-gpu-worker-nodes.md)).
 - **The `airgap-runtime` Secret's real values** — `scripts/helm-env-values`
   writes `runtime.secret.yaml` from `.env`, which is gitignored. The
   `runtimeEnvironment` block in `values.yaml` holds only the demo defaults.

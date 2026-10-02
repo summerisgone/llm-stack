@@ -211,6 +211,25 @@ traffic and are scored).
 
 Acceptance: an empty GPU node serves after a cold start with no manual copy.
 
+Implementation (2026-10-02):
+
+- Bucket `models` in the existing MinIO tenant, one prefix per
+  `models/manifest.yaml` name, anonymous read (public checkpoints), writes
+  with the root user. `scripts/models-upload` runs a Job on a GPU node that
+  verifies the source files against `models/checksums.txt` and uploads them.
+- Each engine pod has a `model-cache` initContainer that fetches the listed
+  files into `/var/lib/llm-stack/models` on its node, verifies them, and
+  publishes the model atomically; a cache whose recorded checksums match is
+  reused. Scripts and checksums come from the `model-cache` ConfigMap of
+  `helm/airgap-stack`.
+- Image: `rclone/rclone`, pinned in `versions.lock.env` (`MODEL_CACHE_IMAGE`).
+  The MinIO server image (`MINIO_VERSION`) is no longer pullable from
+  docker.io or quay.io without authorization, so it could not carry `mc`;
+  the tenant itself survives only on its cached image, an open risk for
+  Stage 4.
+- The tenant's PVC is declared 10Gi but holds the weights (45 GiB); local-path
+  does not enforce the size. Size it properly before Stage 4.
+
 ### Stage 4 -- first bare-metal GPU node
 
 | # | Task |
