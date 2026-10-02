@@ -17,6 +17,12 @@ spec:
         app.kubernetes.io/name: nvidia-device-plugin
     spec:
       priorityClassName: system-node-critical
+      nodeSelector:
+        node-role/inference: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
       # On WSL2 the driver reachable through libcuda_loader/libnvidia-ml_loader
       # in the Windows driver store is injected by the nvidia containerd hook.
       # A plain hostPath mount of the three shim libraries is not sufficient

@@ -44,49 +44,55 @@ if k3d cluster list | awk 'NR > 1 { print $1 }' | grep -qx "$cluster"; then
   k3d cluster delete "$cluster"
 fi
 
+# ADR 0019: server-0 runs the control plane and every application; agent-0 is
+# the GPU worker (label node-role/inference=true, taint nvidia.com/gpu) and is
+# the only node with the model, toolkit and driver mounts. `--gpus` has no node
+# filter, but only agent-0 gets the runtime, so only it advertises a GPU.
 # K3s detects nvidia-container-runtime during startup and registers the
 # `nvidia` handler for containerd. The toolkit files are mounted read-only
 # because the node image does not contain them by default.
 k3d cluster create "$cluster" \
   --image "$k3s_image" \
   --servers 1 \
-  --agents 0 \
+  --agents 1 \
   --api-port "0.0.0.0:$api_port" \
   --port "8080:8080@loadbalancer" \
   --port "$grafana_node_port:$grafana_node_port@server:0" \
   --port "$langfuse_node_port:$langfuse_node_port@server:0" \
   --gpus all \
-  --volume "$model_root:/var/lib/models:ro@server:0" \
-  --volume /usr/bin/nvidia-container-runtime:/usr/bin/nvidia-container-runtime:ro@server:0 \
-  --volume /usr/bin/nvidia-container-runtime-hook:/usr/bin/nvidia-container-runtime-hook:ro@server:0 \
-  --volume /usr/bin/nvidia-container-cli:/usr/bin/nvidia-container-cli:ro@server:0 \
-  --volume /usr/bin/nvidia-ctk:/usr/bin/nvidia-ctk:ro@server:0 \
-  --volume /sbin/ldconfig:/sbin/ldconfig:ro@server:0 \
-  --volume "$script_dir/nvidia-container-runtime-legacy:/opt/nvidia/nvidia-container-runtime-legacy:ro@server:0" \
-  --volume "$script_dir/nvidia-container-runtime-legacy.toml:/opt/nvidia/nvidia-container-runtime-legacy.toml:ro@server:0" \
-  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-container.so.1:ro@server:0 \
-  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1:ro@server:0 \
-  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1.18.2:/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1.18.2:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2:/lib64/ld-linux-x86-64.so.2:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/libc.so.6:/lib/x86_64-linux-gnu/libc.so.6:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/libm.so.6:/lib/x86_64-linux-gnu/libm.so.6:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/libdl.so.2:/lib/x86_64-linux-gnu/libdl.so.2:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/libpthread.so.0:/lib/x86_64-linux-gnu/libpthread.so.0:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/libresolv.so.2:/lib/x86_64-linux-gnu/libresolv.so.2:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/librt.so.1:/lib/x86_64-linux-gnu/librt.so.1:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/libcap.so.2:/lib/x86_64-linux-gnu/libcap.so.2:ro@server:0 \
-  --volume /lib/x86_64-linux-gnu/libseccomp.so.2:/lib/x86_64-linux-gnu/libseccomp.so.2:ro@server:0 \
-  --volume /usr/lib/wsl/lib/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1:ro@server:0 \
-  --volume /usr/lib/wsl/lib/libnvidia-ml.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:ro@server:0 \
-  --volume /usr/lib/wsl/lib/libnvidia-gpucomp.so.610.43.02:/usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so:ro@server:0 \
-  --volume /etc/nvidia-container-runtime:/etc/nvidia-container-runtime:ro@server:0 \
+  --volume "$model_root:/var/lib/models:ro@agent:0" \
+  --volume /usr/bin/nvidia-container-runtime:/usr/bin/nvidia-container-runtime:ro@agent:0 \
+  --volume /usr/bin/nvidia-container-runtime-hook:/usr/bin/nvidia-container-runtime-hook:ro@agent:0 \
+  --volume /usr/bin/nvidia-container-cli:/usr/bin/nvidia-container-cli:ro@agent:0 \
+  --volume /usr/bin/nvidia-ctk:/usr/bin/nvidia-ctk:ro@agent:0 \
+  --volume /sbin/ldconfig:/sbin/ldconfig:ro@agent:0 \
+  --volume "$script_dir/nvidia-container-runtime-legacy:/opt/nvidia/nvidia-container-runtime-legacy:ro@agent:0" \
+  --volume "$script_dir/nvidia-container-runtime-legacy.toml:/opt/nvidia/nvidia-container-runtime-legacy.toml:ro@agent:0" \
+  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-container.so.1:ro@agent:0 \
+  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1:ro@agent:0 \
+  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1.18.2:/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1.18.2:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2:/lib64/ld-linux-x86-64.so.2:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/libc.so.6:/lib/x86_64-linux-gnu/libc.so.6:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/libm.so.6:/lib/x86_64-linux-gnu/libm.so.6:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/libdl.so.2:/lib/x86_64-linux-gnu/libdl.so.2:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/libpthread.so.0:/lib/x86_64-linux-gnu/libpthread.so.0:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/libresolv.so.2:/lib/x86_64-linux-gnu/libresolv.so.2:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/librt.so.1:/lib/x86_64-linux-gnu/librt.so.1:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/libcap.so.2:/lib/x86_64-linux-gnu/libcap.so.2:ro@agent:0 \
+  --volume /lib/x86_64-linux-gnu/libseccomp.so.2:/lib/x86_64-linux-gnu/libseccomp.so.2:ro@agent:0 \
+  --volume /usr/lib/wsl/lib/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1:ro@agent:0 \
+  --volume /usr/lib/wsl/lib/libnvidia-ml.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:ro@agent:0 \
+  --volume /usr/lib/wsl/lib/libnvidia-gpucomp.so.610.43.02:/usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so:ro@agent:0 \
+  --volume /etc/nvidia-container-runtime:/etc/nvidia-container-runtime:ro@agent:0 \
+  --k3s-node-label "node-role/inference=true@agent:0" \
+  --k3s-arg "--node-taint=nvidia.com/gpu=present:NoSchedule@agent:0" \
   --wait
 
 # K3s generates its containerd configuration after it discovers the NVIDIA
 # runtime.  Keep a template with an isolated legacy-mode wrapper so that the
 # WSL2 driver libraries are injected by the NVIDIA prestart hook rather than
 # CDI.  CDI cannot resolve the WSL2 driver mount reliably on this node image.
-node="k3d-$cluster-server-0"
+node="k3d-$cluster-agent-0"
 docker exec "$node" sh -c '
   set -eu
   config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml
@@ -97,4 +103,4 @@ docker exec "$node" sh -c '
 '
 docker restart "$node" >/dev/null
 
-printf '%s\n' "k3d cluster $cluster is ready with a read-only model mount and NVIDIA runtime."
+printf '%s\n' "k3d cluster $cluster is ready; GPU worker $node has the model mount and NVIDIA runtime."

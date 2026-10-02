@@ -3,7 +3,8 @@ set -eu
 
 cluster=${K3D_CLUSTER:-llm-stack}
 image=${DEVICE_PLUGIN_IMAGE:-llm-stack/k8s-device-plugin:0.20.0}
-node="k3d-$cluster-server-0"
+# The plugin runs on the GPU worker only (ADR 0019).
+node="k3d-$cluster-agent-0"
 
 docker image inspect "$image" >/dev/null || {
   printf '%s\n' "Device plugin image is not present: $image" >&2

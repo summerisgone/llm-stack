@@ -2,9 +2,6 @@ HELM = helm
 KUBECTL = kubectl
 KUSTOMIZE_DIR = k8s
 K8S_NAMESPACE = airgap-ai-stack
-# Single-node k3d server. Site-specific: override on a differently named node.
-K3D_NODE ?= k3d-llm-stack-server-0
-
 # Pinned image and Helm chart versions. This file is the single source of
 # truth for every --version below; do not inline a version in a recipe.
 include versions.lock.env
@@ -452,7 +449,7 @@ device-plugin-config:
 
 device-plugin-status:
 	$(KUBECTL) -n kube-system rollout status daemonset/nvidia-device-plugin --timeout=2m
-	$(KUBECTL) get node $(K3D_NODE) -o go-template='{{index .status.allocatable "nvidia.com/gpu"}}{{"\n"}}'
+	$(KUBECTL) get nodes -o go-template='{{range .items}}{{.metadata.name}} inference={{index .metadata.labels "node-role/inference"}} gpu={{index .status.allocatable "nvidia.com/gpu"}}{{"\n"}}{{end}}'
 
 # Helm wrapper over the kustomize profile (see helm/airgap-stack).
 # `helm-up` re-renders the chart templates from the kustomize sources, so

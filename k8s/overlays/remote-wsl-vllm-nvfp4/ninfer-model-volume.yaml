@@ -29,10 +29,10 @@ spec:
     required:
       nodeSelectorTerms:
         - matchExpressions:
-            - key: kubernetes.io/hostname
+            - key: node-role/inference
               operator: In
               values:
-                - k3d-llm-stack-server-0
+                - "true"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

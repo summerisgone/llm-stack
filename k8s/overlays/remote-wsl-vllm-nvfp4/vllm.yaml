@@ -35,7 +35,11 @@ spec:
       runtimeClassName: nvidia
       enableServiceLinks: false
       nodeSelector:
-        kubernetes.io/hostname: k3d-llm-stack-server-0
+        node-role/inference: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: vllm
           image: llm-stack/vllm-qwen38-nvfp4:0.27.1

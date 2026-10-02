@@ -1,0 +1,108 @@
+#!/usr/bin/env sh
+set -eu
+
+# ADR 0019 stage 1 on a running cluster, without k3d-create-nvidia's
+# `k3d cluster delete`: `k3d node create` has no --volume or --gpus, so the
+# GPU worker is started as a plain k3s agent container on the cluster network
+# with the same mounts, label and taint k3d-create-nvidia gives agent-0. The
+# k3d labels make `k3d node list` show it and `k3d cluster delete` remove it.
+# Local-only images (vLLM, device plugin) are copied from the server's
+# containerd.
+
+cluster=${K3D_CLUSTER:-llm-stack}
+model_root=${K3D_MODEL_ROOT:-/home/llmstack/models}
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+server="k3d-$cluster-server-0"
+node="k3d-$cluster-agent-0"
+local_images=${GPU_AGENT_LOCAL_IMAGES:-"docker.io/llm-stack/vllm-qwen38-nvfp4:0.27.1 docker.io/llm-stack/k8s-device-plugin:0.20.0"}
+
+test -f "$model_root/RadixArk-Qwen3.8-27B-NVFP4/config.json" || {
+  printf '%s\n' "Model config not found below: $model_root" >&2
+  exit 1
+}
+if docker container inspect "$node" >/dev/null 2>&1; then
+  printf '%s\n' "$node already exists" >&2
+  exit 1
+fi
+
+image=$(docker inspect -f '{{.Config.Image}}' "$server")
+token=$(docker inspect -f '{{index .Config.Labels "k3d.cluster.token"}}' "$server")
+
+docker create \
+  --name "$node" \
+  --hostname "$node" \
+  --network "k3d-$cluster" \
+  --privileged \
+  --init \
+  --cgroupns private \
+  --restart unless-stopped \
+  --tmpfs /run \
+  --tmpfs /var/run \
+  --gpus all \
+  --label app=k3d \
+  --label "k3d.cluster=$cluster" \
+  --label k3d.role=agent \
+  --env "K3S_TOKEN=$token" \
+  --env "K3S_URL=https://$server:6443" \
+  --volume "k3d-$cluster-images:/k3d/images" \
+  --volume /var/lib/rancher/k3s \
+  --volume /var/lib/kubelet \
+  --volume /var/lib/cni \
+  --volume /var/log \
+  --volume "$model_root:/var/lib/models:ro" \
+  --volume /usr/bin/nvidia-container-runtime:/usr/bin/nvidia-container-runtime:ro \
+  --volume /usr/bin/nvidia-container-runtime-hook:/usr/bin/nvidia-container-runtime-hook:ro \
+  --volume /usr/bin/nvidia-container-cli:/usr/bin/nvidia-container-cli:ro \
+  --volume /usr/bin/nvidia-ctk:/usr/bin/nvidia-ctk:ro \
+  --volume /sbin/ldconfig:/sbin/ldconfig:ro \
+  --volume "$script_dir/nvidia-container-runtime-legacy:/opt/nvidia/nvidia-container-runtime-legacy:ro" \
+  --volume "$script_dir/nvidia-container-runtime-legacy.toml:/opt/nvidia/nvidia-container-runtime-legacy.toml:ro" \
+  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-container.so.1:ro \
+  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1:ro \
+  --volume /usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1.18.2:/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1.18.2:ro \
+  --volume /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2:/lib64/ld-linux-x86-64.so.2:ro \
+  --volume /lib/x86_64-linux-gnu/libc.so.6:/lib/x86_64-linux-gnu/libc.so.6:ro \
+  --volume /lib/x86_64-linux-gnu/libm.so.6:/lib/x86_64-linux-gnu/libm.so.6:ro \
+  --volume /lib/x86_64-linux-gnu/libdl.so.2:/lib/x86_64-linux-gnu/libdl.so.2:ro \
+  --volume /lib/x86_64-linux-gnu/libpthread.so.0:/lib/x86_64-linux-gnu/libpthread.so.0:ro \
+  --volume /lib/x86_64-linux-gnu/libresolv.so.2:/lib/x86_64-linux-gnu/libresolv.so.2:ro \
+  --volume /lib/x86_64-linux-gnu/librt.so.1:/lib/x86_64-linux-gnu/librt.so.1:ro \
+  --volume /lib/x86_64-linux-gnu/libcap.so.2:/lib/x86_64-linux-gnu/libcap.so.2:ro \
+  --volume /lib/x86_64-linux-gnu/libseccomp.so.2:/lib/x86_64-linux-gnu/libseccomp.so.2:ro \
+  --volume /usr/lib/wsl/lib/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1:ro \
+  --volume /usr/lib/wsl/lib/libnvidia-ml.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:ro \
+  --volume /usr/lib/wsl/lib/libnvidia-gpucomp.so.610.43.02:/usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so:ro \
+  --volume /etc/nvidia-container-runtime:/etc/nvidia-container-runtime:ro \
+  --entrypoint /bin/k3d-entrypoint.sh \
+  "$image" \
+  agent \
+  --node-label node-role/inference=true \
+  --node-taint nvidia.com/gpu=present:NoSchedule >/dev/null
+
+# k3d injects its entrypoints (cgroup v2, DNS for host.k3d.internal) at create
+# time; reuse the server's copies.
+for f in k3d-entrypoint.sh k3d-entrypoint-cgroupv2.sh k3d-entrypoint-dns.sh k3d-entrypoint-mounts.sh; do
+  docker cp "$server:/bin/$f" - | docker cp - "$node:/bin/"
+done
+docker start "$node" >/dev/null
+
+# Same containerd template patch as k3d-create-nvidia (ADR 0005).
+until docker exec "$node" test -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml; do sleep 2; done
+docker exec "$node" sh -c '
+  set -eu
+  config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml
+  template=/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
+  grep -q nvidia-container-runtime "$config"
+  cp "$config" "$template"
+  sed -i "s|/usr/bin/nvidia-container-runtime|/opt/nvidia/nvidia-container-runtime-legacy|g" "$template"
+'
+docker restart "$node" >/dev/null
+until docker exec "$server" kubectl get node "$node" >/dev/null 2>&1; do sleep 2; done
+docker exec "$server" kubectl wait --for=condition=Ready "node/$node" --timeout=180s
+
+for ref in $local_images; do
+  docker exec "$server" ctr -n k8s.io images export --platform linux/amd64 - "$ref" |
+    docker exec -i "$node" ctr -n k8s.io images import --platform linux/amd64 -
+done
+
+printf '%s\n' "GPU worker $node joined cluster $cluster."

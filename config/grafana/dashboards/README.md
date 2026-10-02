@@ -102,10 +102,10 @@ the current state of the node and the GPU:
 - **Host** (node-exporter, job `node`): CPU utilization, load average, memory
   used/available, host temperature (empty on WSL2 — no real hwmon sensors are
   exposed), uptime and CPU-core count.
-- **GPU** (gpu-exporter, job `gpu-exporter` / `gpu-exporter-sglang`):
+- **GPU** (gpu-exporter DaemonSet on each GPU worker, job `gpu-exporter`):
   utilization, VRAM used/total, VRAM %, GPU and memory temperature, power draw,
-  SM/memory clocks, and an up/count stat. A `$gpu_job` template variable lets
-  you pick which engine's exporter feeds the panels.
+  SM/memory clocks, and an up/count stat. A `$gpu_job` template variable picks
+  the exporter job.
 
 `make monitoring-up` drops it into the `system-state` folder
 (`config/gateway-addons/values.yaml` provider + the `--set-file` in the

@@ -8,6 +8,12 @@ metadata:
 spec:
   restartPolicy: Never
   runtimeClassName: nvidia
+  nodeSelector:
+    node-role/inference: "true"
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
   containers:
     - name: cuda-runtime-smoke
       image: llm-stack/vllm-qwen38-nvfp4:0.27.1

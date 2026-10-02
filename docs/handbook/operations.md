@@ -19,7 +19,9 @@ runbooks this page links to.
 
 ## Reaching the cluster
 
-The remote profile is a single-node k3d cluster on a Windows + WSL2 host.
+The remote profile is a two-node k3d cluster on a Windows + WSL2 host:
+`server-0` for the control plane and applications, `agent-0` for the GPU
+([ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)).
 From a workstation, `kubectl` goes through an SSH tunnel:
 
 ```sh

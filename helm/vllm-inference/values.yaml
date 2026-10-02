@@ -3,7 +3,14 @@ name: vllm-qwen38-nvfp4
 image: llm-stack/vllm-qwen38-nvfp4:0.27.1
 replicas: 1
 runtimeClassName: nvidia
-nodeName: k3d-llm-stack-server-0
+# ADR 0019: GPU pods go to any labelled, tainted inference worker, never to
+# a named node.
+nodeSelector:
+  node-role/inference: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
 modelClaim: vllm-qwen38-nvfp4-model
 inference:
   servedModelName: qwen-3.8-27b

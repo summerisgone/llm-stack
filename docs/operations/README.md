@@ -190,7 +190,7 @@ balancer (`k3d-llm-stack-serverlb`) starts first, but the API is dead until
 the server node is restarted:
 
     ssh llmstack@gpu-host.local -p2222
-    docker start k3d-llm-stack-server-0
+    docker start k3d-llm-stack-server-0 k3d-llm-stack-agent-0
 
 Then re-establish the tunnels above and verify health:
 

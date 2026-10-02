@@ -67,7 +67,7 @@ Job-ы сбора прикладного Prometheus
 | `llmd-epp` | EPP `:9090` | `llm_d_epp_` (и устаревший `inference_extension_`) | очереди по полосам, насыщение, TTFT по пользователям, готовые и устаревшие эндпоинты |
 | `pat-service` | `:9090` | `patsvc_` | запросы по пользователям и полосам, токены, стоимость, сессии, вызовы MCP |
 | `node` | node-exporter | `node_` | CPU, память, диск, сеть хоста |
-| `gpu-exporter`, `gpu-exporter-sglang` | `:9400` | `gpu_` | загрузка, память, температура GPU (`nvidia-smi`; DCGM на WSL2 не работает) |
+| `gpu-exporter` (DaemonSet на GPU-нодах) | `:9400` | `gpu_` | загрузка, память, температура GPU (`nvidia-smi`; DCGM на WSL2 не работает) |
 
 У метрик pat-service есть метка `user` (Keycloak `sub`); у метрик EPP -
 `fairness_id` (тот же `sub` или `default-flow` для трафика Open WebUI).

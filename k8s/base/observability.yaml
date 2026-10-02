@@ -151,6 +151,38 @@ spec:
       port: 9090
       targetPort: http
 ---
+# Pod discovery (kubernetes_sd_configs role: pod) for engine and node-level
+# exporters, which move between nodes (ADR 0019). Namespace-scoped only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: airgap-ai-stack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-discovery
+  namespace: airgap-ai-stack
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-discovery
+  namespace: airgap-ai-stack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-discovery
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: airgap-ai-stack
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -170,6 +202,7 @@ spec:
       labels:
         app.kubernetes.io/name: prometheus
     spec:
+      serviceAccountName: prometheus
       containers:
         - name: prometheus
           image: prom/prometheus:v3.3.0

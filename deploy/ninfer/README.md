@@ -158,7 +158,7 @@ the current ninfer binary, not a missing config flag.
 `helm/ninfer-inference/files/jsonl_exporter.py` runs as a second container in
 the same pod as `ninfer-serve` (sharing an `emptyDir` at `/var/log/ninfer` --
 it needs pod-local file access, so it is a true sidecar container, not a
-separate Deployment the way `gpu-exporter-sglang` is), tails the JSONL file,
+separate workload the way `gpu-exporter` is), tails the JSONL file,
 and re-exposes it as Prometheus text format on `:9400/metrics`. Prometheus
 scrapes that port under `job: ninfer`
 (`k8s/overlays/remote-wsl-vllm-nvfp4/prometheus-config-patch.yaml`), which
@@ -203,7 +203,7 @@ A bare `docker run --gpus all` container is invisible to k8s's
 `sglang-qwen38` pod (`exitCode 137`). **Mitigation: ninfer only runs as the
 `helm/ninfer-inference` in-cluster Deployment**, requesting
 `nvidia.com/gpu: "1"` exactly like `helm/sglang-inference` and
-`helm/vllm-inference`. With one GPU registered on `k3d-llm-stack-server-0`,
+`helm/vllm-inference`. With one GPU registered on `k3d-llm-stack-agent-0`,
 scaling both ninfer and sglang to `replicas: 1` leaves one `Pending`, per the
 verification steps above. Do not add a `deploy/ninfer/run` host-Docker
 script -- that would reopen this exact risk.

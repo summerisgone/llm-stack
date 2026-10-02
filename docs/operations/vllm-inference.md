@@ -17,7 +17,7 @@ setting there, not in a manifest; the copy still sitting in
 The stack routes authenticated requests through PAT service / the private
 AI Gateway and the llm-d endpoint picker to
 `vllm-qwen38-nvfp4.airgap-ai-stack.svc.cluster.local:8000`.
-One vLLM replica runs on `k3d-llm-stack-server-0`, using the NVIDIA runtime
+One vLLM replica runs on the GPU worker `k3d-llm-stack-agent-0`, using the NVIDIA runtime
 and one RTX 5090. The model is mounted read-only at `/model`; its WSL path is
 `/home/llmstack/models/RadixArk-Qwen3.8-27B-NVFP4`.
 

@@ -1,15 +1,13 @@
-# NVIDIA GPU state exporters for the WSL2/k3d remote profile.
+# NVIDIA GPU state exporter for the WSL2/k3d remote profile.
 #
 # DCGM-exporter cannot enumerate this WSL2 paravirtual GPU (DCGM init exits 1
-# silently even with the driver mounted), so instead we ship tiny Prometheus
-# exporters that shell out to `nvidia-smi`. Each runs in the same image + `nvidia`
-# RuntimeClass as one of the stack's inference engines (vLLM or SGLang — only one
-# runs at a time here), but WITHOUT an nvidia.com/gpu resource request, so it
-# never competes with the engine for the only GPU. WHATEVER engine is live,
-# nvidia-smi still reports the real utilization / memory / temperature / power /
-# clocks of the card. Two exporters exist so the approach is available under
-# both the vLLM and the SGLang profile; they query the same card, so pick one
-# with the dashboard's `$gpu_job` variable.
+# silently even with the driver mounted), so instead we ship a tiny Prometheus
+# exporter that shells out to `nvidia-smi`. It runs in the vLLM image + `nvidia`
+# RuntimeClass, but WITHOUT an nvidia.com/gpu resource request, so it never
+# competes with the engine for the GPU. Whatever engine is live, nvidia-smi
+# still reports the real utilization / memory / temperature / power / clocks
+# of the card. One pod per inference worker (ADR 0019); Prometheus finds them
+# by pod discovery and labels each series with its node.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -118,17 +116,16 @@ data:
     if __name__ == "__main__":
         main()
 ---
-# vLLM-profile carrier. Image is the engine's own NVIDIA build (has nvidia-smi
-# + python3) but only runs the exporter script, no engine, no GPU allocation.
+# Image is the vLLM engine's own NVIDIA build (has nvidia-smi + python3) but
+# only runs the exporter script, no engine, no GPU allocation.
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: gpu-exporter
   namespace: airgap-ai-stack
   labels:
     app.kubernetes.io/name: gpu-exporter
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: gpu-exporter
@@ -138,6 +135,12 @@ spec:
         app.kubernetes.io/name: gpu-exporter
     spec:
       runtimeClassName: nvidia
+      nodeSelector:
+        node-role/inference: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: gpu-exporter
           image: llm-stack/vllm-qwen38-nvfp4:0.27.1
@@ -181,73 +184,6 @@ metadata:
 spec:
   selector:
     app.kubernetes.io/name: gpu-exporter
-  ports:
-    - name: metrics
-      port: 9400
-      targetPort: 9400
----
-# SGLang-profile carrier, same shared script + runtime.
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: gpu-exporter-sglang
-  namespace: airgap-ai-stack
-  labels:
-    app.kubernetes.io/name: gpu-exporter-sglang
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: gpu-exporter-sglang
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: gpu-exporter-sglang
-    spec:
-      runtimeClassName: nvidia
-      containers:
-        - name: gpu-exporter
-          image: lmsysorg/sglang:dev-qwen38-27b-dflash2@sha256:616a3e97f45191af975896cfa644279096cb31bd408a071c2e99ca7209c3cafe
-          imagePullPolicy: IfNotPresent
-          command: ["python3", "/opt/gpu_metrics.py"]
-          env:
-            - name: NVIDIA_VISIBLE_DEVICES
-              value: all
-            - name: NVIDIA_DRIVER_CAPABILITIES
-              value: compute,utility
-          ports:
-            - name: metrics
-              containerPort: 9400
-          securityContext:
-            privileged: true
-          livenessProbe:
-            httpGet: { path: /metrics, port: metrics }
-            initialDelaySeconds: 10
-            periodSeconds: 15
-          readinessProbe:
-            httpGet: { path: /metrics, port: metrics }
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          volumeMounts:
-            - name: script
-              mountPath: /opt/gpu_metrics.py
-              subPath: gpu_metrics.py
-              readOnly: true
-      volumes:
-        - name: script
-          configMap:
-            name: gpu-exporter-script
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: gpu-exporter-sglang
-  namespace: airgap-ai-stack
-  labels:
-    app.kubernetes.io/name: gpu-exporter-sglang
-spec:
-  selector:
-    app.kubernetes.io/name: gpu-exporter-sglang
   ports:
     - name: metrics
       port: 9400

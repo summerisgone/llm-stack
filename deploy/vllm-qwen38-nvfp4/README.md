@@ -39,8 +39,12 @@ contexts, or a different attention backend only as separate validation steps.
 
 ## Kubernetes profile: WSL2 + k3d
 
-`k3d-create-nvidia` recreates the single-node lab cluster, passes the WSL2 GPU
-through to the node, mounts the model store read-only, and configures K3s's
+`k3d-create-nvidia` recreates the lab cluster with two nodes
+([ADR 0019](../../docs/adr/0019-inference-plane-gpu-worker-nodes.md)):
+`server-0` runs the control plane and the applications, `agent-0` is the GPU
+worker (label `node-role/inference=true`, taint
+`nvidia.com/gpu=present:NoSchedule`). The script passes the WSL2 GPU
+through to `agent-0`, mounts the model store read-only, and configures K3s's
 embedded containerd with an NVIDIA legacy runtime wrapper. The wrapper is
 needed because CDI does not resolve the WSL2 driver mount reliably in this
 node image.
@@ -52,6 +56,17 @@ make stack-up                        # gateway + operators + vLLM + full stack +
 ./scripts/llmd-nvfp4-smoke-test      # EPP metrics + PAT end-to-end
 ```
 
+To add the GPU worker to an existing single-node cluster without recreating
+it (and losing its PVCs), run `deploy/vllm-qwen38-nvfp4/k3d-add-gpu-agent`
+on the host instead: it starts `agent-0` as a plain k3s agent container with
+the same mounts, label and taint, patches its containerd, and copies the
+local-only images from the server. Then scale the GPU engines to 0, delete
+and re-create the model PVs/PVCs (`nodeAffinity` is immutable; the PVs are
+`Retain` hostPath, so the weights stay), and run `make gpu-objects-up
+device-plugin-up engine-up`. The host needs `fs.inotify.max_user_instances`
+of at least 1024 (`/etc/sysctl.d/99-inotify.conf`); at the WSL2 default of 128
+the second node's containerd fails with "too many open files".
+
 `stack-up` pulls pat-service straight from `ghcr.io/summerisgone/pat-service`
 (published by `.github/workflows/pat-service-image.yml` on every push to
 `pat-service/**`) — no local build or image import onto the k3d node.
@@ -61,7 +76,7 @@ overlay, installs the vLLM server from `helm/vllm-inference`, then the
 application stack and routing from `helm/airgap-stack`, then the llm-d
 standalone router. The overlay creates a static, `Retain` PV and read-only
 PVC rooted at `/var/lib/models/RadixArk-Qwen3.8-27B-NVFP4` in
-`k3d-llm-stack-server-0`; the node receives that path from
+`k3d-llm-stack-agent-0`; the node receives that path from
 `/home/llmstack/models` during cluster creation. The Deployment uses
 `RuntimeClass/nvidia`, requests `nvidia.com/gpu: 1`, and `Recreate` so a
 rollout never loads two copies of the 27B model into the single RTX 5090.

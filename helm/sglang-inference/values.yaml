@@ -2,7 +2,14 @@ name: sglang-qwen38
 image: lmsysorg/sglang:v0.5.19@sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9
 replicas: 1
 runtimeClassName: nvidia
-nodeName: k3d-llm-stack-server-0
+# ADR 0019: GPU pods go to any labelled, tainted inference worker, never to
+# a named node.
+nodeSelector:
+  node-role/inference: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
 # PVC that holds the model weights. Defaults to the shared NVFP4 claim created
 # by gpu-objects-up (k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml).
 modelClaim: vllm-qwen38-nvfp4-model

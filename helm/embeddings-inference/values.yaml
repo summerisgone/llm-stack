@@ -3,7 +3,14 @@
 # embeddings-model-volume.yaml), same pattern as the LLM engine charts.
 name: embeddings-bge-m3
 replicas: 1
-nodeName: k3d-llm-stack-server-0
+# ADR 0019: GPU pods go to any labelled, tainted inference worker, never to
+# a named node.
+nodeSelector:
+  node-role/inference: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
 modelClaim: embeddings-bge-m3-model
 
 # cpu (default) | gpu. Switching modes: edit this value, `make embeddings-up`,

@@ -20,7 +20,9 @@
 
 ## Доступ к кластеру
 
-Удалённый профиль - одноузловой кластер k3d на хосте Windows + WSL2. С
+Удалённый профиль - кластер k3d из двух нод на хосте Windows + WSL2:
+`server-0` для control plane и приложений, `agent-0` для GPU
+([ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)). С
 рабочей машины `kubectl` ходит через SSH-туннель:
 
 ```sh

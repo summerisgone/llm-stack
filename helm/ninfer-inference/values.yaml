@@ -15,7 +15,14 @@ name: ninfer-qwen38
 image: ghcr.io/summerisgone/ninfer:ninfer-9e163eee4b8a
 replicas: 1
 runtimeClassName: nvidia
-nodeName: k3d-llm-stack-server-0
+# ADR 0019: GPU pods go to any labelled, tainted inference worker, never to
+# a named node.
+nodeSelector:
+  node-role/inference: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
 # ninfer's own `.ninfer` v3 artifact, built via ninfer's weight-conversion
 # pipeline (upstream docs/weight-conversion.md) -- NOT the same file as the
 # safetensors checkpoint on vllm-qwen38-nvfp4-model. Separate PVC created by

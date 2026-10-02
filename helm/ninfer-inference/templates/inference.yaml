@@ -53,7 +53,9 @@ spec:
       runtimeClassName: {{ .Values.runtimeClassName }}
       enableServiceLinks: false
       nodeSelector:
-        kubernetes.io/hostname: {{ .Values.nodeName }}
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
       containers:
         - name: ninfer
           image: {{ .Values.image | quote }}

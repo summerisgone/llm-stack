@@ -1,5 +1,5 @@
-# Host-level collector (CPU, load, memory, host sensors/temperature) for the
-# single GPU node. Exposes :9100 and is scraped by the airgap Prometheus so the
+# Host-level collector (CPU, load, memory, host sensors/temperature) on
+# every node. Exposes :9100 and is scraped by the airgap Prometheus so the
 # dedicated Grafana datasource can render system-state panels. Mirrors the
 # official node-exporter DaemonSet; hostNetwork binds 9100 on the node IP.
 apiVersion: apps/v1
@@ -18,6 +18,11 @@ spec:
       labels:
         app.kubernetes.io/name: node-exporter
     spec:
+      # Every node, GPU workers included (ADR 0019).
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
       hostNetwork: true
       hostPID: true
       containers:

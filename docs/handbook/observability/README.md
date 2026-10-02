@@ -67,7 +67,7 @@ Scrape jobs of the application Prometheus
 | `llmd-epp` | EPP `:9090` | `llm_d_epp_` (and deprecated `inference_extension_`) | queues per band, saturation, per-user TTFT, ready and stale endpoints |
 | `pat-service` | `:9090` | `patsvc_` | per-user requests by band, tokens, cost, sessions, MCP calls |
 | `node` | node-exporter | `node_` | host CPU, memory, disk, network |
-| `gpu-exporter`, `gpu-exporter-sglang` | `:9400` | `gpu_` | GPU utilisation, memory, temperature (`nvidia-smi`; DCGM does not work on WSL2) |
+| `gpu-exporter` (DaemonSet on GPU workers) | `:9400` | `gpu_` | GPU utilisation, memory, temperature (`nvidia-smi`; DCGM does not work on WSL2) |
 
 pat-service metrics carry `user` (the Keycloak `sub`); EPP metrics carry
 `fairness_id` (the same `sub`, or `default-flow` for Open WebUI traffic).

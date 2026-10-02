@@ -35,7 +35,7 @@ next piece of work, tracked in
 | Edge listener port | `helm/airgap-stack/values.yaml` (`routing.edge.externalPort`) |
 | Operator UI hostnames and NodePorts | `helm/airgap-stack/values.yaml` (`routing.nodePorts`), `config/gateway-addons/values.yaml`, `k8s/overlays/remote-wsl-vllm-nvfp4/langfuse-public-url-patch.yaml`, `deploy/vllm-qwen38-nvfp4/systemd/*` |
 | Realm name and client redirect URIs | `k8s/realm-demo.json` |
-| k3d node name | `Makefile` (`K3D_NODE`), `nodeName` in `helm/vllm-inference`, `helm/sglang-inference`, `helm/ninfer-inference` and `helm/embeddings-inference` values, the model volumes in `k8s/overlays/remote-wsl-vllm-nvfp4/` (`model-volume.yaml`, `embeddings-model-volume.yaml`, `ninfer-model-volume.yaml`) |
+| GPU worker selection | No node names: GPU workers carry the label `node-role/inference=true` and the taint `nvidia.com/gpu=present:NoSchedule` (set on `agent-0` by `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia`, [ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)); `nodeSelector`/`tolerations` in the engine chart values and the model volumes' `nodeAffinity` match them |
 | k3d API port, model root | `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia` (`K3D_API_PORT`, `K3D_MODEL_ROOT`) |
 | Model directory | `k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml` |
 | Served model name, GPU sizing, launch flags | `helm/vllm-inference/values.yaml` (and `helm/sglang-inference/values.yaml` if SGLang is used) |
