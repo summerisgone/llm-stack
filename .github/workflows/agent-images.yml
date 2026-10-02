@@ -1,0 +1,68 @@
+name: agent images
+
+# The agent fleet's first-party images (docs/adr/0014, docs/adr/0020):
+# agent-broker, agent-catalog (with config/agents/base-profile as the
+# `profile` build context) and the agent-adapter runtimes pi, opencode and
+# dsh. Tagged sha-<short sha> and latest; versions.lock.env pins the sha tag.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent-broker/**"
+      - "agent-catalog/**"
+      - "agent-adapter/**"
+      - "config/agents/**"
+      - ".github/workflows/agent-images.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: agent-broker
+            context: agent-broker
+          - image: agent-catalog
+            context: agent-catalog
+            build-contexts: profile=config/agents/base-profile
+          - image: agent-pi
+            context: agent-adapter
+            target: pi
+          - image: agent-opencode
+            context: agent-adapter
+            target: opencode
+          - image: agent-dsh
+            context: agent-adapter
+            target: dsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          build-contexts: ${{ matrix.build-contexts }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/summerisgone/${{ matrix.image }}:latest
+            ghcr.io/summerisgone/${{ matrix.image }}:sha-${{ steps.vars.outputs.sha_short }}
