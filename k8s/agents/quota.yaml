@@ -1,6 +1,7 @@
 # Backstop for K (AGENT_SLOTS in broker.yaml) if the broker miscounts:
 # pods = K agents + 1 broker. CPU/memory totals are K x the agent limits plus
-# the broker's. Change together with AGENT_SLOTS and the AGENT_* resources.
+# the broker's; memory uses the larger DSH_MEMORY_LIMIT. Change together with
+# AGENT_SLOTS and the AGENT_* / DSH_* resources.
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -11,6 +12,6 @@ spec:
     requests.cpu: "1"
     requests.memory: 2Gi
     limits.cpu: "4"
-    limits.memory: 4Gi
+    limits.memory: 7Gi
     persistentvolumeclaims: "50"
     requests.storage: 100Gi

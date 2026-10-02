@@ -1,4 +1,4 @@
-# Agent images for the pi and opencode runtimes behind agent-broker: the
+# Agent images for the pi, opencode and dsh runtimes behind agent-broker: the
 # agent plus agent-adapter, which serves the broker's agent contract on
 # :8642. One target per runtime, built by `make agent-adapter-images`:
 #   docker buildx build --target pi --tag llm-stack/agent-pi:<tag> agent-adapter
@@ -31,4 +31,17 @@ RUN npm install -g --no-audit --no-fund opencode-ai@${OPENCODE_VERSION} \
  && npm cache clean --force \
  && opencode --version
 COPY opencode.mjs ./
+USER 10000
+
+# DeepSeek Harness: `dsh --profile acp` for the chats and `dsh web` for the
+# user's browser UI (dsh.mjs). DSH_PERMISSION_MODE: the pod is the sandbox
+# (gVisor, NetworkPolicy), so dsh runs without its own bwrap sandbox and
+# approval prompts; no telemetry.
+FROM base AS dsh
+ARG DSH_VERSION=0.2.0-rc.2
+RUN npm install -g --no-audit --no-fund @deepseek-ai/dsh@${DSH_VERSION} \
+ && npm cache clean --force \
+ && dsh --version
+COPY dsh.mjs ./
+ENV DSH_PERMISSION_MODE=danger-full-access DSH_TELEMETRY_MODE=DISABLED
 USER 10000

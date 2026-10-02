@@ -38,7 +38,7 @@ Prometheus/Grafana.
 | llm-d EPP | очередь, полосы приоритета, справедливость между пользователями, скоринг эндпоинтов | [Очереди и fair share](inference/queues-and-fair-share.ru.md) |
 | vLLM / SGLang / ninfer | движок модели; GPU владеет ровно один | [Движки](engines/README.ru.md) |
 | эмбеддинги bge-m3 | `/v1/embeddings`, режим CPU или "заём" GPU | [Движки](engines/README.ru.md) |
-| agent-broker и поды агентов | персональные агенты Hermes, pi и opencode под gVisor | [Агенты](agents/README.ru.md) |
+| agent-broker и поды агентов | персональные агенты Hermes, pi, opencode и dsh под gVisor | [Агенты](agents/README.ru.md) |
 | web-search, repowise | MCP-серверы за pat-service | [MCP](mcp/README.ru.md) |
 | OTEL Collector, Langfuse | трейсы с промптами, ответами, пользователем и сессией | [Langfuse](observability/langfuse.ru.md) |
 | Prometheus, Grafana | метрики и дашборды | [Наблюдаемость](observability/README.ru.md) |
@@ -86,8 +86,9 @@ flowchart TD
 - **API.** `/v1` принимает только PAT вида `sk-...`. pat-service определяет
   владельца, вычисляет ключ сессии и полосу и вызывает шлюз со своим
   сервисным JWT и заголовками идентичности.
-- **Агенты.** Open WebUI показывает `hermes-agent`, `pi-agent` и
-  `opencode-agent` из третьего подключения к `agent-broker`. Брокер запускает
+- **Агенты.** Open WebUI показывает `hermes-agent`, `pi-agent`,
+  `opencode-agent` и `dsh-agent` из третьего подключения к `agent-broker`;
+  у агента dsh есть ещё собственный web UI на хосте dsh. Брокер запускает
   под агента пользователя по требованию; агент вызывает модель и
   MCP-серверы через pat-service с собственным PAT пользователя.
 

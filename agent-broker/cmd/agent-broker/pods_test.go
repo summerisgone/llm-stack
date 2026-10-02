@@ -74,3 +74,35 @@ func TestAdapterRuntimePod(t *testing.T) {
 		t.Fatalf("volume %v", vol)
 	}
 }
+
+func TestDshPodGetsWebPortAndWorkspace(t *testing.T) {
+	var pod map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&pod)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	b := NewPodsBackend(&kube{base: srv.URL, ns: "agents", client: srv.Client()},
+		PodsConfig{Runtimes: []Runtime{{Name: "dsh", ModelID: "dsh-agent", Image: "dsh:1"}},
+			MemLimit: "1Gi", DshMemLimit: "2Gi", DshWebHost: "dsh.example.com"})
+	if err := b.createPod(context.Background(), User{ID: "abc", Name: "u"}, AgentRef{Runtime: "dsh", ID: "abc"}, StartSpec{CatalogImage: "catalog"}); err != nil {
+		t.Fatal(err)
+	}
+	c := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	env := map[string]any{}
+	for _, e := range c["env"].([]any) {
+		m := e.(map[string]any)
+		env[m["name"].(string)] = m["value"]
+	}
+	if env["AGENT_CWD"] != "/opt/data/home/workspace" || env["DSH_WEB_HOST"] != "dsh.example.com" {
+		t.Fatalf("env %v", env)
+	}
+	ports := c["ports"].([]any)
+	if len(ports) != 2 || ports[1].(map[string]any)["containerPort"] != float64(DshWebPort) {
+		t.Fatalf("ports %v", ports)
+	}
+	if mem := c["resources"].(map[string]any)["limits"].(map[string]any)["memory"]; mem != "2Gi" {
+		t.Fatalf("memory limit %v", mem)
+	}
+}

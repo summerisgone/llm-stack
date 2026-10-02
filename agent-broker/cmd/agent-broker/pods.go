@@ -131,6 +131,11 @@ type PodsConfig struct {
 	WebSearch bool
 	// Repowise keeps the repowise MCP entry (docs/adr/0018 section 7).
 	Repowise bool
+	// DshMemLimit replaces MemLimit for dsh, which runs two Node processes.
+	DshMemLimit string
+	// DshWebHost is the public authority of the dsh web UI, trusted by dsh
+	// web; empty = no web UI (docs/adr/0020).
+	DshWebHost string
 }
 
 // PodsBackend: one pod per active agent, mounting only that agent's RWO
@@ -442,7 +447,7 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 		// sync uid (it archives shadowed personal skills).
 		command = []string{"/bin/sh", "-c", "umask 002 && exec /opt/hermes/.venv/bin/hermes gateway run"}
 	} else {
-		// agent-adapter (the image's entrypoint) in front of pi / opencode.
+		// agent-adapter (the image's entrypoint) in front of pi / opencode / dsh.
 		env = append(env,
 			map[string]any{"name": "AGENT_RUNTIME", "value": ref.Runtime},
 			map[string]any{"name": "AGENT_HOME", "value": "/opt/data/home"},
@@ -450,6 +455,17 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 			map[string]any{"name": "AGENT_MODEL_NAME", "value": rt.ModelID},
 			secretEnv("AGENT_INFERENCE_KEY", "INFERENCE_KEY", true),
 		)
+	}
+	ports := []map[string]any{{"name": "api", "containerPort": AgentPort}}
+	memLimit := b.cfg.MemLimit
+	if ref.Runtime == "dsh" {
+		// The web UI's workspace outlives the pod: it is on the profile PVC.
+		env = append(env,
+			map[string]any{"name": "AGENT_CWD", "value": "/opt/data/home/workspace"},
+			map[string]any{"name": "DSH_WEB_HOST", "value": b.cfg.DshWebHost},
+		)
+		ports = append(ports, map[string]any{"name": "web", "containerPort": DshWebPort})
+		memLimit = b.cfg.DshMemLimit
 	}
 	for k, v := range b.cfg.ExtraAgentEnv {
 		env = append(env, map[string]any{"name": k, "value": v})
@@ -459,7 +475,7 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 		"image":           rt.Image,
 		"imagePullPolicy": "IfNotPresent",
 		"env":             env,
-		"ports":           []map[string]any{{"name": "api", "containerPort": AgentPort}},
+		"ports":           ports,
 		"readinessProbe": map[string]any{
 			"httpGet":       map[string]any{"path": "/health", "port": "api"},
 			"periodSeconds": 1, "failureThreshold": 3,
@@ -471,7 +487,7 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 		"securityContext": sc(10000),
 		"resources": map[string]any{
 			"requests": map[string]string{"cpu": b.cfg.CPURequest, "memory": b.cfg.MemRequest},
-			"limits":   map[string]string{"cpu": b.cfg.CPULimit, "memory": b.cfg.MemLimit},
+			"limits":   map[string]string{"cpu": b.cfg.CPULimit, "memory": memLimit},
 		},
 		"volumeMounts": []map[string]any{
 			{"name": "profile", "mountPath": "/opt/data"},

@@ -11,7 +11,7 @@ sync
       1. applies the selection passed by the broker (AGENT_SELECTION),
       2. replaces catalog/ with the image's copy,
       3. rebuilds catalog-enabled/ (the skills dir every runtime reads),
-      4. renders the runtime's config (AGENT_RUNTIME: hermes, pi or opencode)
+      4. renders the runtime's config (AGENT_RUNTIME: hermes, pi, opencode or dsh)
          with the MCP servers of mcp-servers.yaml,
       5. hermes only: moves personal skills shadowed by an enabled catalog
          skill into skills/.archive/ (Hermes does not scan it),
@@ -31,7 +31,7 @@ import yaml
 CATALOG_DIR = os.environ.get("CATALOG_DIR", "/catalog")
 AGENT_HOME = os.environ.get("AGENT_HOME", "/opt/data/home")
 REPORT_PATH = os.environ.get("REPORT_PATH", "/dev/termination-log")
-RUNTIMES = ("hermes", "pi", "opencode")
+RUNTIMES = ("hermes", "pi", "opencode", "dsh")
 
 # Personal-layer directories the agent writes into. Group-writable + setgid so
 # files created by either uid stay in the shared group.
@@ -329,6 +329,41 @@ def render_opencode(catalog, home, soul, servers):
     write_atomic(os.path.join(config_dir, "AGENTS.md"), soul)
 
 
+def render_dsh(catalog, home, soul, servers):
+    """DSH_HOME is <home>/dsh (agent-adapter dsh.mjs): the home-level
+    cordis.patch.yml shared by the acp and web profiles, their --patch
+    overlays, and the user-global AGENTS.md."""
+    src = os.path.join(catalog, "runtimes", "dsh")
+    dsh_home = os.path.join(home, "dsh")
+    catalog_owned_dir(dsh_home)
+    with open(os.path.join(src, "cordis.patch.yml"), encoding="utf-8") as fh:
+        patch = fh.read().rstrip() + "\n"
+    patch += "\n" + yaml.safe_dump(
+        [{"id": "skill-filesystem",
+          "config": {"customSkillDirs": [os.path.join(home, "catalog-enabled")]}}],
+        sort_keys=False)
+    if servers:
+        # The header is a Cordis !!js expression, so these rows are written
+        # as text rather than through yaml.safe_dump.
+        patch += "\n- insert:\n"
+        for name, (url, timeout) in servers.items():
+            patch += (
+                f"    - id: mcp-{name}\n"
+                "      name: '@deepseek-ai/dsh-mcp-client'\n"
+                "      config:\n"
+                f"        serverName: {name}\n"
+                "        transport: streamable-http\n"
+                f"        url: {json.dumps(url)}\n"
+                f"        toolCallTimeoutMs: {timeout * 1000}\n"
+                "        headers:\n"
+                "          Authorization: !!js '`Bearer ${process.env.AGENT_INFERENCE_KEY}`'\n")
+    write_atomic(os.path.join(dsh_home, "cordis.patch.yml"), patch)
+    for name in ("acp.patch.yml", "web.patch.yml"):
+        shutil.copyfile(os.path.join(src, name), os.path.join(dsh_home, name + ".tmp"))
+        os.replace(os.path.join(dsh_home, name + ".tmp"), os.path.join(dsh_home, name))
+    write_atomic(os.path.join(dsh_home, "AGENTS.md"), soul)
+
+
 def archive_shadowed(home, enabled):
     # Catalog wins on a name collision (ADR 0014 section 2); Hermes itself
     # prefers the local copy, so the personal one is moved out of its scan.
@@ -420,6 +455,8 @@ def sync():
         shadowed, shadow_failed = archive_shadowed(home, enabled)
     elif runtime == "pi":
         render_pi(catalog, home, soul, servers)
+    elif runtime == "dsh":
+        render_dsh(catalog, home, soul, servers)
     else:
         render_opencode(catalog, home, soul, servers)
 

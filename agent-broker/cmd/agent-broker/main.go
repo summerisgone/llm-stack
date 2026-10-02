@@ -83,6 +83,21 @@ func main() {
 			Title:       "OpenCode agent",
 			Description: "Your personal OpenCode agent with the curated skill catalog. Type /skills to see and switch skills."})
 	}
+	// DeepSeek Harness: chats over ACP and, with DSH_PUBLIC_ORIGIN, the
+	// user's own dsh web UI through the web proxy (web.go, docs/adr/0020).
+	dshOrigin := os.Getenv("DSH_PUBLIC_ORIGIN")
+	var dshAuthority string
+	if img := os.Getenv("DSH_IMAGE"); img != "" {
+		runtimes = append(runtimes, Runtime{Name: "dsh", ModelID: "dsh-agent", Image: img,
+			Title:       "DeepSeek agent",
+			Description: "Your personal DeepSeek Harness agent with the curated skill catalog. Type /skills to see and switch skills."})
+		if dshOrigin != "" {
+			if dshAuthority, err = publicAuthority(dshOrigin); err != nil {
+				slog.Error("dsh web", "err", err)
+				os.Exit(1)
+			}
+		}
+	}
 	stopGrace, _ := strconv.ParseInt(env("AGENT_STOP_GRACE_SECONDS", "30"), 10, 64)
 
 	var backend Backend
@@ -107,6 +122,8 @@ func main() {
 			StopGrace:    stopGrace,
 			WebSearch:    os.Getenv("WEB_SEARCH_ENABLED") == "true",
 			Repowise:     os.Getenv("REPOWISE_ENABLED") == "true",
+			DshMemLimit:  env("DSH_MEMORY_LIMIT", "2Gi"),
+			DshWebHost:   dshAuthority,
 		})
 	default:
 		slog.Error("unsupported AGENT_BACKEND", "backend", b)
@@ -161,6 +178,22 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
+	if dshAuthority != "" {
+		web := &webProxy{s: s, authority: dshAuthority, port: DshWebPort, client: s.client}
+		wsrv := &http.Server{Addr: env("WEB_LISTEN_ADDR", ":8081"), Handler: web.routes(),
+			ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			<-ctx.Done()
+			_ = wsrv.Close()
+		}()
+		go func() {
+			slog.Info("dsh web proxy listening", "addr", wsrv.Addr, "host", dshAuthority)
+			if err := wsrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("serve dsh web", "err", err)
+				os.Exit(1)
+			}
+		}()
+	}
 	slog.Info("agent-broker listening", "addr", srv.Addr, "slots", k, "catalog", catalog.Version)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("serve", "err", err)

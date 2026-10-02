@@ -20,7 +20,7 @@ ENGINE_DEPLOYMENT_vllm = vllm-qwen38-nvfp4
 ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -358,6 +358,11 @@ repowise-down:
 provision-repowise-oidc:
 	./scripts/provision-repowise-oidc
 
+# docs/adr/0020: Keycloak client dsh-web for the dsh web UI host; a no-op
+# while DSH_PUBLIC_ORIGIN is empty.
+provision-dsh-oidc:
+	./scripts/provision-dsh-oidc
+
 web-search-mcp-test:
 	cd web-search-mcp && go vet ./... && go test ./...
 
@@ -464,6 +469,7 @@ helm-env-values:
 
 HELM_ORIGIN_SETS = --set oidc.publicBaseURL=$(STACK_ORIGIN) \
 	--set oidc.externalIssuer=$(STACK_ORIGIN)/sso/realms/ai-stack \
+	--set dshWeb.publicOrigin=$(DSH_PUBLIC_ORIGIN) \
 	--set-file modelCache.checksums=models/checksums.txt
 
 helm-up: helm-render helm-env-values
@@ -480,6 +486,7 @@ helm-up: helm-render helm-env-values
 	$(MAKE) provision-pat-oidc
 	$(MAKE) provision-realm-security
 	$(MAKE) provision-openwebui-offline-access
+	$(MAKE) provision-dsh-oidc
 
 helm-diff: helm-render helm-env-values
 	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
@@ -534,14 +541,14 @@ agent-catalog:
 agent-broker-image:
 	docker buildx build --load $(AGENTS_BUILD_FLAGS) --tag $(AGENT_BROKER_IMAGE) agent-broker
 
-# pi and opencode agents behind agent-broker (agent-adapter/Dockerfile, one
-# target each). Tag = content hash of the adapter sources, recorded as
-# PI_IMAGE / OPENCODE_IMAGE in versions.lock.env. An empty PI_IMAGE or
-# OPENCODE_IMAGE (e.g. in .env) leaves that agent out of Open WebUI.
+# pi, opencode and dsh agents behind agent-broker (agent-adapter/Dockerfile,
+# one target each). Tag = content hash of the adapter sources, recorded as
+# PI_IMAGE / OPENCODE_IMAGE / DSH_IMAGE in versions.lock.env. An empty one
+# (e.g. in .env) leaves that agent out of Open WebUI.
 AGENT_ADAPTER_SRC = agent-adapter/Dockerfile agent-adapter/package.json agent-adapter/server.mjs
 agent-adapter-images:
 	cd agent-adapter && node --test
-	for rt in pi opencode; do \
+	for rt in pi opencode dsh; do \
 		tag=$$(shasum -a 256 $(AGENT_ADAPTER_SRC) agent-adapter/$$rt.mjs | shasum -a 256 | cut -c1-12); \
 		image=llm-stack/agent-$$rt:$$tag; \
 		var=$$(printf %s $$rt | tr a-z A-Z)_IMAGE; \
@@ -551,7 +558,7 @@ agent-adapter-images:
 	done
 
 agents-k3d-load:
-	WSL_SSH_HOST=$(WSL_SSH_HOST) WSL_SSH_PORT=$(WSL_SSH_PORT) ./scripts/agents-k3d-load $(AGENT_CATALOG_IMAGE) $(AGENT_BROKER_IMAGE) $(PI_IMAGE) $(OPENCODE_IMAGE)
+	WSL_SSH_HOST=$(WSL_SSH_HOST) WSL_SSH_PORT=$(WSL_SSH_PORT) ./scripts/agents-k3d-load $(AGENT_CATALOG_IMAGE) $(AGENT_BROKER_IMAGE) $(PI_IMAGE) $(OPENCODE_IMAGE) $(DSH_IMAGE)
 
 agents-test:
 	python3 -m unittest discover -s agent-catalog -p 'test_*.py'
@@ -560,7 +567,7 @@ agents-test:
 
 # Applies k8s/agents, then the values it cannot hold itself because they
 # come from versions.lock.env and .env (WEB_SEARCH_ENABLED, docs/adr/0017;
-# REPOWISE_ENABLED, docs/adr/0018).
+# REPOWISE_ENABLED, docs/adr/0018; DSH_PUBLIC_ORIGIN, docs/adr/0020).
 # Restarts the broker so it picks up a new catalog; running agents move to it
 # at their next idle point.
 agents-up:
@@ -571,6 +578,8 @@ agents-up:
 		--from-literal=AGENT_CATALOG_IMAGE=$(AGENT_CATALOG_IMAGE) \
 		--from-literal=PI_IMAGE=$(PI_IMAGE) \
 		--from-literal=OPENCODE_IMAGE=$(OPENCODE_IMAGE) \
+		--from-literal=DSH_IMAGE=$(DSH_IMAGE) \
+		--from-literal=DSH_PUBLIC_ORIGIN=$(DSH_PUBLIC_ORIGIN) \
 		--from-literal=WEB_SEARCH_ENABLED=$(or $(WEB_SEARCH_ENABLED),false) \
 		--from-literal=REPOWISE_ENABLED=$(or $(REPOWISE_ENABLED),false) \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -

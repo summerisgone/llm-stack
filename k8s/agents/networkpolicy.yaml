@@ -1,5 +1,6 @@
 # Default deny in the agent namespace, then: Open WebUI -> broker -> agents
-# (Hermes, pi, opencode), agents -> pat-service only (inference, ADR 0014 section 8; GitLab is added
+# (Hermes, pi, opencode, dsh), the edge Envoy -> broker's dsh web proxy ->
+# dsh web (docs/adr/0020), agents -> pat-service only (inference, ADR 0014 section 8; GitLab is added
 # here when the repo-reader skill gets a real target). Enforcement depends on
 # the cluster CNI; see docs/operations/agents.md.
 apiVersion: networking.k8s.io/v1
@@ -29,6 +30,15 @@ spec:
               app.kubernetes.io/name: openwebui
       ports:
         - port: 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: edge
+      ports:
+        - port: 8081
   egress:
     - to:
         - namespaceSelector:
@@ -58,9 +68,15 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                values: [hermes-agent, pi-agent, opencode-agent]
+                values: [hermes-agent, pi-agent, opencode-agent, dsh-agent]
       ports:
         - port: 8642
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: dsh-agent
+      ports:
+        - port: 3080
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -71,7 +87,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: [hermes-agent, pi-agent, opencode-agent]
+        values: [hermes-agent, pi-agent, opencode-agent, dsh-agent]
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
@@ -80,6 +96,8 @@ spec:
               app.kubernetes.io/name: agent-broker
       ports:
         - port: 8642
+        # dsh web; only dsh-agent pods listen on it.
+        - port: 3080
   egress:
     - to:
         - namespaceSelector:

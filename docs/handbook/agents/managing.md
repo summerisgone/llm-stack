@@ -135,8 +135,8 @@ A new agent runtime (another coding agent) needs:
    SSE on `:8642`, `GET /health`, bearer `API_SERVER_KEY`, all state under
    `AGENT_HOME` on the PVC, uid 10000, works with a read-only root
    filesystem, no egress except pat-service. If the agent has no such server,
-   add a backend to `agent-adapter/` (see `pi.mjs`, `opencode.mjs`) and a
-   Dockerfile target.
+   add a backend to `agent-adapter/` (see `pi.mjs`, `opencode.mjs`,
+   `dsh.mjs`) and a Dockerfile target.
 2. **Broker registration:** a `Runtime` entry in
    `agent-broker/cmd/agent-broker/main.go` (name, model id, title, image env
    `<NAME>_IMAGE`), plus its component name in the NetworkPolicy selectors

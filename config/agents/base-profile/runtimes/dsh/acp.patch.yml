@@ -1,0 +1,6 @@
+# `dsh --profile acp --patch` overlay (agent-adapter dsh.mjs): the model of
+# every chat session.
+- id: acp
+  config:
+    provider: pat
+    model: qwen-3.8-27b

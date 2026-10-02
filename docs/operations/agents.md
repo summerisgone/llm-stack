@@ -1,8 +1,9 @@
 # Cloud agent fleet
 
-Per-user Hermes, pi and opencode agents behind `agent-broker`
+Per-user Hermes, pi, opencode and dsh agents behind `agent-broker`
 ([ADR 0009](../adr/0009-cloud-hermes-fleet-per-user-profiles.md),
-[ADR 0014](../adr/0014-hermes-curated-catalog-and-worker-slots.md)). This
+[ADR 0014](../adr/0014-hermes-curated-catalog-and-worker-slots.md),
+[ADR 0020](../adr/0020-dsh-runtime-and-per-user-web-ui.md)). This
 page is the runbook for the `pods` backend as implemented; ADR 0014 records
 the decisions and the V1 findings.
 
@@ -13,8 +14,9 @@ the decisions and the V1 findings.
 | Namespace `agents`, broker Deployment/Service/ConfigMap, RBAC, ResourceQuota, NetworkPolicies | `k8s/agents` | `make agents-up` |
 | ConfigMap `agent-images`, broker catalog image | `versions.lock.env` | `make agents-up` |
 | Catalog content, MCP server list (`mcp-servers.yaml`) | `config/agents/base-profile/` | image `AGENT_CATALOG_IMAGE`, built by `make agent-catalog` |
-| pi / opencode images (`PI_IMAGE`, `OPENCODE_IMAGE`) | `agent-adapter/` | `make agent-adapter-images` |
-| Pod `<runtime>-agent-<id>`, PVC `<runtime>-profile-<id>` (runtime `hermes`, `pi`, `opencode`), Secret `agent-cred-<id>` (one per user) | broker, at runtime | label `app.kubernetes.io/managed-by: agent-broker` |
+| pi / opencode / dsh images (`PI_IMAGE`, `OPENCODE_IMAGE`, `DSH_IMAGE`) | `agent-adapter/` | `make agent-adapter-images` |
+| dsh web route, OIDC SecurityPolicy, Secret `dsh-web-oidc` | `helm/airgap-stack/templates/dsh-web.yaml` | `make helm-up` (when `DSH_PUBLIC_ORIGIN` is set) |
+| Pod `<runtime>-agent-<id>`, PVC `<runtime>-profile-<id>` (runtime `hermes`, `pi`, `opencode`, `dsh`), Secret `agent-cred-<id>` (one per user) | broker, at runtime | label `app.kubernetes.io/managed-by: agent-broker` |
 
 `<id>` is the first 16 hex characters of `sha256(keycloak sub)`. The PVC
 annotation `agents.llm-stack/username` names the user.
@@ -72,12 +74,47 @@ running holds three slots.
 - Issuing a key on `/platform` restarts all of the user's agents.
 
 ```sh
-make agent-adapter-images AGENTS_PLATFORM=linux/amd64   # pins PI_IMAGE / OPENCODE_IMAGE
-make agents-k3d-load                            # also loads both images
+make agent-adapter-images AGENTS_PLATFORM=linux/amd64   # pins PI_IMAGE / OPENCODE_IMAGE / DSH_IMAGE
+make agents-k3d-load                            # also loads these images
 ```
 
-An empty `PI_IMAGE` or `OPENCODE_IMAGE` (in `.env`) leaves that agent out of
-the broker's model list; Open WebUI still shows the model and gets a 404.
+An empty `PI_IMAGE`, `OPENCODE_IMAGE` or `DSH_IMAGE` (in `.env`) leaves that
+agent out of the broker's model list; Open WebUI still shows the model and
+gets a 404.
+
+## dsh and its web UI
+
+`dsh-agent` pods run agent-adapter with two DeepSeek Harness processes on
+`DSH_HOME=/opt/data/home/dsh`: `dsh --profile acp` for the chats and
+`dsh web` on `:3080` for the user's browser UI. The workspace is
+`/opt/data/home/workspace` on the PVC. Memory limit `DSH_MEMORY_LIMIT`
+(2Gi); the quota counts K x that.
+
+The web UI needs, in this order:
+
+1. `.env`: `DSH_PUBLIC_ORIGIN` (the dsh host, with port if the site proxy
+   listens on one) and `DSH_OIDC_CLIENT_SECRET`.
+2. A site-proxy rule for that host to the same edge listener as the main
+   origin, keeping `Host` and setting `X-Forwarded-Proto` (as for repowise).
+3. `make agents-up` (the broker reads `DSH_PUBLIC_ORIGIN` from
+   `agent-images` and opens its web proxy on `:8081`), then `make helm-up`
+   (route, SecurityPolicy, Secret, and `provision-dsh-oidc` for the
+   Keycloak client `dsh-web`).
+
+Checks:
+
+```sh
+kubectl -n airgap-ai-stack get httproute dsh-web -o jsonpath='{.status.parents[*].conditions[*].reason}'
+kubectl -n airgap-ai-stack get securitypolicy dsh-web -o jsonpath='{.status.ancestors[*].conditions[*].reason}'
+kubectl -n agents logs deploy/agent-broker | grep 'dsh web'
+```
+
+Symptoms: a 403 "untrusted host" page from dsh means the `Host` the pod got
+is not the public authority (check `DSH_WEB_HOST` in the pod env); a loop
+back to Keycloak means the `dsh-web` client's redirect URI does not match
+`DSH_PUBLIC_ORIGIN/oauth2/callback`. `dsh web` never prints its launch
+token to the logs unmasked; the broker fetches it from agent-adapter
+`/web-token`.
 
 ## Deploy and update
 

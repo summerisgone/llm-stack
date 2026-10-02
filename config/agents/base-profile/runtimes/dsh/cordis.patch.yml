@@ -1,0 +1,36 @@
+# dsh home-level patch ($DSH_HOME/cordis.patch.yml): applies to both the acp
+# and the web profile and wins over the profile's own cordis.patch.yml, so
+# the provider below stays locked even when the user edits the Models page.
+# agent-sync appends the skill-filesystem row and the MCP rows.
+- id: llm-pi-ai
+  config:
+    providers:
+      pat:
+        displayName: pat-service
+        apiKeyEnv: AGENT_INFERENCE_KEY
+        api: openai-completions
+        baseURL: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
+        reasoning: high
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+          thinkingFormat: qwen-chat-template
+        models:
+          - id: qwen-3.8-27b
+            name: Qwen 3.8 27B
+            contextWindow: 196608
+            maxTokens: 32768
+            input: [text]
+            reasoningEfforts:
+              off:
+              high: high
+
+- id: agent-default-model
+  config:
+    provider: pat
+    model: qwen-3.8-27b
+
+# Uploads session logs with requests to DeepSeek's own API, which is never
+# called here; off so nothing tries.
+- id: session-log-deepseek
+  disabled: true

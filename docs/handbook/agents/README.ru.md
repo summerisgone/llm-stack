@@ -3,7 +3,7 @@
 [English](README.md) | [Оглавление справочника](../README.ru.md)
 
 У каждого пользователя могут быть персональные coding-агенты (Hermes, pi,
-opencode), которые работают в собственном изолированном поде, хранят
+opencode, dsh), которые работают в собственном изолированном поде, хранят
 постоянный профиль и пользуются моделью и MCP-инструментами с учётными
 данными самого пользователя. Пользователь общается с ними как с моделями в
 Open WebUI. `agent-broker` запускает их по требованию, держит запущенными
@@ -17,6 +17,7 @@ Open WebUI. `agent-broker` запускает их по требованию, д
 - [Что работает в Kubernetes](#что-работает-в-kubernetes)
 - [agent-broker](#agent-broker)
 - [Рантаймы](#рантаймы)
+- [Web UI dsh](#web-ui-dsh)
 - [Профили и каталог](#профили-и-каталог)
 - [Токены](#токены)
 - [Изоляция и gVisor](#изоляция-и-gvisor)
@@ -26,16 +27,19 @@ Open WebUI. `agent-broker` запускает их по требованию, д
 ## Как это выглядит для пользователя
 
 1. На `/platform` нажать **Issue agent key** (раз в неделю; ключ живёт 7 дней).
-2. В Open WebUI выбрать `Hermes agent (personal)`, `Pi agent (personal)` или
-   `OpenCode agent (personal)`.
+2. В Open WebUI выбрать `Hermes agent (personal)`, `Pi agent (personal)`,
+   `OpenCode agent (personal)` или `DeepSeek agent (personal)`.
 3. Первое сообщение создаёт профиль, и на него отвечает брокер текстом
    онбординга. Следующее сообщение запускает под агента; ответы стримятся
    как у любой модели.
 4. `/skills` в чате показывает каталог навыков; `/skills on|off <name>` и
    `/skills reset` меняют выбор, который применяется при следующем старте
    агента.
-5. У pi и opencode каждый чат Open WebUI - отдельная сессия агента, которая
-   хранится в профиле и переживает перезапуски; Hermes ведёт сессии сам.
+5. У pi, opencode и dsh каждый чат Open WebUI - отдельная сессия агента,
+   которая хранится в профиле и переживает перезапуски; Hermes ведёт сессии
+   сам.
+6. У агента dsh есть ещё собственный браузерный UI на хосте dsh
+   ([Web UI dsh](#web-ui-dsh)): тот же вход, тот же профиль.
 
 ## Архитектура
 
@@ -45,7 +49,7 @@ Open WebUI (подключение 2, Keycloak-токен пользовател
      занять слот (запустить под / переиспользовать / вытеснить LRU простаивающего / поставить в очередь), проксировать чат
   -> под <runtime>-agent-<id> :8642 OpenAI chat-completions, bearer API_SERVER_KEY
        init catalog-sync: разложить профиль для этого рантайма
-       агент: Hermes нативно или agent-adapter + pi / opencode
+       агент: Hermes нативно или agent-adapter + pi / opencode / dsh
   -> pat-service /v1 (модель) и /mcp/<name>/ (инструменты), с PAT агента пользователя
 ```
 
@@ -81,8 +85,8 @@ kubectl -n agents get pods,pvc -l app.kubernetes.io/managed-by=agent-broker
 состояние восстанавливается из кластера при старте.
 
 - **API:** `GET /v1/models` (рантаймы, у которых задан образ) и
-  `POST /v1/chat/completions` (модель `hermes-agent`, `pi-agent` или
-  `opencode-agent`), оба требуют Keycloak-токен с `ai-user` или `ai-admin`;
+  `POST /v1/chat/completions` (модель `hermes-agent`, `pi-agent`,
+  `opencode-agent` или `dsh-agent`), оба требуют Keycloak-токен с `ai-user` или `ai-admin`;
   `GET /healthz` отдаёт `{"k", "running", "busy", "queued"}`.
 - **Слоты:** одновременно работают не больше `AGENT_SLOTS` (3) агентов,
   общих для всех пользователей и рантаймов. Новый старт занимает свободный
@@ -105,8 +109,9 @@ kubectl -n agents get pods,pvc -l app.kubernetes.io/managed-by=agent-broker
 | Hermes | `hermes-agent` | `HERMES_IMAGE` (upstream) | `hermes gateway run`, OpenAI API-сервер на `:8642` |
 | pi | `pi-agent` | `PI_IMAGE` (`agent-adapter`, target `pi`) | agent-adapter на `:8642`, pi SDK в процессе, расширение `pi-mcp-adapter` для MCP |
 | opencode | `opencode-agent` | `OPENCODE_IMAGE` (`agent-adapter`, target `opencode`) | agent-adapter на `:8642`, `opencode serve` на loopback, управляется через его HTTP API |
+| dsh (DeepSeek Harness) | `dsh-agent` | `DSH_IMAGE` (`agent-adapter`, target `dsh`) | agent-adapter на `:8642` управляет `dsh --profile acp` через stdio; `dsh web` на `:3080` для [web UI](#web-ui-dsh) |
 
-У pi и opencode нет OpenAI-совместимого сервера, поэтому контракт брокера
+У pi, opencode и dsh нет OpenAI-совместимого сервера, поэтому контракт брокера
 обеспечивает `agent-adapter` (Node, `agent-adapter/`): OpenAI chat
 completions на `:8642` со стримингом SSE (включая reasoning), `/health`,
 bearer `API_SERVER_KEY`. Агенту он передаёт только последнее сообщение
@@ -118,6 +123,36 @@ limit пользователя и видны в Langfuse и QoS-дашборда
 обновлений, телеметрия, каталоги моделей, установка плагинов и встроенные
 веб-инструменты выключены.
 
+## Web UI dsh
+
+Под агента dsh также запускает `dsh web`, браузерный UI DeepSeek Harness,
+только для этого пользователя
+([ADR 0020](../../adr/0020-dsh-runtime-and-per-user-web-ui.md)). Он открывается
+на собственном хосте `DSH_PUBLIC_ORIGIN`: dsh работает только от `/`, поэтому
+под путём основного origin его не разместить.
+
+```
+браузер -> site proxy (TLS) -> edge Envoy: HTTPRoute dsh-web (по хосту)
+  SecurityPolicy dsh-web: OIDC с Keycloak-клиентом dsh-web, access token передаётся дальше
+  -> agent-broker :8081 web proxy: проверить токен и роль, при необходимости
+     запустить под dsh-agent пользователя через слоты, проксировать HTTP + WebSocket
+  -> под dsh-agent-<id> :3080 dsh web (тот же DSH_HOME и workspace, что у чатов)
+```
+
+- **Вход.** Только Keycloak SSO. Собственную cookie dsh (по launch token)
+  брокер получает сам: берёт токен у agent-adapter и обменивает его.
+  Пользователь токен не видит.
+- **Изоляция.** Брокер выбирает под по subject токена, никогда по cookie;
+  каждый пользователь видит только свои сессии и файлы.
+- **Workspace.** `/opt/data/home/workspace` на PVC профиля: файлы переживают
+  idle-эвикцию. Настройки модели и MCP зафиксированы каталогом.
+- **Слоты.** Активностью считаются запросы страниц и API; одна открытая
+  вкладка агента не удерживает. После эвикции следующий клик запускает его
+  снова (холодный старт до нескольких минут).
+- **Настройка.** `DSH_PUBLIC_ORIGIN` и `DSH_OIDC_CLIENT_SECRET` в `.env`,
+  правило site proxy для этого хоста на edge listener (как у repowise), затем
+  `make agents-up helm-up` (`helm-up` вызывает `provision-dsh-oidc`).
+
 ## Профили и каталог
 
 Каждый PVC профиля - домашний каталог агента. При каждом старте
@@ -128,9 +163,9 @@ init-контейнер `catalog-sync` (образ `AGENT_CATALOG_IMAGE`,
 | Источник | Превращается в |
 | --- | --- |
 | `skills/` + `catalog.yaml` (обязательные, включённые или выключенные по умолчанию) + выбор пользователя через `/skills` | каталоги навыков `catalog/` и `catalog-enabled/` |
-| `SOUL.md` + `SOUL.user.md` пользователя | инструкции агента (`SOUL.md`, `AGENTS.md` для pi и opencode) |
+| `SOUL.md` + `SOUL.user.md` пользователя | инструкции агента (`SOUL.md`, `AGENTS.md` для pi, opencode и dsh) |
 | `config.yaml` + `locked-keys.yaml` + `config.user.yaml` пользователя | `config.yaml` Hermes; заблокированные ключи всегда побеждают |
-| `runtimes/pi/*`, `runtimes/opencode/opencode.json` | `settings.json`, `models.json` pi; `opencode.json` opencode (провайдер = pat-service) |
+| `runtimes/pi/*`, `runtimes/opencode/opencode.json`, `runtimes/dsh/*` | `settings.json`, `models.json` pi; `opencode.json` opencode; `dsh/cordis.patch.yml` + `acp.patch.yml` + `web.patch.yml` dsh (провайдер = pat-service) |
 | `mcp-servers.yaml` + флаги `*_ENABLED` | MCP-конфигурация каждого рантайма ([MCP](../mcp/README.ru.md#агенты)) |
 
 Слой каталога принадлежит другому uid и доступен агенту только на чтение;
@@ -183,4 +218,5 @@ init-контейнер `catalog-sync` (образ `AGENT_CATALOG_IMAGE`,
 
 - Назад: [Тюнинг](../configuration/tuning.ru.md). Дальше: [Управление агентами](managing.ru.md)
 - [ADR 0009](../../adr/0009-cloud-hermes-fleet-per-user-profiles.md),
-  [ADR 0014](../../adr/0014-hermes-curated-catalog-and-worker-slots.md)
+  [ADR 0014](../../adr/0014-hermes-curated-catalog-and-worker-slots.md),
+  [ADR 0020](../../adr/0020-dsh-runtime-and-per-user-web-ui.md)

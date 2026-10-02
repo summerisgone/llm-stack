@@ -41,14 +41,14 @@ spec:
             # base_model_id.
             #
             # Index 2 is the user's personal agents behind agent-broker
-            # (docs/adr/0009, docs/operations/agents.md): Hermes, pi and
-            # opencode, one model each. system_oauth forwards the user's
+            # (docs/adr/0009, docs/operations/agents.md): Hermes, pi,
+            # opencode and dsh, one model each. system_oauth forwards the user's
             # Keycloak access token, which the broker verifies itself.
             # model_ids is declared because the broker answers /v1/models
             # only with a user token; an agent whose image is unset in the
-            # broker (PI_IMAGE / OPENCODE_IMAGE) answers 404.
+            # broker (PI_IMAGE / OPENCODE_IMAGE / DSH_IMAGE) answers 404.
             - name: OPENAI_API_CONFIGS
-              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent","pi-agent","opencode-agent"]}}'
+              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent","pi-agent","opencode-agent","dsh-agent"]}}'
             - name: OPENAI_API_BASE_URLS
               value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://agent-broker.agents.svc.cluster.local:8080/v1
             # Issued for https://ai.example.com specifically (not a shared service

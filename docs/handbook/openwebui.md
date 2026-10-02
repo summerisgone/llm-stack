@@ -69,7 +69,7 @@ connections by index:
 | --- | --- | --- | --- | --- |
 | `0` | `ai-gateway-private...:8080/v1` | `system_oauth` | `qwen-3.8-27b` (declared) | chat; the gateway has no model catalogue Open WebUI can discover |
 | `1` | `pat-service...:8080/v1` | `bearer` `OPENWEBUI_AUTOMATIONS_PAT` | discovered, prefix `automations` | Automations run with no browser session, so they need a static credential |
-| `2` | `agent-broker.agents...:8080/v1` | `system_oauth` | `hermes-agent`, `pi-agent`, `opencode-agent` (declared) | personal agents; the broker lists models only for a user token |
+| `2` | `agent-broker.agents...:8080/v1` | `system_oauth` | `hermes-agent`, `pi-agent`, `opencode-agent`, `dsh-agent` (declared) | personal agents; the broker lists models only for a user token |
 
 `ENABLE_PERSISTENT_CONFIG=false`: settings changed in the admin UI live only
 until the pod restarts. Anything that must persist is an env var in the

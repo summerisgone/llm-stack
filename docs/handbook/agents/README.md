@@ -2,7 +2,7 @@
 
 [Русский](README.ru.md) | [Handbook index](../README.md)
 
-Every user can have personal coding agents (Hermes, pi, opencode) that run in
+Every user can have personal coding agents (Hermes, pi, opencode, dsh) that run in
 their own sandboxed pod, keep a persistent profile, and use the model and MCP
 tools with the user's own credentials. Users talk to them as models in Open
 WebUI. `agent-broker` starts them on demand, keeps at most K running, and stops
@@ -15,6 +15,7 @@ idle ones. Operating and extending the fleet is on [managing agents](managing.md
 - [What runs in Kubernetes](#what-runs-in-kubernetes)
 - [agent-broker](#agent-broker)
 - [Runtimes](#runtimes)
+- [dsh web UI](#dsh-web-ui)
 - [Profiles and the catalog](#profiles-and-the-catalog)
 - [Tokens](#tokens)
 - [Isolation and gVisor](#isolation-and-gvisor)
@@ -25,16 +26,18 @@ idle ones. Operating and extending the fleet is on [managing agents](managing.md
 
 1. On `/platform`, press **Issue agent key** (once a week; the key lives 7
    days).
-2. In Open WebUI pick `Hermes agent (personal)`, `Pi agent (personal)` or
-   `OpenCode agent (personal)`.
+2. In Open WebUI pick `Hermes agent (personal)`, `Pi agent (personal)`,
+   `OpenCode agent (personal)` or `DeepSeek agent (personal)`.
 3. The first message creates the profile and is answered by the broker with
    an onboarding text. The next message starts the agent pod; replies stream
    back like any model.
 4. `/skills` in the chat lists the skill catalog; `/skills on|off <name>`
    and `/skills reset` change the selection, applied at the agent's next
    start.
-5. For pi and opencode each Open WebUI chat is its own agent session, kept
-   on the profile across restarts; Hermes manages its sessions itself.
+5. For pi, opencode and dsh each Open WebUI chat is its own agent session,
+   kept on the profile across restarts; Hermes manages its sessions itself.
+6. The dsh agent also has its own browser UI on the dsh host
+   ([dsh web UI](#dsh-web-ui)): same login, same profile.
 
 ## Architecture
 
@@ -44,7 +47,7 @@ Open WebUI (connection 2, user's Keycloak token, X-OpenWebUI-Chat-Id)
      acquire a slot (start pod / reuse / evict LRU idle / queue), proxy the chat
   -> pod <runtime>-agent-<id> :8642 OpenAI chat-completions, bearer API_SERVER_KEY
        init catalog-sync: render the profile for this runtime
-       agent: Hermes natively, or agent-adapter + pi / opencode
+       agent: Hermes natively, or agent-adapter + pi / opencode / dsh
   -> pat-service /v1 (model) and /mcp/<name>/ (tools), with the user's agent PAT
 ```
 
@@ -80,8 +83,8 @@ A small Go service (`agent-broker/cmd/agent-broker`) with no database: state
 is rebuilt from the cluster at start.
 
 - **API:** `GET /v1/models` (the runtimes whose image is set) and
-  `POST /v1/chat/completions` (model `hermes-agent`, `pi-agent` or
-  `opencode-agent`), both requiring a Keycloak token with `ai-user` or
+  `POST /v1/chat/completions` (model `hermes-agent`, `pi-agent`,
+  `opencode-agent` or `dsh-agent`), both requiring a Keycloak token with `ai-user` or
   `ai-admin`; `GET /healthz` returns `{"k", "running", "busy", "queued"}`.
 - **Slots:** at most `AGENT_SLOTS` (3) agents run at once, shared by all users
   and runtimes. A new start takes a free slot, or evicts the least recently
@@ -104,8 +107,9 @@ is rebuilt from the cluster at start.
 | Hermes | `hermes-agent` | `HERMES_IMAGE` (upstream) | `hermes gateway run`, OpenAI API server on `:8642` |
 | pi | `pi-agent` | `PI_IMAGE` (`agent-adapter`, target `pi`) | agent-adapter on `:8642`, pi SDK in-process, `pi-mcp-adapter` extension for MCP |
 | opencode | `opencode-agent` | `OPENCODE_IMAGE` (`agent-adapter`, target `opencode`) | agent-adapter on `:8642`, `opencode serve` on loopback driven over its HTTP API |
+| dsh (DeepSeek Harness) | `dsh-agent` | `DSH_IMAGE` (`agent-adapter`, target `dsh`) | agent-adapter on `:8642` driving `dsh --profile acp` over stdio; `dsh web` on `:3080` for the [web UI](#dsh-web-ui) |
 
-pi and opencode have no OpenAI-compatible server, so `agent-adapter`
+pi, opencode and dsh have no OpenAI-compatible server, so `agent-adapter`
 (Node, `agent-adapter/`) provides the broker's contract: OpenAI chat
 completions on `:8642` with SSE streaming (including reasoning), `/health`,
 bearer `API_SERVER_KEY`. It sends only the latest user message to the agent;
@@ -117,6 +121,35 @@ per-user rate limit and appear in Langfuse and the QoS dashboards as that
 user. No runtime has egress anywhere else: update checks, telemetry, model
 catalogs, plugin installs and built-in web tools are switched off.
 
+## dsh web UI
+
+The dsh agent pod also runs `dsh web`, the DeepSeek Harness browser UI, for
+that user only ([ADR 0020](../../adr/0020-dsh-runtime-and-per-user-web-ui.md)).
+It is reached on its own host, `DSH_PUBLIC_ORIGIN` (dsh serves only from `/`,
+so it cannot live under a path of the main origin).
+
+```
+browser -> site proxy (TLS) -> edge Envoy: HTTPRoute dsh-web (host match)
+  SecurityPolicy dsh-web: OIDC with Keycloak client dsh-web, access token forwarded
+  -> agent-broker :8081 web proxy: verify token and role, start the user's
+     dsh-agent pod through the slots if needed, proxy HTTP + WebSocket
+  -> pod dsh-agent-<id> :3080 dsh web (same DSH_HOME and workspace as the chats)
+```
+
+- **Login.** Keycloak SSO only. dsh's own launch-token cookie is obtained by
+  the broker behind the scenes (it fetches the token from agent-adapter and
+  redeems it); the user never sees a token.
+- **Isolation.** The broker picks the pod from the token's subject, never
+  from a cookie; each user sees only their own sessions and files.
+- **Workspace.** `/opt/data/home/workspace` on the profile PVC: files survive
+  idle eviction. Model and MCP settings are locked by the catalog.
+- **Slots.** Page and API requests count as activity; an open tab alone does
+  not keep the agent. After eviction the next click starts it again (cold
+  start of up to a few minutes).
+- **Setup.** `DSH_PUBLIC_ORIGIN` and `DSH_OIDC_CLIENT_SECRET` in `.env`, a
+  site-proxy rule for that host to the edge listener (like repowise), then
+  `make agents-up helm-up` (`helm-up` runs `provision-dsh-oidc`).
+
 ## Profiles and the catalog
 
 Each profile PVC holds the agent's home. At every start the init container
@@ -127,9 +160,9 @@ renders it from the catalog baked into that image
 | Source | Becomes |
 | --- | --- |
 | `skills/` + `catalog.yaml` (required, default on or off) + the user's `/skills` selection | `catalog/` and `catalog-enabled/` skill directories |
-| `SOUL.md` + the user's `SOUL.user.md` | the agent's instructions (`SOUL.md`, `AGENTS.md` for pi and opencode) |
+| `SOUL.md` + the user's `SOUL.user.md` | the agent's instructions (`SOUL.md`, `AGENTS.md` for pi, opencode and dsh) |
 | `config.yaml` + `locked-keys.yaml` + the user's `config.user.yaml` | Hermes `config.yaml`; locked keys always win |
-| `runtimes/pi/*`, `runtimes/opencode/opencode.json` | pi `settings.json`, `models.json`; opencode `opencode.json` (provider = pat-service) |
+| `runtimes/pi/*`, `runtimes/opencode/opencode.json`, `runtimes/dsh/*` | pi `settings.json`, `models.json`; opencode `opencode.json`; dsh `dsh/cordis.patch.yml` + `acp.patch.yml` + `web.patch.yml` (provider = pat-service) |
 | `mcp-servers.yaml` + the `*_ENABLED` flags | each runtime's MCP config ([MCP](../mcp/README.md#agents)) |
 
 The catalog layer is owned by another uid and is read-only to the agent; the
@@ -180,4 +213,5 @@ annotation `agents.llm-stack/sync-report`.
 
 - Previous: [Tuning](../configuration/tuning.md). Next: [Managing agents](managing.md)
 - [ADR 0009](../../adr/0009-cloud-hermes-fleet-per-user-profiles.md),
-  [ADR 0014](../../adr/0014-hermes-curated-catalog-and-worker-slots.md)
+  [ADR 0014](../../adr/0014-hermes-curated-catalog-and-worker-slots.md),
+  [ADR 0020](../../adr/0020-dsh-runtime-and-per-user-web-ui.md)

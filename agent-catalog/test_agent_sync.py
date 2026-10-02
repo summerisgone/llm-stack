@@ -7,8 +7,16 @@ import sys
 import tempfile
 import unittest
 
+import yaml
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_sync  # noqa: E402
+
+class JsLoader(yaml.SafeLoader):
+    """Reads Cordis `!!js` expressions as plain strings."""
+
+
+JsLoader.add_constructor("tag:yaml.org,2002:js", lambda loader, node: loader.construct_scalar(node))
 
 PROFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "..", "config", "agents", "base-profile")
@@ -163,6 +171,26 @@ class SyncTest(unittest.TestCase):
             self.assertIn("pat-service", fh.read())
         self.assertTrue(os.path.exists(os.path.join(agent_dir, "AGENTS.md")))
         self.assertFalse(os.path.exists(os.path.join(self.home, "config.yaml")))
+
+    def test_dsh_config_gets_skills_and_mcp(self):
+        os.environ["AGENT_RUNTIME"] = "dsh"
+        os.environ["WEB_SEARCH_ENABLED"] = "true"
+        self.run_sync()
+        dsh_home = os.path.join(self.home, "dsh")
+        with open(os.path.join(dsh_home, "cordis.patch.yml")) as fh:
+            text = fh.read()
+        rows = yaml.load(text, Loader=JsLoader)
+        by_id = {r["id"]: r for r in rows if "id" in r}
+        self.assertEqual(by_id["llm-pi-ai"]["config"]["providers"]["pat"]["apiKeyEnv"], "AGENT_INFERENCE_KEY")
+        self.assertEqual(by_id["skill-filesystem"]["config"]["customSkillDirs"],
+                         [os.path.join(self.home, "catalog-enabled")])
+        inserted = [r for row in rows for r in row.get("insert", [])]
+        self.assertEqual([r["id"] for r in inserted], ["mcp-web-search"])
+        self.assertEqual(inserted[0]["config"]["url"],
+                         "http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/web-search/")
+        self.assertIn("process.env.AGENT_INFERENCE_KEY", inserted[0]["config"]["headers"]["Authorization"])
+        for name in ("acp.patch.yml", "web.patch.yml", "AGENTS.md"):
+            self.assertTrue(os.path.exists(os.path.join(dsh_home, name)))
 
     def test_opencode_config_gets_skills_and_mcp(self):
         os.environ["AGENT_RUNTIME"] = "opencode"

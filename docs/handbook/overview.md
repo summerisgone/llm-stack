@@ -37,7 +37,7 @@ engine, traced in Langfuse and measured in Prometheus/Grafana.
 | llm-d EPP | queue, priority bands, per-user fairness, endpoint scoring | [Queues and fair share](inference/queues-and-fair-share.md) |
 | vLLM / SGLang / ninfer | the model engine; exactly one owns the GPU | [Engines](engines/README.md) |
 | bge-m3 embeddings | `/v1/embeddings`, CPU or GPU-loan mode | [Engines](engines/README.md) |
-| agent-broker + agent pods | per-user Hermes, pi and opencode agents under gVisor | [Agents](agents/README.md) |
+| agent-broker + agent pods | per-user Hermes, pi, opencode and dsh agents under gVisor | [Agents](agents/README.md) |
 | web-search, repowise | MCP servers behind pat-service | [MCP](mcp/README.md) |
 | OTEL Collector, Langfuse | traces with prompts, answers, user and session | [Langfuse](observability/langfuse.md) |
 | Prometheus, Grafana | metrics and dashboards | [Observability](observability/README.md) |
@@ -85,8 +85,9 @@ flowchart TD
 - **API.** `/v1` accepts only `sk-...` PATs. pat-service resolves the owner,
   derives a session key and a band, and calls the gateway with its own
   service-account JWT plus the identity headers.
-- **Agents.** Open WebUI lists `hermes-agent`, `pi-agent` and
-  `opencode-agent` from a third connection to `agent-broker`. The broker
+- **Agents.** Open WebUI lists `hermes-agent`, `pi-agent`,
+  `opencode-agent` and `dsh-agent` from a third connection to
+  `agent-broker`; the dsh agent also has its own web UI on the dsh host. The broker
   starts the user's agent pod on demand; the agent calls the model and the
   MCP servers through pat-service with the user's own agent PAT.
 

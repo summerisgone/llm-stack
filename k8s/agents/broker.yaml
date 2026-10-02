@@ -18,6 +18,9 @@ data:
   AGENT_CPU_LIMIT: "1"
   AGENT_MEMORY_REQUEST: 384Mi
   AGENT_MEMORY_LIMIT: 1Gi
+  # dsh runs two Node processes (ACP for chats, the web UI); quota.yaml
+  # counts K x this.
+  DSH_MEMORY_LIMIT: 2Gi
   AGENT_WORK_SIZE: 2Gi
   PROFILE_SIZE: 2Gi
   # Empty = cluster default runc. Set to a gVisor RuntimeClass (e.g. gvisor)
@@ -97,6 +100,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            # The per-user dsh web UI proxy (docs/adr/0020); listens only
+            # when agent-images sets DSH_IMAGE and DSH_PUBLIC_ORIGIN.
+            - name: web
+              containerPort: 8081
           readinessProbe:
             httpGet:
               path: /healthz
@@ -135,3 +142,6 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+    - name: web
+      port: 8081
+      targetPort: web

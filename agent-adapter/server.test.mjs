@@ -79,3 +79,14 @@ test('backend error ends the stream with a message', async () => {
   assert.equal(res.status, 502)
   server.close()
 })
+
+test('web token only for a backend that has one', async () => {
+  const get = (server, headers) => fetch(`http://127.0.0.1:${server.address().port}/web-token`, { headers })
+  const server = await listen({ webToken: () => 't1' })
+  assert.equal((await get(server, { Authorization: 'Bearer nope' })).status, 401)
+  assert.deepEqual(await (await get(server, { Authorization: 'Bearer k' })).json(), { token: 't1' })
+  server.close()
+  const none = await listen({})
+  assert.equal((await get(none, { Authorization: 'Bearer k' })).status, 404)
+  none.close()
+})

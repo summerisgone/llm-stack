@@ -17,7 +17,7 @@ import (
 //   - an OpenAI-compatible chat completions server on AgentPort,
 //     bearer-authenticated with the per-user key the backend holds, `GET
 //     /health` for readiness: Hermes' own `gateway run`, or agent-adapter in
-//     front of pi / opencode;
+//     front of pi / opencode / dsh;
 //   - the profile is the user's per-runtime home; agent-sync from the
 //     pinned catalog image has run against it before the agent starts;
 //   - at most one running copy per profile.
@@ -45,7 +45,7 @@ const AgentPort = 8642
 // Runtime is one agent kind Open WebUI lists as a model. Each user gets a
 // separate agent and profile per runtime; slots are shared.
 type Runtime struct {
-	Name        string // hermes | pi | opencode: object names and sync mode
+	Name        string // hermes | pi | opencode | dsh: object names and sync mode
 	ModelID     string
 	Title       string
 	Description string

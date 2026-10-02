@@ -1,0 +1,71 @@
+{{- if .Values.dshWeb.publicOrigin }}
+{{- $origin := trimSuffix "/" .Values.dshWeb.publicOrigin }}
+# docs/adr/0020. The per-user DeepSeek Harness web UI on its own host (dsh
+# serves only from /: its cookies are Path=/ and bound to host:port), a
+# second host-matched exception to ADR 0001 after repowise (ADR 0018).
+# edge-test-external has no hostnames, so this host is served by this route
+# only. OIDC at the edge; the access token is forwarded to agent-broker's web
+# proxy, which checks the role and routes by the token's subject to that
+# user's dsh agent pod.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsh-web
+  namespace: {{ .Values.namespace }}
+spec:
+  parentRefs:
+    - name: edge
+      sectionName: external
+  hostnames:
+    - {{ regexReplaceAll ":[0-9]+$" (urlParse $origin).host "" | quote }}
+  rules:
+    - name: ui
+      # No route timeout: a cold start (slot + pod start) takes minutes and
+      # the UI keeps a WebSocket open.
+      timeouts:
+        request: 0s
+      backendRefs:
+        # ReferenceGrant dsh-web-from-airgap-edge (k8s/agents).
+        - name: agent-broker
+          namespace: agents
+          port: 8081
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dsh-web-oidc
+  namespace: {{ .Values.namespace }}
+type: Opaque
+stringData:
+  client-secret: {{ required "DSH_OIDC_CLIENT_SECRET in .env" .Values.runtimeEnvironment.DSH_OIDC_CLIENT_SECRET | quote }}
+---
+# Confidential client {{ .Values.dshWeb.clientID }} (make provision-dsh-oidc).
+# The role check (ai-user / ai-admin) is the broker's, on the forwarded token.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: dsh-web
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: dsh-web
+  oidc:
+    provider:
+      issuer: {{ .Values.oidc.externalIssuer | quote }}
+      authorizationEndpoint: {{ printf "%s/protocol/openid-connect/auth" .Values.oidc.externalIssuer | quote }}
+      tokenEndpoint: {{ printf "%s/protocol/openid-connect/token" .Values.oidc.internalIssuer | quote }}
+      endSessionEndpoint: {{ printf "%s/protocol/openid-connect/logout" .Values.oidc.externalIssuer | quote }}
+    clientID: {{ .Values.dshWeb.clientID | quote }}
+    clientSecret:
+      name: dsh-web-oidc
+    redirectURL: {{ printf "%s/oauth2/callback" $origin | quote }}
+    logoutPath: /oauth2/logout
+    forwardAccessToken: true
+    refreshToken: true
+    cookieNames:
+      accessToken: dsh-web-access-token
+      idToken: dsh-web-id-token
+    scopes: [openid, profile, roles]
+{{- end }}

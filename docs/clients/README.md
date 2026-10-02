@@ -31,7 +31,9 @@ operator which is live before switching a client over.
 Browser users do not need a token: Open WebUI at `https://<public-origin>/`
 signs in through Keycloak and uses the signed-in user's own credentials.
 
-Hermes, pi and OpenCode also run as per-user cloud agents, chosen as models
-in Open WebUI (`hermes-agent`, `pi-agent`, `opencode-agent`); see
+Hermes, pi, OpenCode and DeepSeek Harness (dsh) also run as per-user cloud
+agents, chosen as models in Open WebUI (`hermes-agent`, `pi-agent`,
+`opencode-agent`, `dsh-agent`); dsh also has a per-user web UI on its own
+host; see
 [operations/agents.md](../operations/agents.md). Per-client onboarding notes
 for running them locally (and KiloCode) belong here as they are validated.

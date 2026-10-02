@@ -2,7 +2,8 @@
 // agent-broker/backend.go) in front of agents without an OpenAI-compatible
 // server of their own: POST /v1/chat/completions (bearer API_SERVER_KEY) and
 // GET /health on AGENT_PORT. AGENT_RUNTIME picks the backend (pi.mjs,
-// opencode.mjs). Open WebUI resends the whole conversation on every turn;
+// opencode.mjs, dsh.mjs). GET /web-token hands dsh web's launch token to the
+// broker's web proxy. Open WebUI resends the whole conversation on every turn;
 // the agent keeps its own session instead, one per Open WebUI chat
 // (X-OpenWebUI-Chat-Id, forwarded by the broker), and only the last user
 // message is sent to it.
@@ -58,7 +59,7 @@ async function readJSON(req) {
 }
 
 // createServer serves the contract for backend: { prompt(key, text,
-// { onText, onReasoning, signal }) -> Promise<final text> }. ready() gates
+// { onText, onReasoning, signal }) -> Promise<final text>, webToken?() }. ready() gates
 // /health and requests while the backend starts.
 export function createServer({ backend, apiKey, model, ready = () => true }) {
   // One turn at a time per session; a second message waits for the first.
@@ -83,6 +84,10 @@ export function createServer({ backend, apiKey, model, ready = () => true }) {
     }
     if (req.method === 'GET' && path === '/v1/models') {
       return sendJSON(res, 200, { object: 'list', data: [{ id: model, object: 'model', owned_by: 'agent-adapter' }] })
+    }
+    if (req.method === 'GET' && path === '/web-token') {
+      const token = backend.webToken?.()
+      return token ? sendJSON(res, 200, { token }) : openAIError(res, 404, 'not_found', 'no web UI token')
     }
     if (req.method !== 'POST' || path !== '/v1/chat/completions') {
       return openAIError(res, 404, 'not_found', 'not found')
@@ -153,8 +158,8 @@ async function main() {
   const runtime = process.env.AGENT_RUNTIME
   const home = process.env.AGENT_HOME || '/opt/data/home'
   const apiKey = process.env.API_SERVER_KEY
-  if (!apiKey || !['pi', 'opencode'].includes(runtime)) {
-    console.error('API_SERVER_KEY and AGENT_RUNTIME=pi|opencode are required')
+  if (!apiKey || !['pi', 'opencode', 'dsh'].includes(runtime)) {
+    console.error('API_SERVER_KEY and AGENT_RUNTIME=pi|opencode|dsh are required')
     process.exit(1)
   }
   let backend = null
@@ -162,10 +167,10 @@ async function main() {
     apiKey,
     model: process.env.AGENT_MODEL_NAME || `${runtime}-agent`,
     ready: () => backend !== null,
-    backend: { prompt: (...args) => backend.prompt(...args) },
+    backend: { prompt: (...args) => backend.prompt(...args), webToken: () => backend?.webToken?.() },
   })
   server.listen(Number(process.env.AGENT_PORT || 8642), '0.0.0.0')
-  const mod = await import(runtime === 'pi' ? './pi.mjs' : './opencode.mjs')
+  const mod = await import(`./${runtime}.mjs`)
   backend = await mod.start({ home, cwd: process.env.AGENT_CWD || '/work' })
   console.log(JSON.stringify({ msg: 'agent-adapter ready', runtime }))
   const stop = async () => {

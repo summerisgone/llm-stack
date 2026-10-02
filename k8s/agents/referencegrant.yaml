@@ -1,0 +1,16 @@
+# The dsh web route (helm/airgap-stack templates/dsh-web.yaml) lives with the
+# edge Gateway in airgap-ai-stack, whose listener admits only same-namespace
+# routes; its backend is the broker's web proxy here (docs/adr/0020).
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: dsh-web-from-airgap-edge
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: airgap-ai-stack
+  to:
+    - group: ""
+      kind: Service
+      name: agent-broker

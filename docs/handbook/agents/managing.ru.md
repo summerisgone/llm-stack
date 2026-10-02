@@ -136,7 +136,7 @@ scripts/agent-profile-delete <keycloak-sub|id>
    на `:8642`, `GET /health`, bearer `API_SERVER_KEY`, всё состояние под
    `AGENT_HOME` на PVC, uid 10000, работа с корневой ФС только на чтение,
    никакого выхода наружу, кроме pat-service. Если у агента такого сервера
-   нет, добавьте бэкенд в `agent-adapter/` (см. `pi.mjs`, `opencode.mjs`) и
+   нет, добавьте бэкенд в `agent-adapter/` (см. `pi.mjs`, `opencode.mjs`, `dsh.mjs`) и
    target в Dockerfile.
 2. **Регистрацию в брокере:** запись `Runtime` в
    `agent-broker/cmd/agent-broker/main.go` (имя, id модели, заголовок,

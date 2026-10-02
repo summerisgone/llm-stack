@@ -154,6 +154,13 @@ oidc:
   internalIssuer: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/sso/realms/ai-stack
   internalAIGatewayURL: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080
 
+# --- DeepSeek Harness web UI (docs/adr/0020) --------------------------------
+# helm-up sets publicOrigin from .env DSH_PUBLIC_ORIGIN; empty = no route.
+# templates/dsh-web.yaml: host route + edge OIDC to agent-broker's web proxy.
+dshWeb:
+  publicOrigin: ""
+  clientID: dsh-web
+
 # --- Open WebUI MCP tool servers ----------------------------------------------
 # Rendered into the ConfigMap openwebui-tool-servers (templates/
 # openwebui-tool-servers.yaml), one entry per server whose flag is "true" in

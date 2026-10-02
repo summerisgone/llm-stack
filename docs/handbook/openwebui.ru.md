@@ -70,7 +70,7 @@ workspace-модели, knowledge, промпты, инструменты и н�
 | --- | --- | --- | --- | --- |
 | `0` | `ai-gateway-private...:8080/v1` | `system_oauth` | `qwen-3.8-27b` (задана явно) | чат; каталога моделей, который Open WebUI мог бы обнаружить, у шлюза нет |
 | `1` | `pat-service...:8080/v1` | `bearer` `OPENWEBUI_AUTOMATIONS_PAT` | обнаруживаются, префикс `automations` | Automations работают без браузерной сессии, им нужны статические учётные данные |
-| `2` | `agent-broker.agents...:8080/v1` | `system_oauth` | `hermes-agent`, `pi-agent`, `opencode-agent` (заданы явно) | персональные агенты; брокер отдаёт список моделей только по токену пользователя |
+| `2` | `agent-broker.agents...:8080/v1` | `system_oauth` | `hermes-agent`, `pi-agent`, `opencode-agent`, `dsh-agent` (заданы явно) | персональные агенты; брокер отдаёт список моделей только по токену пользователя |
 
 `ENABLE_PERSISTENT_CONFIG=false`: настройки, изменённые в админке, живут
 только до перезапуска пода. Всё, что должно сохраняться, - переменные
