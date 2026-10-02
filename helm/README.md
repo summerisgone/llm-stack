@@ -46,13 +46,10 @@ what runs; the chart is authoritative. See
 
 The same shape for SGLang, serving the same NVFP4 checkpoint from the same
 read-only model PVC: `make sglang-up` / `make sglang-down`. It is **not**
-part of `make stack-up`, because this host has one GPU and both charts
-request `nvidia.com/gpu: 1` — bring vLLM down first or the SGLang pod stays
-`Pending`.
-
-It reads its upstream API key from the `sglang-api-key` Secret, which the
-`airgap-stack` release creates when `SGLANG_API_KEY` is set in `.env`. Run
-`make helm-up` with that key set before `make sglang-up`.
+started by `make engines-up` when `SGLANG_REPLICAS` is above 0. With one GPU,
+set `VLLM_REPLICAS=0` first or the SGLang pod stays `Pending`. It runs
+without an API key; the NetworkPolicy `inference-pool-members` admits only
+EPP and Prometheus.
 
 Neither engine chart is covered by `make verify`. Run `helm template` against
 them by hand after a change, and validate on a GPU.

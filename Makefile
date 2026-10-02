@@ -9,28 +9,18 @@ include versions.lock.env
 # Local/site-specific overrides (gitignored). Not required to exist.
 -include .env
 
-# The live LLM engine behind the canonical model name: vllm, sglang or ninfer
-# (one GPU, one engine). Set it in .env; `make engine-up` switches to it, and
-# helm-up/llmd-up derive the route and EPP settings from it, so the committed
-# values never encode the live engine. docs/handbook/engines/README.md.
-INFERENCE_ENGINE ?= vllm
-ENGINES = vllm sglang ninfer
+# Engine capacity is replicas per engine (ADR 0019). vLLM and SGLang pods are
+# members of the qwen-3.8-27b pool behind EPP; ninfer is its own model name
+# (qwen-3.8-27b-ninfer). Set the counts in .env; `make engines-up` applies
+# them. One GPU here: keep the total at 1. docs/handbook/engines/README.md.
+VLLM_REPLICAS ?= 1
+SGLANG_REPLICAS ?= 0
+NINFER_REPLICAS ?= 0
 ENGINE_DEPLOYMENT_vllm = vllm-qwen38-nvfp4
 ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
-ENGINE_DEPLOYMENT = $(ENGINE_DEPLOYMENT_$(INFERENCE_ENGINE))
-# EPP dispatches to vLLM or SGLang. ninfer cannot join EPP (ADR 0015): its
-# route bypasses EPP, which keeps the vLLM selector and an empty pool.
-EPP_ENGINE = $(if $(filter sglang,$(INFERENCE_ENGINE)),sglang,vllm)
-EPP_PORT_vllm = 8000
-EPP_PORT_sglang = 30000
-LLMD_ENGINE_SETS = --set router.modelServers.type=$(EPP_ENGINE) \
-	--set 'router.modelServers.targetPorts[0].number=$(EPP_PORT_$(EPP_ENGINE))' \
-	--set 'router.modelServers.matchLabels.app\.kubernetes\.io/name=$(ENGINE_DEPLOYMENT_$(EPP_ENGINE))'
-HELM_ENGINE_SETS = --set inference.sglang.enabled=$(if $(filter sglang,$(INFERENCE_ENGINE)),true,false) \
-	--set inference.ninfer.live=$(if $(filter ninfer,$(INFERENCE_ENGINE)),true,false)
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engine-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -225,6 +215,7 @@ vllm-up:
 	$(HELM) upgrade --install $(VLLM_RELEASE) $(VLLM_CHART) \
 		--namespace $(K8S_NAMESPACE) \
 		--values $(VLLM_CHART)/values.yaml \
+		--set replicas=$(VLLM_REPLICAS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \
 		--wait --timeout 15m
@@ -233,8 +224,7 @@ vllm-down:
 	$(HELM) uninstall $(VLLM_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
 
 # SGLang inference deployment. Edit helm/sglang-inference/values.yaml, then
-# run `make sglang-up` to apply. Requires the model PVC from gpu-objects-up
-# and the sglang-api-key Secret from helm-up (SGLANG_API_KEY in .env).
+# run `make sglang-up` to apply. Requires the model PVC from gpu-objects-up.
 SGLANG_CHART = helm/sglang-inference
 SGLANG_RELEASE = sglang-inference
 
@@ -242,6 +232,7 @@ sglang-up:
 	$(HELM) upgrade --install $(SGLANG_RELEASE) $(SGLANG_CHART) \
 		--namespace $(K8S_NAMESPACE) \
 		--values $(SGLANG_CHART)/values.yaml \
+		--set replicas=$(SGLANG_REPLICAS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \
 		--wait --timeout 15m
@@ -262,6 +253,7 @@ ninfer-up:
 	$(HELM) upgrade --install $(NINFER_RELEASE) $(NINFER_CHART) \
 		--namespace $(K8S_NAMESPACE) \
 		--values $(NINFER_CHART)/values.yaml \
+		--set replicas=$(NINFER_REPLICAS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \
 		--wait --timeout 15m
@@ -373,7 +365,7 @@ web-search-mcp-test:
 	cd web-search-mcp && go vet ./... && go test ./...
 
 llmd-up:
-	$(HELM) upgrade --install llmd-qwen-test oci://ghcr.io/llm-d/charts/llm-d-router-standalone@$(LLMD_ROUTER_STANDALONE_CHART_DIGEST) --namespace $(K8S_NAMESPACE) --create-namespace --values config/llmd/router-nvfp4-values.yaml $(LLMD_ENGINE_SETS) --wait
+	$(HELM) upgrade --install llmd-qwen-test oci://ghcr.io/llm-d/charts/llm-d-router-standalone@$(LLMD_ROUTER_STANDALONE_CHART_DIGEST) --namespace $(K8S_NAMESPACE) --create-namespace --values config/llmd/router-nvfp4-values.yaml --wait
 	$(KUBECTL) -n $(K8S_NAMESPACE) rollout status deployment/llmd-qwen-test-epp --timeout=5m
 
 llmd-down:
@@ -385,7 +377,8 @@ llmd-down:
 stack-up: gateway-up operators-up
 	$(KUBECTL) apply -f $(KUSTOMIZE_DIR)/base/namespace.yaml
 	$(MAKE) gpu-objects-up
-	$(MAKE) engine-up
+	$(MAKE) helm-up
+	$(MAKE) engines-up
 ifeq ($(WEB_SEARCH_ENABLED),true)
 	$(MAKE) websearch-up
 endif
@@ -401,34 +394,36 @@ endif
 	$(MAKE) provision-realm-security
 	$(MAKE) provision-openwebui-offline-access
 
-# Switch the live engine to INFERENCE_ENGINE, in the order the one GPU
-# allows: GPU embeddings and the other engines stop first; helm-up routes the
-# model name and creates the engine's API key Secret before the engine
-# starts; llmd-up points EPP at it; GPU embeddings start last (ADR 0013
-# start order). The model name clients send never changes.
-engine-up:
-	@case " $(ENGINES) " in *" $(INFERENCE_ENGINE) "*) ;; *) echo "engine-up: INFERENCE_ENGINE must be one of: $(ENGINES)" >&2; exit 1;; esac
+# Apply VLLM_REPLICAS, SGLANG_REPLICAS and NINFER_REPLICAS in the order a
+# shared GPU allows: GPU embeddings and the engines going to 0 stop first,
+# then the others start, then EPP, then GPU embeddings (ADR 0013 start
+# order). Changing which engine serves is a replica change (ADR 0019).
+engine_replicas = $(if $(filter vllm,$(1)),$(VLLM_REPLICAS),$(if $(filter sglang,$(1)),$(SGLANG_REPLICAS),$(NINFER_REPLICAS)))
+engines-up:
 	@accel=$$(awk '/^accelerator:/{print $$2; exit}' $(EMBEDDINGS_CHART)/values.yaml); \
 	if [ "$$accel" = gpu ] && $(KUBECTL) -n $(K8S_NAMESPACE) get deployment/embeddings-bge-m3 >/dev/null 2>&1; then \
 		$(KUBECTL) -n $(K8S_NAMESPACE) scale deployment/embeddings-bge-m3 --replicas=0; \
 	fi
-	@for e in $(ENGINES); do \
-		[ "$$e" = "$(INFERENCE_ENGINE)" ] && continue; \
-		case $$e in vllm) d=$(ENGINE_DEPLOYMENT_vllm);; sglang) d=$(ENGINE_DEPLOYMENT_sglang);; ninfer) d=$(ENGINE_DEPLOYMENT_ninfer);; esac; \
-		if $(KUBECTL) -n $(K8S_NAMESPACE) get deployment/$$d >/dev/null 2>&1; then \
-			$(KUBECTL) -n $(K8S_NAMESPACE) scale deployment/$$d --replicas=0; \
-			$(KUBECTL) -n $(K8S_NAMESPACE) wait --for=delete pod -l app.kubernetes.io/name=$$d --timeout=5m; \
-		fi; \
-	done
-	$(MAKE) helm-up
-	$(MAKE) $(INFERENCE_ENGINE)-up
-	$(KUBECTL) -n $(K8S_NAMESPACE) scale deployment/$(ENGINE_DEPLOYMENT) --replicas=1
-	$(KUBECTL) -n $(K8S_NAMESPACE) rollout status deployment/$(ENGINE_DEPLOYMENT) --timeout=20m
+	@if [ "$(call engine_replicas,vllm)" = 0 ]; then \
+		$(MAKE) vllm-up && \
+		$(KUBECTL) -n $(K8S_NAMESPACE) wait --for=delete pod -l app.kubernetes.io/name=$(ENGINE_DEPLOYMENT_vllm) --timeout=5m; \
+	fi
+	@if [ "$(call engine_replicas,sglang)" = 0 ]; then \
+		$(MAKE) sglang-up && \
+		$(KUBECTL) -n $(K8S_NAMESPACE) wait --for=delete pod -l app.kubernetes.io/name=$(ENGINE_DEPLOYMENT_sglang) --timeout=5m; \
+	fi
+	@if [ "$(call engine_replicas,ninfer)" = 0 ]; then \
+		$(MAKE) ninfer-up && \
+		$(KUBECTL) -n $(K8S_NAMESPACE) wait --for=delete pod -l app.kubernetes.io/name=$(ENGINE_DEPLOYMENT_ninfer) --timeout=5m; \
+	fi
+	@if [ "$(call engine_replicas,vllm)" != 0 ]; then $(MAKE) vllm-up; fi
+	@if [ "$(call engine_replicas,sglang)" != 0 ]; then $(MAKE) sglang-up; fi
+	@if [ "$(call engine_replicas,ninfer)" != 0 ]; then $(MAKE) ninfer-up; fi
 	$(MAKE) llmd-up
 	$(MAKE) embeddings-up
 	$(KUBECTL) -n $(K8S_NAMESPACE) scale deployment/embeddings-bge-m3 --replicas=1
 	$(KUBECTL) -n $(K8S_NAMESPACE) rollout status deployment/embeddings-bge-m3 --timeout=10m
-	@printf 'Live engine: %s\n' '$(INFERENCE_ENGINE)'
+	@printf 'Engine replicas: vllm=%s sglang=%s ninfer=%s\n' '$(VLLM_REPLICAS)' '$(SGLANG_REPLICAS)' '$(NINFER_REPLICAS)'
 
 # Compatibility aliases for the previous target names.
 nvfp4-up: stack-up
@@ -480,7 +475,6 @@ helm-up: helm-render helm-env-values
 		--values $(HELM_VALUES) \
 		--values $(HELM_RUNTIME_VALUES) \
 		$(HELM_ORIGIN_SETS) \
-		$(HELM_ENGINE_SETS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \
 		--wait --timeout 10m --debug
@@ -495,7 +489,6 @@ helm-diff: helm-render helm-env-values
 		--values $(HELM_VALUES) \
 		--values $(HELM_RUNTIME_VALUES) \
 		$(HELM_ORIGIN_SETS) \
-		$(HELM_ENGINE_SETS) \
 		--dry-run
 
 helm-down:

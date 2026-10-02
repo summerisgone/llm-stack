@@ -8,8 +8,7 @@ and used as the fallback in `deploy/sglang-qwen38/run`.
 
 **This is the bring-up path, not the deployed one.** SGLang runs in the
 cluster as its own Helm release (`helm/sglang-inference`, `make sglang-up`),
-which is what `helm/airgap-stack/values.yaml` `inference.sglang.host` points
-at -- see
+whose pods join the `qwen-3.8-27b` pool behind EPP -- see
 [ADR 0007](../../docs/adr/0007-inference-engines-as-helm-releases.md). Use the
 scripts here to try flags on the host, benchmark outside Kubernetes, or run
 the engine on a machine with no cluster.
@@ -44,20 +43,10 @@ that file directly if it is already there.
 
 ## Wiring a host-run container into the AI Gateway
 
-The route already exists: `inference.sglang.enabled` is `true` and the model
-is selectable as `qwen38-nvfp4-sglang` through the same `/v1` route vLLM's
-`qwen38-nvfp4` uses. It points at the in-cluster Service. To serve it from
-this host container instead, repoint the host:
-
-```sh
-helm upgrade --install airgap-stack helm/airgap-stack \
-  --namespace airgap-ai-stack --values helm/airgap-stack/values.yaml \
-  --set inference.sglang.host=host.k3d.internal \
-  --set runtimeEnvironment.SGLANG_API_KEY="$(cat /home/llmstack/.config/sglang/api_key)"
-```
-
+A host-run container cannot join the `qwen-3.8-27b` pool: EPP selects pods
+by label (ADR 0019). To reach one through the gateway, expose it as an extra
+model name with the `externalApi` backend (`host: host.k3d.internal`, the
+container's port, and its key in `EXTERNAL_API_KEY`); see
+[adding an engine](../../docs/handbook/engines/adding-an-engine.md).
 `host.k3d.internal` is k3d's own DNS alias for the Docker bridge gateway on
-this host (`172.21.0.1` on the current cluster); nothing site-specific needs
-to be recorded because k3d provides that alias on every cluster it creates.
-Put the value in `values.yaml` rather than `--set` if the host container is
-how the site actually runs SGLang.
+this host; k3d provides it on every cluster it creates.

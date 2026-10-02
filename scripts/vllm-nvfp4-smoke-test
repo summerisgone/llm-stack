@@ -10,14 +10,14 @@ pod=$(kubectl -n "$namespace" get pod -l "app.kubernetes.io/name=$service" \
   -o jsonpath='{.items[0].metadata.name}')
 test -n "$pod"
 
-# Send traffic through the ClusterIP/DNS name from the GPU pod.  This checks
-# the in-cluster service path without a local port-forward or an extra image.
+# Send traffic over localhost from inside the GPU pod: the pool's
+# NetworkPolicy admits only EPP and Prometheus to the Service (ADR 0019). The
+# in-cluster path is covered by llmd-nvfp4-smoke-test through EPP.
 kubectl -n "$namespace" exec "$pod" -- python3 -c '
 import json
 from urllib.request import Request, urlopen
 
-service = "'"$service"'.'"$namespace"'.svc.cluster.local"
-base = "http://" + service + ":8000"
+base = "http://127.0.0.1:8000"
 assert urlopen(base + "/health", timeout=20).status == 200
 models = json.loads(urlopen(base + "/v1/models", timeout=20).read())
 assert any(item["id"] == "qwen-3.8-27b" for item in models["data"])

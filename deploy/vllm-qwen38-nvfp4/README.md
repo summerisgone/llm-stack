@@ -63,7 +63,7 @@ the same mounts, label and taint, patches its containerd, and copies the
 local-only images from the server. Then scale the GPU engines to 0, delete
 and re-create the model PVs/PVCs (`nodeAffinity` is immutable; the PVs are
 `Retain` hostPath, so the weights stay), and run `make gpu-objects-up
-device-plugin-up engine-up`. The host needs `fs.inotify.max_user_instances`
+device-plugin-up engines-up`. The host needs `fs.inotify.max_user_instances`
 of at least 1024 (`/etc/sysctl.d/99-inotify.conf`); at the WSL2 default of 128
 the second node's containerd fails with "too many open files".
 

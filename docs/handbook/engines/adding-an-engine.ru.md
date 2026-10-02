@@ -10,7 +10,7 @@
 
 - [Выбор схемы](#выбор-схемы)
 - [Схема A: отдельное имя модели (llama.cpp, внешний API)](#схема-a-отдельное-имя-модели-llamacpp-внешний-api)
-- [Схема B: живой движок под каноническим именем (ninfer)](#схема-b-живой-движок-под-каноническим-именем-ninfer)
+- [Схема B: внутрикластерный движок под своим именем (ninfer)](#схема-b-внутрикластерный-движок-под-своим-именем-ninfer)
 - [Схема C: первый класс за EPP](#схема-c-первый-класс-за-epp)
 - [Контракт метрик](#контракт-метрик)
 - [ninfer](#ninfer)
@@ -23,8 +23,8 @@
 | Схема | Имя модели | Очередь и fair share | Что нужно от движка | Пример |
 | --- | --- | --- | --- | --- |
 | A. отдельное имя модели | своё (`llamacpp-local`) | нет | OpenAI API | llama.cpp, внешний API |
-| B. живой движок, прямой маршрут | `qwen-3.8-27b` | нет | OpenAI API, та же модель | ninfer |
-| C. за EPP | `qwen-3.8-27b` | да | OpenAI API, Prometheus `/metrics` в понятном EPP виде | vLLM, SGLang |
+| B. внутрикластерный движок, своё имя | своё (`qwen-3.8-27b-ninfer`) | нет | OpenAI API | ninfer |
+| C. за EPP, член пула | `qwen-3.8-27b` | да | OpenAI API, Prometheus `/metrics` в понятном EPP виде | vLLM, SGLang |
 
 Решающий вопрос для C: знает ли движок `core-metrics-extractor` llm-d
 (встроены `vllm`, `sglang`, `trtllm-serve`, `triton-tensorrt-llm`, `triton`,
@@ -57,33 +57,38 @@ WebUI, если её должны видеть люди ([Open WebUI](../openweb
 пользователя; очереди перед движком нет. Для нового типа движка скопируйте
 блоки llamacpp под новым ключом `inference.<name>`.
 
-## Схема B: живой движок под каноническим именем (ninfer)
+## Схема B: внутрикластерный движок под своим именем (ninfer)
 
-Движок забирает `qwen-3.8-27b`, перенаправляя существующее правило
-(`openai-qwen38nvfp4` и catch-all `openai` в `llmd.yaml`) на свой backend.
-Клиенты изменений не видят; EPP пропускается. Для ninfer это
-`inference.ninfer.enabled` (объекты существуют) плюс `inference.ninfer.live`
-(маршрут указывает на него), а `make engine-up` выставляет `live` из
-`INFERENCE_ENGINE=ninfer`. Второму движку такого типа понадобились бы свой
-флаг `live` в тех же двух правилах и своя ветка в `ENGINE_DEPLOYMENT_*` и
-`HELM_ENGINE_SETS` в Makefile.
+Схема A для движка, который работает как GPU-Deployment в кластере: чарт по
+образцу `helm/ninfer-inference` (запрос GPU, `nodeSelector` и toleration для
+GPU-нод, без метки `llm-d.ai/model`), цель `<name>-up` в Makefile с
+`--set replicas=$(<NAME>_REPLICAS)` и ветка в `engines-up`, а в
+`helm/airgap-stack` пара `Backend`/`AIServiceBackend` и одно правило точного
+совпадения на своё имя модели. Для ninfer это `inference.ninfer.enabled` и
+`inference.ninfer.modelName: qwen-3.8-27b-ninfer`, правило `openai-ninfer` в
+`llmd.yaml` ([ADR 0019](../../adr/0019-inference-plane-gpu-worker-nodes.md)).
+Он не забирает `qwen-3.8-27b`: это выключило бы fair share для всех клиентов
+пула.
 
-Цена: ни полос, ни справедливости между пользователями, плюс все пробелы API
-движка (ninfer отказывает в JSON-режиме `response_format`).
+Цена для его собственных клиентов: ни полос, ни справедливости между
+пользователями, плюс все пробелы API движка (ninfer отказывает в JSON-режиме
+`response_format`). При одной GPU он отвечает, только пока у пула 0 реплик.
 
 ## Схема C: первый класс за EPP
 
-Для движка, который EPP понимает:
+Для движка, который EPP понимает, поды нового движка входят в пул
+`qwen-3.8-27b`:
 
-1. Чарт движка по образцу `helm/sglang-inference`: одна реплика, `Recreate`,
-   `nvidia.com/gpu: 1`, общий PVC с моделью, метки пода
-   `app.kubernetes.io/name: <deployment>` и `llm-d.ai/engine-type: <type>`.
-2. Makefile: `ENGINE_DEPLOYMENT_<name>`, `EPP_PORT_<name>`, добавить в
-   `ENGINES` и в `EPP_ENGINE`, цель `<name>-up`.
-3. Если нужен ключ апстрима - Secret и `BackendSecurityPolicy` на
-   `llmd-qwen-test-openai`, как `sglang-api-key` в `llmd.yaml`.
-4. Job Prometheus и дашборды (ниже).
-5. Проверить переключение в обе стороны через `make engine-up`.
+1. Чарт движка по образцу `helm/sglang-inference`: `Recreate`,
+   `nvidia.com/gpu: 1`, `nodeSelector` и toleration GPU-нод, порт 8000, без
+   ключа API, метки пода `llm-d.ai/model: <имя модели>` и
+   `llm-d.ai/engine-type: <type>`.
+2. Makefile: `<NAME>_REPLICAS`, `ENGINE_DEPLOYMENT_<name>`, цель `<name>-up`
+   с `--set replicas=$(<NAME>_REPLICAS)` и её ветки в `engines-up`.
+3. Job Prometheus (обнаружение подов, порт 8000) и дашборды (ниже).
+4. Проверить с одной репликой нового движка и нулём у остальных, затем
+   смешанно, если хватает GPU: `llm_d_epp_ready_endpoints` считает всех
+   членов пула.
 
 ## Контракт метрик
 
@@ -132,7 +137,7 @@ Docker-контейнер на хосте (`deploy/llamacpp/run`, профиль
 
 - [ ] OpenAI-совместимые chat completions, стриминг и `usage` проверены напрямую на движке
 - [ ] Чарт или запуск на хосте описан; образ закреплён в `versions.lock.env`
-- [ ] Маршрут: values схемы A, флаг `live` схемы B или подключение к EPP схемы C
+- [ ] Маршрут: values и правило схем A и B или метки пула схемы C
 - [ ] Ключ апстрима в `.env` и `BackendSecurityPolicy`, если нужно
 - [ ] `model_ids` Open WebUI обновлены, когда появляется новое имя модели
 - [ ] Job Prometheus и хотя бы панель `up`

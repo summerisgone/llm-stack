@@ -42,7 +42,7 @@ public origin. Host details, the edge tunnel and the post-reboot recovery
 | Change | Command |
 | --- | --- |
 | Anything in manifests or `helm/airgap-stack` | `make verify`, then `make helm-up` |
-| Live engine | `.env` `INFERENCE_ENGINE`, then `make engine-up` ([engines](engines/README.md#switching-the-live-engine)) |
+| Engine replicas | `.env` `VLLM_REPLICAS` / `SGLANG_REPLICAS` / `NINFER_REPLICAS`, then `make engines-up` ([engines](engines/README.md#engine-replicas)) |
 | Engine flags | `make vllm-up` / `sglang-up` / `ninfer-up` |
 | EPP | `make llmd-up` |
 | Dashboards, Grafana | `make monitoring-up` |
@@ -101,12 +101,12 @@ Credential rotation for every component: [docs/security](../security/README.md).
 | --- | --- | --- |
 | One Open WebUI user gets 401 from the model | Open WebUI lost that user's stored OAuth session (`No OAuth session found`, gateway `Jwt_is_missing`) | the user logs out and in; `offline_access` (applied by `helm-up`) makes it rare |
 | Every PAT fails at once with 401 | pat-service's cached gateway token expired (`Jwt_is_expired` in the gateway Envoy log) | `kubectl -n airgap-ai-stack rollout restart deploy/pat-service`; check the `pat-gateway` client's token lifespan in Keycloak |
-| Requests hang, `llm_d_epp_ready_endpoints` 0, stale-endpoint alert | EPP cannot read the engine's metrics: wrong selector or engine label, engine not Ready | `make engine-up` with the right `INFERENCE_ENGINE`; if everything matches, restart EPP (`make llmd-up` or delete the pod) |
+| Requests hang, `llm_d_epp_ready_endpoints` 0, stale-endpoint alert | no pool member is Ready, or EPP cannot read its metrics (missing `llm-d.ai/model` or `llm-d.ai/engine-type` label) | check the vLLM/SGLang replicas and pod labels; if everything matches, restart EPP (`make llmd-up` or delete the pod) |
 | EPP KV and queue gauges stuck at 0 under traffic | stale EPP state after an engine switch (`llm_d_epp_datalayer_extract_errors_total` climbing) | restart EPP; set `router.epp.flags.v: 4` to capture `extract failed` if it recurs |
 | False 504 on long requests | a missing edge or route timeout | timeouts are 10 min on the edge and route ([inference](inference/README.md#timeouts-and-limits-on-the-path)) |
-| JSON-mode requests fail with 400 | ninfer is live and refuses `response_format` | expected with `INFERENCE_ENGINE=ninfer` |
-| Engine pod `Pending`, `Insufficient nvidia.com/gpu` | another engine holds the GPU | `make engine-up` stops the others first |
-| LLM engine crash-loops at start after an embeddings restart | GPU embeddings took memory first | start order: engine, then embeddings (`engine-up` does it) |
+| JSON-mode requests fail with 400 | the request went to `qwen-3.8-27b-ninfer`; ninfer refuses `response_format` | expected; use `qwen-3.8-27b` |
+| Engine pod `Pending`, `Insufficient nvidia.com/gpu` | another engine holds the GPU | keep the replica total at the GPU count; `make engines-up` stops the zeroed engines first |
+| LLM engine crash-loops at start after an embeddings restart | GPU embeddings took memory first | start order: engine, then embeddings (`engines-up` does it) |
 | `kubectl` "connection refused" on the tunnel port | the SSH tunnel dropped | `make k3s-tunnel` again |
 
 ## Known gaps
@@ -118,7 +118,7 @@ area, and update this list.
 - The llm-d chart is installed by digest, but the EPP image it runs is the
   mutable `main` tag (`IfNotPresent`; the digest in `versions.lock.env` is
   recorded, not enforced), so a fresh node could pull a different build.
-- With `INFERENCE_ENGINE=vllm` and GPU embeddings, vLLM's
+- With vLLM replicas and GPU embeddings, vLLM's
   `gpuMemoryUtilization: 0.94` leaves less GPU memory than the measured
   embeddings peak (ADR 0018 measured it under ninfer); lower it before heavy
   embedding load under vLLM.

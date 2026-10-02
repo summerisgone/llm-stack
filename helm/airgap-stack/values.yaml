@@ -27,7 +27,6 @@ runtimeEnvironment:
   # below). Empty means "no Authorization header is injected"; only set one
   # if that backend actually requires it. Never real values in this file --
   # override through .env like every other runtime secret.
-  SGLANG_API_KEY: ""
   EXTERNAL_API_KEY: ""
 
 # --- Inference backends -------------------------------------------------------
@@ -55,20 +54,6 @@ inference:
   # traffic to validate against (§4.5: "заменить высоким потолком против
   # шторма, порядка 60/мин").
   perUserRateLimitPerMinute: 60
-  # SGLang serving the same NVFP4 checkpoint as vLLM (helm/sglang-inference,
-  # make sglang-up), mutually exclusive with it: this host has one GPU.
-  # Unlike llamacpp/externalApi below, this flag does not choose a route --
-  # SGLang is always reached through llm-d EPP, the same AIServiceBackend as
-  # vLLM (llmd.yaml); which engine EPP actually dispatches to is
-  # config/llmd/router-nvfp4-values.yaml's modelServers block. This flag only
-  # gates injecting SGLANG_API_KEY as the upstream Authorization header on
-  # that shared path (TASK-qos-fair-share.md §7.1,
-  # docs/adr/0008-per-user-fair-share.md "SGLang portability"). Set it
-  # whenever SGLang is the live engine and SGLANG_API_KEY is non-empty.
-  # `make helm-up` sets it from INFERENCE_ENGINE in .env (Makefile
-  # HELM_ENGINE_SETS); the value here is only the render default.
-  sglang:
-    enabled: false
   # llama.cpp's server (deploy/llamacpp). No profile is wired up until a
   # checksummed GGUF model is in place; see config/llamacpp.
   llamacpp:
@@ -92,35 +77,20 @@ inference:
   # pilot brief: a host-run `docker run --gpus all` container is invisible to
   # k8s's own nvidia.com/gpu accounting and OOM-killed the live sglang pod
   # during testing. Requires the ninfer-api-key Secret from helm-up
-  # (NINFER_API_KEY in .env), same pattern as SGLANG_API_KEY.
+  # (NINFER_API_KEY in .env).
   #
-  # modelName is the canonical inference.modelName (qwen-3.8-27b), not a
-  # ninfer-specific one -- `live: true` points that one shared
-  # openai-qwen38nvfp4 route rule (llmd.yaml) at ninfer's direct backend
-  # instead of llm-d EPP, so a client never sees the model name change when
-  # ninfer becomes the live engine, same as a vLLM<->SGLang swap. Cannot
-  # actually join EPP itself, still -- see inference-backends.yaml comment,
-  # ADR-0015 §6. `enabled` alone (live: false) only deploys the backend
-  # objects without routing the canonical name to them (matches
-  # sglang.enabled's "wired but not necessarily dispatched" shape).
-  #
-  # Known, accepted cost while live: true -- not just losing EPP fair-share
-  # (already true for llamacpp/externalApi): ninfer rejects every
-  # `response_format` except `{"type":"text"}` (no constrained/JSON-schema
-  # decoding at all, confirmed against upstream docs/serving.md). Any client
-  # feature that depends on JSON-mode responses breaks or degrades while
-  # ninfer is live under this name -- observed 2026-09-19: Hermes agent's
-  # auxiliary title generation, HTTP 400 "this response_format requires
-  # constrained output, which NInfer cannot guarantee". See
+  # Its own model name (ADR 0019), matching helm/ninfer-inference's
+  # servedModelName: ninfer cannot join EPP (ADR-0015 §6), so it is a direct
+  # rule in llmd.yaml with no EPP queueing, fair share or priority bands. It
+  # also rejects every `response_format` except `{"type":"text"}` (no
+  # constrained/JSON-schema decoding, confirmed against upstream
+  # docs/serving.md); clients that need JSON mode stay on qwen-3.8-27b. See
   # deploy/ninfer/README.md.
-  # `live` is set by `make helm-up` from INFERENCE_ENGINE in .env (Makefile
-  # HELM_ENGINE_SETS); the value here is only the render default.
   ninfer:
     enabled: true
-    live: false
     host: ninfer-qwen38.airgap-ai-stack.svc.cluster.local
     port: 18080
-    modelName: qwen-3.8-27b
+    modelName: qwen-3.8-27b-ninfer
   # bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Unlike
   # llamacpp/externalApi above, this flag also controls a second
   # AIGatewayRoute (templates/embeddings.yaml), not just a rule inside

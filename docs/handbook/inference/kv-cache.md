@@ -113,8 +113,8 @@ The pool is fixed by the card; the knobs only divide it:
   `memFractionStatic`) is capped by what the card really frees and by the
   embeddings budget.
 
-Change one value, apply it with `make engine-up` (or the engine's own
-`make <engine>-up` when it is already live), and compare the metrics below
+Change one value, apply it with the engine's own `make <engine>-up`
+(`make engines-up` if replicas change too), and compare the metrics below
 under real load. The procedure is in [tuning](../configuration/tuning.md#engine-capacity).
 
 ## What to watch

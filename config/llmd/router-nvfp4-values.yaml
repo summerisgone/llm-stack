@@ -1,8 +1,8 @@
 # Production-style EPP for the remote WSL2 GPU profile. llm-d runs after Envoy
-# AI Gateway, in front of the single RTX 5090's one live engine replica
-# (vLLM or SGLang, see modelServers below -- never both, one GPU). The
+# AI Gateway, in front of the qwen-3.8-27b pool: every vLLM or SGLang pod
+# labelled llm-d.ai/model=qwen-3.8-27b (see modelServers below). The
 # standalone proxy terminates every request through ext-proc so EPP can
-# queue, score, and pick the live endpoint by its /metrics state.
+# queue, score, and pick an endpoint by its /metrics state.
 router:
   inferencePool:
     # TASK-qos-fair-share.md Этап 1Б.3: InferencePool exists purely as the
@@ -146,15 +146,15 @@ router:
       enabled: false
       auth:
         enabled: false
-  # Points EPP at whichever engine is actually live -- only one runs at a
-  # time (one GPU). The committed value is the vLLM default; `make llmd-up`
-  # overrides all three fields from INFERENCE_ENGINE in .env (Makefile
-  # LLMD_ENGINE_SETS), so switching engines is `make engine-up`, not an edit
-  # here. See docs/handbook/engines/README.md.
+  # The pool is the model, not an engine (ADR 0019): any vLLM or SGLang pod
+  # with this label on port 8000 is a member, so capacity is the engines'
+  # replicas. core-metrics-extractor reads each pod's llm-d.ai/engine-type
+  # for its metric names (vLLM when the label is missing); `type` stays the
+  # chart default.
   modelServers:
     type: vllm
     protocol: http
     targetPorts:
       - number: 8000
     matchLabels:
-      app.kubernetes.io/name: vllm-qwen38-nvfp4
+      llm-d.ai/model: qwen-3.8-27b

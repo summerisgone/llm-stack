@@ -90,8 +90,8 @@ Both can be set as `parameters` on the plugin. ADR 0012 decided not to raise
 If EPP cannot read an endpoint's metrics, the endpoint is **stale** and EPP
 fails closed: nothing is dispatched to it. That is what the Grafana alert
 `adr0012-stale-endpoints` (`llm_d_epp_flow_control_stale_endpoints > 0`)
-catches. A wrong `modelServers` selector or engine label causes exactly this;
-`make engine-up` keeps them consistent.
+catches. A missing `llm-d.ai/engine-type` label on a pool member causes
+exactly this; the engine charts set it.
 
 ## Between bands: the graduated ceiling
 

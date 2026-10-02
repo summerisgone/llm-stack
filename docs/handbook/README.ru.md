@@ -12,7 +12,7 @@
 | 4 | [Инференс](inference/README.ru.md) | путь от шлюза до GPU, кто что решает, обходные пути, таймауты |
 | 4.1 | [Очереди и fair share](inference/queues-and-fair-share.ru.md) | полосы EPP, справедливость между пользователями, насыщение, градуированный потолок |
 | 4.2 | [KV-кэш](inference/kv-cache.ru.md) | память GPU, переиспользование префиксов, настройки движков, контекст против параллелизма |
-| 5 | [Движки](engines/README.ru.md) | подключение vLLM и SGLang, `make engine-up`, эмбеддинги |
+| 5 | [Движки](engines/README.ru.md) | пул `qwen-3.8-27b`, реплики движков, `make engines-up`, эмбеддинги |
 | 5.1 | [Подключение движка](engines/adding-an-engine.ru.md) | ninfer, llama.cpp, внешние API, контракт метрик |
 | 6 | [Наблюдаемость](observability/README.ru.md) | источники метрик, дашборды по вопросам, логи, алерты |
 | 6.1 | [Трейсы Langfuse](observability/langfuse.ru.md) | что в трейсе, пользователи и сессии |
@@ -38,7 +38,7 @@
 | fairness id | ключ, по которому EPP делит полосу: Keycloak `sub` пользователя | [Очереди и fair share](inference/queues-and-fair-share.ru.md#справедливость-внутри-полосы) |
 | ключ сессии | chain-hash идентификатор разговора в pat-service, `sess-...` | [PAT-сервис](pat-service.ru.md#склейка-сессий) |
 | насыщение (saturation) | сигнал нагрузки EPP от 0 до 1 по очереди движка и занятости KV | [Очереди и fair share](inference/queues-and-fair-share.ru.md#насыщение-когда-epp-придерживает-запросы) |
-| живой движок | движок, обслуживающий `qwen-3.8-27b`, задаётся `INFERENCE_ENGINE` | [Движки](engines/README.ru.md#переключение-живого-движка) |
+| реплики движков | сколько подов каждого движка работает (`VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS`); поды vLLM и SGLang обслуживают `qwen-3.8-27b` | [Движки](engines/README.ru.md#реплики-движков) |
 | рантайм | вид агента: Hermes, pi или opencode | [Агенты](agents/README.ru.md#рантаймы) |
 | слот | одно из K мест для запущенного пода агента | [Агенты](agents/README.ru.md#agent-broker) |
 | профиль | домашний каталог агента пользователя на PVC | [Агенты](agents/README.ru.md#профили-и-каталог) |

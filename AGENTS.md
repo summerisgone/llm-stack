@@ -18,9 +18,10 @@ that is exactly the drift
 
 The model servers themselves are their own Helm releases:
 `helm/vllm-inference`, `helm/sglang-inference` and `helm/ninfer-inference`;
-the one named by `INFERENCE_ENGINE` in `.env` is brought up by `make
-engine-up` (and by `make stack-up`) — see
-[ADR 0007](docs/adr/0007-inference-engines-as-helm-releases.md). Edit their
+each runs `VLLM_REPLICAS` / `SGLANG_REPLICAS` / `NINFER_REPLICAS` pods from
+`.env`, applied by `make engines-up` (and by `make stack-up`) -- see
+[ADR 0007](docs/adr/0007-inference-engines-as-helm-releases.md) and
+[ADR 0019](docs/adr/0019-inference-plane-gpu-worker-nodes.md). Edit their
 `values.yaml`, not a manifest. `k8s/overlays/remote-wsl-vllm-nvfp4/vllm.yaml`
 still holds an older copy of the vLLM Deployment; it is filtered out of every
 release by `scripts/helm-render` (`GPU_KEEP_OUT`) and is **not** what runs.
@@ -60,10 +61,10 @@ Consequences worth knowing before editing any of this:
   sheddable background class.
 - Saturation comes from `utilization-detector` (engine queue depth and KV
   use, ADR 0012), not a request-count limit. EPP reads each engine's metric
-  names from the pod label `llm-d.ai/engine-type`, and `router.modelServers.*`
-  is set by `make llmd-up` from `INFERENCE_ENGINE` in `.env`: switch engines
-  with `make engine-up`, never by editing the values file; see
-  [docs/handbook/engines](docs/handbook/engines/README.md).
+  names from the pod label `llm-d.ai/engine-type`; the pool is every vLLM or
+  SGLang pod labelled `llm-d.ai/model=qwen-3.8-27b` on port 8000
+  (`router.modelServers`). Change capacity with replicas, not the
+  selector; see [docs/handbook/engines](docs/handbook/engines/README.md).
 
 ## Deployment host
 
@@ -85,13 +86,13 @@ Copy `.env.example` to `.env` before deploying; never commit `.env`.
   (`helm template <release> helm/<chart> -n airgap-ai-stack`).
 - `make preflight` — the kustomize half of `verify` on its own.
 - `make stack-up` — the single deploy path for the remote GPU profile
-  (prerequisites, GPU objects, the live engine via `engine-up`, the
-  `airgap-stack` release, llm-d, OIDC reconciliation). `make up` deploys the local-mac development
+  (prerequisites, GPU objects, the `airgap-stack` release, the engines,
+  llm-d and embeddings via `engines-up`, OIDC reconciliation). `make up` deploys the local-mac development
   profile.
-- `make engine-up` switches the live engine to `INFERENCE_ENGINE` (stops
-  the others, routes the model name, points EPP, restarts GPU embeddings in
-  order). `make vllm-up` / `sglang-up` / `ninfer-up` and their `-down`
-  apply one engine release on its own. One GPU: only one engine can run.
+- `make engines-up` applies every engine's replicas in GPU-safe order (stops
+  the zeroed engines, starts the others, then EPP, then GPU embeddings).
+  `make vllm-up` / `sglang-up` / `ninfer-up` and their `-down` apply one
+  engine release on its own. One GPU: keep the replica total at 1.
 - `make down` scales application Deployments to zero without deleting PVCs.
 - `make ps`, `make logs`, `make config` — workload state and rendered base.
 - `make smoke`, `make services-smoke`, `make pat-smoke` — SSO, service and PAT

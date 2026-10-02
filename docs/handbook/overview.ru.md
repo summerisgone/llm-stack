@@ -71,7 +71,7 @@ flowchart TD
     aigw["ai-gateway-private<br/>проверка JWT, rate limit на пользователя, маршрут по имени модели"]
     aigw --> epp["llm-d EPP<br/>очередь, полосы, справедливость"]
     epp --> engine["vLLM или SGLang"]
-    aigw -. "INFERENCE_ENGINE=ninfer" .-> ninfer["ninfer"]
+    aigw -. "qwen-3.8-27b-ninfer" .-> ninfer["ninfer"]
 
     agentchat --> owui2["Open WebUI"] --> broker["agent-broker<br/>(ns agents)"]
     broker --> pod["под агента<br/>&lt;runtime&gt;-agent-&lt;id&gt; (gVisor)"]
@@ -124,7 +124,7 @@ Keycloak идёт через `kubectl port-forward svc/keycloak`.
 | `k8s/base` | нагрузки, не зависящие от профиля | рендерится в `helm/airgap-stack` скриптом `scripts/helm-render` |
 | `k8s/overlays/remote-wsl-vllm-nvfp4` | GPU-предпосылки и патчи площадки удалённого профиля | тем же рендером; GPU-объекты - `make gpu-objects-up` |
 | `helm/airgap-stack` | маршрутизация, маршруты AI Gateway, rate limit-ы, отрендеренные нагрузки | `make helm-up` |
-| `helm/vllm-inference`, `helm/sglang-inference`, `helm/ninfer-inference`, `helm/embeddings-inference` | по одному движку | `make engine-up`, `make embeddings-up` |
+| `helm/vllm-inference`, `helm/sglang-inference`, `helm/ninfer-inference`, `helm/embeddings-inference` | по одному движку | `make engines-up`, `make embeddings-up` |
 | `config/llmd/router-nvfp4-values.yaml` | релиз llm-d EPP | `make llmd-up` |
 | `k8s/agents`, `config/agents` | agent-broker и каталог агентов | `make agents-up`, `make agent-catalog` |
 | `helm/web-search`, `helm/repowise` | MCP-серверы | `make websearch-up`, `make repowise-up` |

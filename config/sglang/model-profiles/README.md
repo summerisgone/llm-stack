@@ -8,16 +8,12 @@ vLLM serves. The engine that actually runs in the cluster is the
 Keep the two in mind as separate profiles: editing this file changes nothing
 about the deployed Deployment.
 
-The gateway route is enabled (`inference.sglang.enabled: true` in
-`helm/airgap-stack/values.yaml`), which advertises `qwen-3.8-27b` (via the
-single exact-match rule on `AIGatewayRoute/llmd`) whether or not the release
-is installed.
+The in-cluster SGLang pods join the `qwen-3.8-27b` pool behind EPP by label
+(ADR 0019); there is no SGLang-specific gateway setting.
 
-**Mutual exclusion**: this host has one RTX 5090. vLLM's Deployment holds it
-(`nvidia.com/gpu: 1`, `strategy: Recreate`, `helm/vllm-inference`). The
-in-cluster SGLang release requests the same resource, so the scheduler keeps
-it `Pending` until vLLM is scaled to zero
-(`kubectl -n airgap-ai-stack scale deployment/vllm-qwen38-nvfp4 --replicas=0`).
+**Mutual exclusion**: this host has one RTX 5090. Each engine pod requests
+`nvidia.com/gpu: 1`, so set `VLLM_REPLICAS=0` and `SGLANG_REPLICAS=1` in
+`.env` and run `make engines-up`; otherwise the SGLang pod stays `Pending`.
 The host-Docker container in `deploy/sglang-qwen38` uses `--gpus all` outside
 Kubernetes' view and gets no such protection — see
 [ADR 0007](../../../docs/adr/0007-inference-engines-as-helm-releases.md).

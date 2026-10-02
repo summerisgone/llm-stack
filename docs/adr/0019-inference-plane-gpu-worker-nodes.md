@@ -66,7 +66,12 @@ application workload tolerates the GPU taint.
   without a key, restricted by NetworkPolicy.
 - Capacity is `replicas` per engine per pool, one replica per GPU (or per
   tensor-parallel group). `INFERENCE_ENGINE` and `make engine-up` are
-  retired.
+  retired; `VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS` in `.env`
+  and `make engines-up` replace them.
+- Engines that cannot join EPP (ninfer, ADR 0015) are separate model names
+  on direct rules (`qwen-3.8-27b-ninfer`), not a switch of the pool's name:
+  switching the shared name would turn fair share off for every client.
+  On one GPU they run only while the pool has 0 replicas.
 - A new model is a new pool, its EPP and one `AIGatewayRoute` rule.
 
 ### 3. Engines are scheduled by label, not by host
@@ -188,7 +193,7 @@ Acceptance:
 | 2.1 | `llm-d.ai/model` label on engine pods | engine charts |
 | 2.2 | Pool selector by model label; single `targetPort` 8000; SGLang on 8000 | `config/llmd/router-nvfp4-values.yaml`, `helm/sglang-inference`, `Makefile` (`LLMD_ENGINE_SETS`) |
 | 2.3 | Drop upstream key on the shared path; NetworkPolicy EPP -> engines | `helm/airgap-stack` (`inference.sglang`, `BackendSecurityPolicy`) |
-| 2.4 | Retire `INFERENCE_ENGINE` / `engine-up` / `HELM_ENGINE_SETS`; replace with replicas per engine | `Makefile`, `.env.example` |
+| 2.4 | Retire `INFERENCE_ENGINE` / `engine-up` / `HELM_ENGINE_SETS`; replace with replicas per engine (`engines-up`); ninfer becomes its own model name | `Makefile`, `.env.example`, `helm/airgap-stack` (`inference.ninfer`) |
 | 2.5 | EPP alerts on extract errors and ready endpoints | Prometheus rules, Grafana |
 | 2.6 | Optional: second agent with an engine simulator to exercise two endpoints | k3d, a test chart |
 

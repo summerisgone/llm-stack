@@ -48,7 +48,7 @@ The operators are installed separately, by `make operators-up`:
 | | `remote-wsl-vllm-nvfp4` | `local-mac` |
 | --- | --- | --- |
 | Purpose | the deployable product | development without a GPU |
-| Inference | vLLM or SGLang on an RTX 5090 via llm-d, or ninfer (`make engine-up`) | LM Studio on the LAN |
+| Inference | vLLM and/or SGLang on GPU worker nodes via llm-d; ninfer as its own model name (`make engines-up`) | LM Studio on the LAN |
 | Cluster | k3d on Windows + WSL2 | OrbStack on macOS |
 | Public routing | one origin, split by path | `*.localhost` hosts on `:8080` |
 | Routing owned by | `helm/airgap-stack/templates` | `k8s/overlays/local-mac` |
@@ -77,7 +77,7 @@ site, is in [docs/install](docs/install/README.md).
 ```sh
 cp .env.example .env         # then replace every value; see docs/security
 make verify                  # renders and validates everything, no cluster needed
-make stack-up                # prerequisites, GPU objects, the engine (INFERENCE_ENGINE), Helm release, llm-d, OIDC
+make stack-up                # prerequisites, GPU objects, Helm release, engines (*_REPLICAS), llm-d, OIDC
 make llmd-nvfp4-smoke        # end-to-end: PAT issue, inference, rate limit, revoke
 ```
 

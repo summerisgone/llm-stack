@@ -11,67 +11,43 @@ launch settings are in [vllm-inference.md](vllm-inference.md).
 
 | Backend | Model name | Runs as | Reached via | Route/engine chosen by |
 | --- | --- | --- | --- | --- |
-| vLLM | `qwen-3.8-27b` | `helm/vllm-inference` release, `make vllm-up` | llm-d EPP | `INFERENCE_ENGINE=vllm`, `make engine-up` |
-| SGLang | `qwen-3.8-27b` | `helm/sglang-inference` release, `make sglang-up` | llm-d EPP | `INFERENCE_ENGINE=sglang`, `make engine-up` |
-| ninfer (pilot) | `qwen-3.8-27b` (shared, not its own) | `helm/ninfer-inference` release, `make ninfer-up` | direct `AIServiceBackend`, bypasses EPP | `INFERENCE_ENGINE=ninfer`, `make engine-up` |
+| vLLM | `qwen-3.8-27b` (pool member) | `helm/vllm-inference` release, `make vllm-up` | llm-d EPP | `VLLM_REPLICAS`, `make engines-up` |
+| SGLang | `qwen-3.8-27b` (pool member) | `helm/sglang-inference` release, `make sglang-up` | llm-d EPP | `SGLANG_REPLICAS`, `make engines-up` |
+| ninfer (pilot) | `qwen-3.8-27b-ninfer` (its own) | `helm/ninfer-inference` release, `make ninfer-up` | direct `AIServiceBackend`, bypasses EPP | `NINFER_REPLICAS`, `make engines-up` |
 | llama.cpp | `llamacpp-local` | `deploy/llamacpp` (host Docker) | direct `AIServiceBackend`, bypasses EPP | `inference.llamacpp.enabled` |
 | External API | `external-api` (or whatever `inference.externalApi.modelName` is set to) | not managed by this repo | direct `AIServiceBackend`, bypasses EPP | `inference.externalApi.enabled` |
 
-The canonical vLLM/SGLang model name, `qwen-3.8-27b`, is shared by up to
-three engines now, not two. Both `helm/vllm-inference` and
-`helm/sglang-inference` run with `--served-model-name qwen-3.8-27b`, and
-`helm/ninfer-inference` with `--model-id qwen-3.8-27b`
-(`inference.servedModelName`) — the exact-match rule on `AIGatewayRoute/llmd`
-(`openai-qwen38nvfp4`) matches that one name for all three, but its
-`backendRefs` target is not fixed the same way for all three:
+The canonical model name, `qwen-3.8-27b`, is a pool
+([ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)). The
+exact-match rule on `AIGatewayRoute/llmd` (`openai-qwen38nvfp4`) and the
+catch-all `openai` always forward to `llmd-qwen-test-openai`, llm-d EPP's own
+backend, never to an engine directly. EPP dispatches to every pod labelled
+`llm-d.ai/model=qwen-3.8-27b` on port 8000
+(`config/llmd/router-nvfp4-values.yaml` `router.modelServers`), vLLM and
+SGLang alike, so llm-d's queue, priority bands and fair share cover every
+member ([ADR 0008](../adr/0008-per-user-fair-share.md)). Which engines serve
+is their replica counts, not a routing change. The engines run without an
+API key; the NetworkPolicy `inference-pool-members` admits only EPP and
+Prometheus to them.
 
-- **vLLM <-> SGLang**: the rule always forwards to `llmd-qwen-test-openai`,
-  llm-d EPP's own backend. It never points at either engine directly, so
-  switching between them is never a gateway routing change: it is entirely a
-  fact about which engine is running and which one
-  `config/llmd/router-nvfp4-values.yaml`'s `router.modelServers` block (set by
-  `make llmd-up` from `INFERENCE_ENGINE`)
-  (`type`, `targetPorts`, `matchLabels`) tells EPP to dispatch to. llm-d's
-  queue, priority bands and fair-share dispatch (the whole point of
-  `TASK-qos-fair-share.md`) cover both engines identically — see
-  [ADR 0008](../adr/0008-per-user-fair-share.md) "SGLang portability" for why
-  this replaced an earlier design where SGLang had its own direct
-  `AIServiceBackend` that bypassed EPP whenever `inference.sglang.enabled`
-  was set (§7.1 of the task doc).
-- **ninfer**: cannot join EPP itself (see "EPP / fair-share" in
-  `deploy/ninfer/README.md` — EPP's scoring plugins need a `/metrics`
-  endpoint ninfer does not have, not just an unverified engine-type string).
-  `inference.ninfer.live` in `helm/airgap-stack/values.yaml` instead
-  retargets this *same* rule's `backendRefs` directly to `ninfer-openai`
-  when `true`, or back to `llmd-qwen-test-openai` when `false`
-  (`helm/airgap-stack/templates/llmd.yaml`). A client's `model` field still
-  never changes, but while `live: true`, that traffic has none of
-  ADR-0008/ADR-0012's fair-share or priority-band guarantees, and ninfer's
-  own capability gaps apply (no JSON-mode `response_format`, no constrained
-  decoding — see `deploy/ninfer/README.md` "Compatibility gaps").
+ninfer cannot join EPP (see "EPP / fair-share" in `deploy/ninfer/README.md`
+-- EPP's scoring plugins need a `/metrics` endpoint ninfer does not have), so
+it is its own model name, `qwen-3.8-27b-ninfer`
+(`inference.ninfer.modelName`, the chart's `--model-id`), on its own rule
+`openai-ninfer` to `ninfer-openai`, with `ninfer-api-key` injected by a
+`BackendSecurityPolicy`. Its traffic has none of ADR-0008/ADR-0012's
+fair-share or priority-band guarantees, and ninfer's own capability gaps
+apply (no JSON-mode `response_format`, see `deploy/ninfer/README.md`
+"Compatibility gaps"). `inference.ninfer.enabled` gates its
+`Backend`/`AIServiceBackend`, Secret and rule.
 
-`inference.sglang.enabled` in `helm/airgap-stack/values.yaml` still exists,
-but only to gate injecting `SGLANG_API_KEY` (when set) as the upstream
-`Authorization` header on the shared EPP path — SGLang requires a bearer
-token, vLLM does not, and EPP's dispatch path has no per-endpoint auth hook
-of its own (`helm/airgap-stack/templates/llmd.yaml`, `BackendSecurityPolicy/
-sglang-api-key`). It plays no part in choosing which engine answers.
-`inference.ninfer.enabled` is the equivalent for ninfer's own
-`BackendSecurityPolicy`/Secret, but unlike `sglang.enabled` it also gates
-whether ninfer's `Backend`/`AIServiceBackend` exist at all — `live` is the
-separate flag that actually routes traffic to it (see
-`helm/airgap-stack/templates/inference-backends.yaml`'s ninfer comment).
-
-llama.cpp and the external API stay on the older, simpler pattern ninfer
-used to use before it moved onto the canonical name above: their own
+llama.cpp and the external API follow the same pattern as ninfer: their own
 `Backend`/`AIServiceBackend` pair and their own exact-match rule on a
 *different* model name, toggled by `inference.<name>.enabled` in
 `helm/airgap-stack/values.yaml` (see `helm/airgap-stack/templates/
 inference-backends.yaml`). Traffic to those model names bypasses llm-d
 entirely — no queue, no fair-share, no priority bands. That is an accepted,
-documented gap (`TASK-qos-fair-share.md` §7.6), not a bug: neither is (yet)
-reached by real coding-agent traffic under this scheme, unlike ninfer, which
-now can be by design.
+documented gap (`TASK-qos-fair-share.md` §7.6).
 
 A client selects the model by request `model`; Open WebUI's model dropdown,
 the `/v1/models` endpoint, and `x-ai-eg-model` all key off the same name.
@@ -87,37 +63,28 @@ ninfer) request and limit `nvidia.com/gpu: 1` with `strategy: Recreate`, so
 the scheduler arbitrates: start a second one and its pod sits `Pending` with
 `insufficient nvidia.com/gpu` instead of fighting for the card.
 
-The live engine is one variable, `INFERENCE_ENGINE` in `.env` (`vllm`,
-`sglang` or `ninfer`), and one command switches to it in every direction:
+Capacity is replicas per engine in `.env`, applied in GPU-safe order by one
+command:
 
 ```sh
-# .env: INFERENCE_ENGINE=sglang
-make engine-up
+# .env: VLLM_REPLICAS=0 SGLANG_REPLICAS=1 NINFER_REPLICAS=0
+make engines-up
 ```
 
-`engine-up` stops GPU embeddings and the other engines, runs `make helm-up`
-(which sets `inference.sglang.enabled` and `inference.ninfer.live` from the
-variable, so the route and the engine's API-key Secret match), starts the
-engine and waits for it, runs `make llmd-up` (which sets
-`router.modelServers` from the variable), and starts embeddings again last.
-EPP reads each engine's metric names from the pod label
-`llm-d.ai/engine-type` set by the engine charts, so there is no
-`core-metrics-extractor.defaultEngine` to keep in step. Keep `.env` equal to
-the running engine: `helm-up` and `llmd-up` read it every time. Verified
-live on 2026-09-27 for ninfer -> vLLM -> SGLang -> ninfer. Background and
-checks: [docs/handbook/engines](../handbook/engines/README.md).
+`engines-up` stops GPU embeddings and the engines going to 0, starts the
+others and waits for them, runs `make llmd-up`, and starts embeddings again
+last. EPP reads each engine's metric names from the pod label
+`llm-d.ai/engine-type` set by the engine charts. With one GPU keep the total
+at 1; moving it to ninfer leaves `qwen-3.8-27b` with no endpoints. Background
+and checks: [docs/handbook/engines](../handbook/engines/README.md).
 
 `make vllm-down` / `make sglang-down` / `make ninfer-down` uninstall a release
 outright, which is the right move when the engine is not coming back soon;
-`engine-up` only scales the others to zero and keeps their releases.
+`engines-up` scales an engine to zero and keeps its release.
 
-SGLang reads its upstream API key from the `sglang-api-key` Secret, created by
-the `airgap-stack` release when `inference.sglang.enabled` is true and
-`SGLANG_API_KEY` is set; the same Secret backs the `BackendSecurityPolicy`
-that injects that key into the shared EPP path
-(`helm/airgap-stack/templates/llmd.yaml`), so a stale or missing key means
-401s from SGLang through the normal `qwen-3.8-27b` route, not just a failed
-pod start. ninfer's `ninfer-api-key` works the same way with `NINFER_API_KEY`.
+ninfer reads its upstream API key from the `ninfer-api-key` Secret, created by
+the `airgap-stack` release from `NINFER_API_KEY`; the same Secret backs the
+`BackendSecurityPolicy` on `ninfer-openai`.
 
 llama.cpp still runs as a host Docker container outside Kubernetes' view and
 defaults to `N_GPU_LAYERS=0` (CPU-only) for that reason; only raise it while
@@ -127,9 +94,9 @@ no in-cluster engine is running.
 
 This section is about llama.cpp and the external API — the two backends that
 still get their own `AIGatewayRoute` rule and model name (see "What is
-available" above). SGLang never adds or removes a route rule; verifying an
-engine switch to or from SGLang is the EPP check at the end of this section,
-not an `aigatewayroute` diff.
+available" above). vLLM and SGLang never add or remove a route rule;
+verifying a replica change is the EPP check at the end of this section, not
+an `aigatewayroute` diff.
 
 Enabling `inference.<name>.enabled` only tells the gateway the endpoint now
 exists — it never starts the engine. Start it first (`deploy/llamacpp`, or
@@ -144,7 +111,7 @@ helm upgrade --install airgap-stack helm/airgap-stack \
 ```
 
 `make helm-up` layers `.env` the same way it already does for the rest of
-`runtimeEnvironment`, so setting `SGLANG_API_KEY` / `EXTERNAL_API_KEY` there
+`runtimeEnvironment`, so setting `EXTERNAL_API_KEY` there
 and flipping `inference.*.enabled` in `values.yaml` is the tracked way to do
 it. Open WebUI's model dropdown is a separate list —
 `OPENAI_API_CONFIGS` in `k8s/overlays/remote-wsl-vllm-nvfp4/openwebui-oidc-patch.yaml`
@@ -158,11 +125,11 @@ curl -s $STACK_BASE_URL/v1/models -H "Authorization: Bearer sk-…" \
   | grep qwen-3.8-27b
 ```
 
-After a vLLM/SGLang switch, confirm EPP actually picked up the new engine
-rather than continuing to poll a scaled-down pod's now-`Pending` `/metrics`:
+After a vLLM/SGLang replica change, confirm EPP sees the pool members
+(`llm_d_epp_ready_endpoints` equals the replicas):
 
 ```sh
-kubectl -n airgap-ai-stack get pods -l 'app.kubernetes.io/name in (vllm-qwen38-nvfp4,sglang-qwen38)'
+kubectl -n airgap-ai-stack get pods -l llm-d.ai/model=qwen-3.8-27b -L llm-d.ai/engine-type
 kubectl -n airgap-ai-stack logs deployment/llmd-qwen-test-epp | tail -50   # endpoint picked, no dial errors
 curl -s $STACK_BASE_URL/v1/chat/completions -H "Authorization: Bearer sk-…" \
   -d '{"model":"qwen-3.8-27b","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'
@@ -171,7 +138,8 @@ curl -s $STACK_BASE_URL/v1/chat/completions -H "Authorization: Bearer sk-…" \
 ## Reachability from the cluster
 
 In-cluster engines are addressed over Service DNS: vLLM at
-`vllm-qwen38-nvfp4:8000`, SGLang at `sglang-qwen38:30000`, ninfer at
+`vllm-qwen38-nvfp4:8000`, SGLang at `sglang-qwen38:8000` (both only from EPP
+and Prometheus), ninfer at
 `ninfer-qwen38:18080` (`inference.ninfer.host`/`port` in
 `helm/airgap-stack/values.yaml` — unlike llama.cpp, ninfer is always an
 in-cluster Deployment, never a host-run container; see

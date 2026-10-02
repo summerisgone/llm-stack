@@ -131,7 +131,7 @@ tracked files in clear text. Rotating a credential means changing it in
 | `PAT_COOKIE_KEY` | `.env` — rotating it invalidates dashboard sessions |
 | `WEBUI_SECRET_KEY` | `.env` — rotating it invalidates stored OAuth tokens, so `system_oauth` chat stops working until users sign in again |
 | Langfuse API keys and init password | `.env` |
-| `SGLANG_API_KEY` | `.env` — the upstream bearer token the gateway injects toward SGLang; also the value the SGLang container is started with |
+| `NINFER_API_KEY` | `.env` - the upstream bearer token the gateway injects toward ninfer; also the value ninfer is started with. vLLM and SGLang run without a key, reachable only from EPP and Prometheus (NetworkPolicy `inference-pool-members`) |
 | `EXTERNAL_API_KEY` | `.env` — same, for the `externalApi` backend |
 
 Moving the manifest-resident values into the `airgap-runtime` Secret (which

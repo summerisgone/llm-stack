@@ -10,7 +10,7 @@ integrated, with ninfer and llama.cpp as the worked examples. Read
 
 - [Pick the pattern](#pick-the-pattern)
 - [Pattern A: extra model name (llama.cpp, external API)](#pattern-a-extra-model-name-llamacpp-external-api)
-- [Pattern B: live engine under the canonical name (ninfer)](#pattern-b-live-engine-under-the-canonical-name-ninfer)
+- [Pattern B: in-cluster engine under its own name (ninfer)](#pattern-b-in-cluster-engine-under-its-own-name-ninfer)
 - [Pattern C: first-class behind EPP](#pattern-c-first-class-behind-epp)
 - [Metrics contract](#metrics-contract)
 - [ninfer](#ninfer)
@@ -23,8 +23,8 @@ integrated, with ninfer and llama.cpp as the worked examples. Read
 | Pattern | Model name | Queue and fair share | Needs from the engine | Example |
 | --- | --- | --- | --- | --- |
 | A. extra model name | its own (`llamacpp-local`) | no | OpenAI API | llama.cpp, external API |
-| B. live engine, direct route | `qwen-3.8-27b` | no | OpenAI API, same model | ninfer |
-| C. behind EPP | `qwen-3.8-27b` | yes | OpenAI API, Prometheus `/metrics` in a shape EPP understands | vLLM, SGLang |
+| B. in-cluster engine, own name | its own (`qwen-3.8-27b-ninfer`) | no | OpenAI API | ninfer |
+| C. behind EPP, pool member | `qwen-3.8-27b` | yes | OpenAI API, Prometheus `/metrics` in a shape EPP understands | vLLM, SGLang |
 
 The deciding question for C is whether llm-d's `core-metrics-extractor` knows
 the engine (built in: `vllm`, `sglang`, `trtllm-serve`, `triton-tensorrt-llm`,
@@ -56,33 +56,38 @@ and put an upstream key, if the engine needs one, in `.env`
 is no queue in front of it. For a new engine type, copy the llamacpp blocks
 under a new `inference.<name>` key.
 
-## Pattern B: live engine under the canonical name (ninfer)
+## Pattern B: in-cluster engine under its own name (ninfer)
 
-The engine takes over `qwen-3.8-27b` by retargeting the existing rule
-(`openai-qwen38nvfp4` and the catch-all `openai` in `llmd.yaml`) to its own
-backend. Clients see no change; EPP is skipped. For ninfer this is
-`inference.ninfer.enabled` (objects exist) plus `inference.ninfer.live`
-(route points at it), and `make engine-up` sets `live` from
-`INFERENCE_ENGINE=ninfer`. A second engine of this kind would need its own
-`live` flag in the same two rules and its own case in the Makefile's
-`ENGINE_DEPLOYMENT_*` and `HELM_ENGINE_SETS`.
+Pattern A for an engine that runs as an in-cluster GPU Deployment: a chart
+like `helm/ninfer-inference` (GPU request, `nodeSelector` and toleration for
+the GPU workers, no `llm-d.ai/model` label), a Makefile `<name>-up` with
+`--set replicas=$(<NAME>_REPLICAS)` and a case in `engines-up`, and in
+`helm/airgap-stack` a `Backend`/`AIServiceBackend` pair plus one exact-match
+rule on its own model name. For ninfer that is `inference.ninfer.enabled`
+and `inference.ninfer.modelName: qwen-3.8-27b-ninfer`, rule `openai-ninfer`
+in `llmd.yaml` ([ADR 0019](../../adr/0019-inference-plane-gpu-worker-nodes.md)).
+It does not take over `qwen-3.8-27b`: that would turn fair share off for
+every client of the pool.
 
-The price: no bands, no per-user fairness, and whatever API gaps the engine
-has (ninfer refuses JSON-mode `response_format`).
+The price for its own clients: no bands, no per-user fairness, and whatever
+API gaps the engine has (ninfer refuses JSON-mode `response_format`). On one
+GPU it answers only while the pool has 0 replicas.
 
 ## Pattern C: first-class behind EPP
 
-For an engine EPP understands:
+For an engine EPP understands, the new engine's pods join the
+`qwen-3.8-27b` pool:
 
-1. An engine chart like `helm/sglang-inference`: one replica, `Recreate`,
-   `nvidia.com/gpu: 1`, the shared model PVC, pod labels
-   `app.kubernetes.io/name: <deployment>` and `llm-d.ai/engine-type: <type>`.
-2. Makefile: `ENGINE_DEPLOYMENT_<name>`, `EPP_PORT_<name>`, add it to
-   `ENGINES` and to `EPP_ENGINE`, and a `<name>-up` target.
-3. If it needs an upstream key, a Secret plus `BackendSecurityPolicy` on
-   `llmd-qwen-test-openai` like `sglang-api-key` in `llmd.yaml`.
-4. A Prometheus scrape job and dashboards (below).
-5. Test the switch both ways with `make engine-up`.
+1. An engine chart like `helm/sglang-inference`: `Recreate`,
+   `nvidia.com/gpu: 1`, the GPU worker `nodeSelector` and toleration, port
+   8000, no API key, pod labels `llm-d.ai/model: <served name>` and
+   `llm-d.ai/engine-type: <type>`.
+2. Makefile: `<NAME>_REPLICAS`, `ENGINE_DEPLOYMENT_<name>`, a `<name>-up`
+   target with `--set replicas=$(<NAME>_REPLICAS)`, and its cases in
+   `engines-up`.
+3. A Prometheus scrape job (pod discovery, port 8000) and dashboards (below).
+4. Test it with replicas 1 and the others 0, then mixed if there are GPUs
+   for it: `llm_d_epp_ready_endpoints` counts every member.
 
 ## Metrics contract
 
@@ -129,7 +134,7 @@ are scraped today. Details: [deploy/llamacpp](../../../deploy/llamacpp/README.md
 
 - [ ] OpenAI-compatible chat completions, streaming and `usage` verified directly against the engine
 - [ ] Chart or host run documented; image pinned in `versions.lock.env`
-- [ ] Route: pattern A values, pattern B `live` flag, or pattern C EPP wiring
+- [ ] Route: pattern A or B values and rule, or pattern C pool labels
 - [ ] Upstream key in `.env` and a `BackendSecurityPolicy`, if needed
 - [ ] Open WebUI `model_ids` updated when a new model name appears
 - [ ] Prometheus scrape job and at least an `up` panel

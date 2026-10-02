@@ -116,9 +116,9 @@ User accounts themselves are managed in Keycloak; see
 - **Limits:** 60 requests per minute per user on the model route (HTTP 429
   above it) and 30 MCP tool calls per minute per user and server
   ([tuning](configuration/tuning.md#rate-limits)).
-- **With `INFERENCE_ENGINE=ninfer`,** JSON-mode `response_format` is refused
-  by the engine; features that rely on it (some title or tool helpers)
-  degrade.
+- **On `qwen-3.8-27b-ninfer`,** JSON-mode `response_format` is refused by
+  the engine; features that rely on it (some title or tool helpers)
+  degrade. `qwen-3.8-27b` is not affected.
 - **Chats are stored** in Open WebUI's SQLite on its PVC, and every prompt and
   answer is also traced to Langfuse
   ([data and retention](observability/data-and-retention.md)).

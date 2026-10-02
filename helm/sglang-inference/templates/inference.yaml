@@ -36,6 +36,10 @@ spec:
         # EPP builds read.
         llm-d.ai/engine-type: sglang
         inference.networking.k8s.io/engine-type: sglang
+        # The model's InferencePool selects its pods by this label, whatever
+        # the engine (ADR 0019); the NetworkPolicy in helm/airgap-stack
+        # admits only EPP and Prometheus to them.
+        llm-d.ai/model: {{ .Values.inference.servedModelName | quote }}
     spec:
       runtimeClassName: {{ .Values.runtimeClassName }}
       enableServiceLinks: false
@@ -76,13 +80,7 @@ spec:
                 {{- with .Values.inference.mambaFullMemoryRatio }}
                 --mamba-full-memory-ratio {{ . | quote }} \
                 {{- end }}
-                --api-key "$(SGLANG_API_KEY)"
           env:
-            - name: SGLANG_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.apiKeySecret }}
-                  key: apiKey
             - name: HF_HUB_OFFLINE
               value: "1"
             - name: TRANSFORMERS_OFFLINE

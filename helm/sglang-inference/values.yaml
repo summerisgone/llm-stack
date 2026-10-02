@@ -13,13 +13,12 @@ tolerations:
 # PVC that holds the model weights. Defaults to the shared NVFP4 claim created
 # by gpu-objects-up (k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml).
 modelClaim: vllm-qwen38-nvfp4-model
-# Secret containing the `apiKey` field; created by inference-backends.yaml
-# when SGLANG_API_KEY is set in the airgap-stack release.
-apiKeySecret: sglang-api-key
 
 inference:
   servedModelName: qwen-3.8-27b
-  port: 30000
+  # Every pod of a pool listens on the same port (ADR 0019); no --api-key,
+  # the NetworkPolicy in helm/airgap-stack restricts who reaches it.
+  port: 8000
   # GPU-only profile validated on RTX 5090 with three admission slots and no
   # speculative decoding. See ADR 0010 and the 2026-09-08 tuning results.
   trustRemoteCode: true

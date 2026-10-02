@@ -29,14 +29,13 @@ client (Open WebUI | pat-service)
   -> llm-d EPP pod (llmd-qwen-test-epp): Envoy sidecar + ext-proc
        flow control: enqueue per band and per user, dispatch when not saturated
        scheduling: score endpoints, pick one
-  -> engine pod (vLLM :8000 or SGLang :30000), OpenAI API
+  -> engine pod (vLLM or SGLang, :8000), OpenAI API
 ```
 
-The model name clients send, `qwen-3.8-27b` (`inference.modelName`), is the
-same whichever engine is live. The gateway routes by that name; EPP knows
-which engine pods to dispatch to from its `modelServers` selector, which
-`make llmd-up` derives from `INFERENCE_ENGINE`
-([engines](../engines/README.md#switching-the-live-engine)).
+The model name clients send, `qwen-3.8-27b` (`inference.modelName`), names
+a pool, not an engine. The gateway routes by that name; EPP dispatches to
+every vLLM or SGLang pod labelled `llm-d.ai/model=qwen-3.8-27b`
+([engines](../engines/README.md#engine-replicas)).
 
 The AI Gateway also emits one GenAI span per request (prompt, answer, model,
 tokens, user, session) that ends up in Langfuse
@@ -81,7 +80,7 @@ Engine details, switching and adding engines: [engines](../engines/README.md).
 
 | Traffic | Why | Consequence |
 | --- | --- | --- |
-| `qwen-3.8-27b` with `INFERENCE_ENGINE=ninfer` | ninfer has no `/metrics` EPP can read ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | the route points straight at ninfer: no bands, no fairness, only the per-user rate limit |
+| `qwen-3.8-27b-ninfer` | ninfer has no `/metrics` EPP can read ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | its own rule points straight at ninfer: no bands, no fairness, only the per-user rate limit |
 | `llamacpp-local`, `external-api` (when enabled) | their own model names and route rules ([ADR 0006](../../adr/0006-pluggable-inference-backends.md)) | same: no queue in front of them |
 | `bge-m3` embeddings | separate route `embeddings`, own rate limit | not queued with chat |
 
@@ -103,7 +102,7 @@ How to change them from what the metrics show: [tuning](../configuration/tuning.
 - Gateway routes and policies: `helm/airgap-stack/templates/llmd.yaml`,
   `inference-backends.yaml`, `embeddings.yaml`; values `inference.*`
 - EPP: `config/llmd/router-nvfp4-values.yaml`, `make llmd-up`
-- Engines: `helm/*-inference/values.yaml`, `make engine-up`
+- Engines: `helm/*-inference/values.yaml`, `make engines-up`
 - Runbooks: [inference-backends.md](../../operations/inference-backends.md),
   [vllm-inference.md](../../operations/vllm-inference.md)
 

@@ -70,7 +70,7 @@ flowchart TD
     aigw["ai-gateway-private<br/>JWT check, per-user rate limit, model-name route"]
     aigw --> epp["llm-d EPP<br/>queue, bands, fairness"]
     epp --> engine["vLLM or SGLang"]
-    aigw -. "INFERENCE_ENGINE=ninfer" .-> ninfer["ninfer"]
+    aigw -. "qwen-3.8-27b-ninfer" .-> ninfer["ninfer"]
 
     agentchat --> owui2["Open WebUI"] --> broker["agent-broker<br/>(agents ns)"]
     broker --> pod["agent pod<br/>&lt;runtime&gt;-agent-&lt;id&gt; (gVisor)"]
@@ -123,7 +123,7 @@ Every Kubernetes object has exactly one owner
 | `k8s/base` | profile-neutral workloads | rendered into `helm/airgap-stack` by `scripts/helm-render` |
 | `k8s/overlays/remote-wsl-vllm-nvfp4` | GPU prerequisites and site patches of the remote profile | same render; GPU objects by `make gpu-objects-up` |
 | `helm/airgap-stack` | routing, AI Gateway routes, rate limits, rendered workloads | `make helm-up` |
-| `helm/vllm-inference`, `helm/sglang-inference`, `helm/ninfer-inference`, `helm/embeddings-inference` | one engine each | `make engine-up`, `make embeddings-up` |
+| `helm/vllm-inference`, `helm/sglang-inference`, `helm/ninfer-inference`, `helm/embeddings-inference` | one engine each | `make engines-up`, `make embeddings-up` |
 | `config/llmd/router-nvfp4-values.yaml` | the llm-d EPP release | `make llmd-up` |
 | `k8s/agents`, `config/agents` | agent-broker and the agent catalog | `make agents-up`, `make agent-catalog` |
 | `helm/web-search`, `helm/repowise` | the MCP servers | `make websearch-up`, `make repowise-up` |

@@ -43,7 +43,7 @@ kubectl --context wsl-llm-stack get nodes
 | Изменение | Команда |
 | --- | --- |
 | Что угодно в манифестах или `helm/airgap-stack` | `make verify`, затем `make helm-up` |
-| Живой движок | `INFERENCE_ENGINE` в `.env`, затем `make engine-up` ([движки](engines/README.ru.md#переключение-живого-движка)) |
+| Реплики движков | `VLLM_REPLICAS` / `SGLANG_REPLICAS` / `NINFER_REPLICAS` в `.env`, затем `make engines-up` ([движки](engines/README.ru.md#реплики-движков)) |
 | Флаги движка | `make vllm-up` / `sglang-up` / `ninfer-up` |
 | EPP | `make llmd-up` |
 | Дашборды, Grafana | `make monitoring-up` |
@@ -102,12 +102,12 @@ scripts/kc-pat-issue <username> <password> [name] [days]       # PAT без бр
 | --- | --- | --- |
 | Один пользователь Open WebUI получает 401 от модели | Open WebUI потерял сохранённую OAuth-сессию этого пользователя (`No OAuth session found`, в шлюзе `Jwt_is_missing`) | пользователь выходит и входит заново; `offline_access` (ставится `helm-up`) делает это редкостью |
 | Все PAT разом падают с 401 | истёк закэшированный токен шлюза у pat-service (`Jwt_is_expired` в логе Envoy шлюза) | `kubectl -n airgap-ai-stack rollout restart deploy/pat-service`; проверить срок жизни токена клиента `pat-gateway` в Keycloak |
-| Запросы висят, `llm_d_epp_ready_endpoints` 0, алерт stale-эндпоинтов | EPP не читает метрики движка: неверный селектор или метка движка, движок не Ready | `make engine-up` с правильным `INFERENCE_ENGINE`; если всё совпадает - перезапустить EPP (`make llmd-up` или удалить под) |
+| Запросы висят, `llm_d_epp_ready_endpoints` 0, алерт stale-эндпоинтов | ни один член пула не Ready, или EPP не читает его метрики (нет метки `llm-d.ai/model` или `llm-d.ai/engine-type`) | проверить реплики vLLM/SGLang и метки подов; если всё совпадает - перезапустить EPP (`make llmd-up` или удалить под) |
 | Показатели KV и очереди в EPP застыли на 0 под нагрузкой | устаревшее состояние EPP после смены движка (растёт `llm_d_epp_datalayer_extract_errors_total`) | перезапустить EPP; если повторится - `router.epp.flags.v: 4`, чтобы поймать `extract failed` |
 | Ложные 504 на длинных запросах | не хватает таймаута на edge или маршруте | таймауты - 10 минут на edge и маршруте ([инференс](inference/README.ru.md#таймауты-и-лимиты-на-пути)) |
-| Запросы в JSON-режиме падают с 400 | живой ninfer отказывает в `response_format` | ожидаемо при `INFERENCE_ENGINE=ninfer` |
-| Под движка в `Pending`, `Insufficient nvidia.com/gpu` | GPU занят другим движком | `make engine-up` сначала останавливает остальные |
-| LLM-движок падает при старте после рестарта эмбеддингов | эмбеддинги на GPU заняли память первыми | порядок старта: движок, затем эмбеддинги (`engine-up` так и делает) |
+| Запросы в JSON-режиме падают с 400 | запрос ушёл в `qwen-3.8-27b-ninfer`; ninfer отказывает в `response_format` | ожидаемо; используйте `qwen-3.8-27b` |
+| Под движка в `Pending`, `Insufficient nvidia.com/gpu` | GPU занят другим движком | держите сумму реплик равной числу GPU; `make engines-up` сначала останавливает обнулённые движки |
+| LLM-движок падает при старте после рестарта эмбеддингов | эмбеддинги на GPU заняли память первыми | порядок старта: движок, затем эмбеддинги (`engines-up` так и делает) |
 | `kubectl` "connection refused" на порту туннеля | SSH-туннель оборвался | снова `make k3s-tunnel` |
 
 ## Известные пробелы
@@ -119,7 +119,7 @@ scripts/kc-pat-issue <username> <password> [name] [days]       # PAT без бр
 - Чарт llm-d ставится по digest, но образ EPP в нём - изменяемый тег
   `main` (`IfNotPresent`; digest в `versions.lock.env` записан, но не
   применяется), так что новый узел может скачать другую сборку.
-- При `INFERENCE_ENGINE=vllm` и эмбеддингах на GPU `gpuMemoryUtilization:
+- При репликах vLLM и эмбеддингах на GPU `gpuMemoryUtilization:
   0.94` у vLLM оставляет меньше памяти GPU, чем измеренный пик эмбеддингов
   (ADR 0018 мерил его под ninfer); перед тяжёлой нагрузкой на эмбеддинги под
   vLLM его нужно уменьшить.

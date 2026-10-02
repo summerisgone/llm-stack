@@ -149,14 +149,14 @@ throughput and the exact launch flags for the reference site are in
 
 ## Additional backends and model routing
 
-vLLM is the always-on default, but not the only engine that can answer the
-canonical `qwen-3.8-27b` model: SGLang is a swap-in replacement, reached the
-same way, through llm-d EPP (see "Inference profile" above and
-[ADR 0008](../adr/0008-per-user-fair-share.md) "SGLang portability"). Which
-one EPP dispatches to is `config/llmd/router-nvfp4-values.yaml`'s
-`router.modelServers` block, set by `make llmd-up` from `INFERENCE_ENGINE`
-in `.env` (`make engine-up` switches engines), never a gateway routing change — the
-`AIGatewayRoute/llmd` rule for `qwen-3.8-27b` always points at EPP.
+The canonical `qwen-3.8-27b` model is a pool, not an engine
+([ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)): llm-d EPP
+dispatches to every vLLM or SGLang pod labelled `llm-d.ai/model=qwen-3.8-27b`
+(`config/llmd/router-nvfp4-values.yaml` `router.modelServers`), so both
+engines can serve it at once. Capacity is replicas per engine
+(`VLLM_REPLICAS`, `SGLANG_REPLICAS` in `.env`, `make engines-up`), never a
+gateway routing change -- the `AIGatewayRoute/llmd` rule for `qwen-3.8-27b`
+always points at EPP.
 
 llama.cpp and an external OpenAI-compatible API (the same role LM Studio
 plays for the `local-mac` profile) are wired differently: each is its own
@@ -174,15 +174,14 @@ for how to bring one up or switch engines.
 SGLang runs in the cluster as its own Helm release (`helm/sglang-inference`,
 `make sglang-up`), mounting the same read-only model PVC under the same
 `nvidia` RuntimeClass, and is reached over Service DNS at
-`sglang-qwen38.airgap-ai-stack.svc.cluster.local:30000`. llama.cpp is still a
+`sglang-qwen38.airgap-ai-stack.svc.cluster.local:8000`. llama.cpp is still a
 host Docker container (`deploy/llamacpp`), reached at
 `host.k3d.internal:8090` — k3d's own DNS alias for the host's Docker bridge
 gateway; `deploy/sglang-qwen38` keeps the same host path for bring-up and
 benchmarking.
 
-This host has one GPU: vLLM and SGLang cannot serve concurrently. Enabling
+This host has one GPU: one engine pod runs at a time. Enabling
 `inference.<name>.enabled` for llama.cpp/external-api only advertises the
-model at the gateway; it never starts or stops the engine behind it. The
-in-cluster engine (vLLM, SGLang or ninfer) is chosen by `INFERENCE_ENGINE`
-in `.env`: `make stack-up` brings that one up, and `make engine-up` switches
-between them.
+model at the gateway; it never starts or stops the engine behind it. ninfer
+is its own model name, `qwen-3.8-27b-ninfer`, on a direct rule; it answers
+while `NINFER_REPLICAS` is above 0.

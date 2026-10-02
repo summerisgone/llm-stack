@@ -61,7 +61,7 @@ Job-ы сбора прикладного Prometheus
 | Job | Цель | Префикс метрик | Что показывает |
 | --- | --- | --- | --- |
 | `vllm-qwen38-nvfp4` | `:8000/metrics` | `vllm:` | очередь движка, занятость KV, TTFT, пропускная способность, попадания в префиксный кэш |
-| `sglang-qwen38` | `:30000/metrics` | `sglang:` | то же для SGLang |
+| `sglang-qwen38` | `:8000/metrics` | `sglang:` | то же для SGLang |
 | `ninfer` | sidecar `:9400` | `ninfer_` | переэкспортированный лог запросов ninfer |
 | `embeddings-bge-m3` | `:80` | метрики text-embeddings-inference | сервер эмбеддингов |
 | `llmd-epp` | EPP `:9090` | `llm_d_epp_` (и устаревший `inference_extension_`) | очереди по полосам, насыщение, TTFT по пользователям, готовые и устаревшие эндпоинты |

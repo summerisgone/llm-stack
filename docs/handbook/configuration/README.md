@@ -39,7 +39,7 @@ From `.env.example` (every key there must be set on a real site) plus the option
 | Langfuse bootstrap and client | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `LANGFUSE_INIT_*` | Langfuse first start, OTEL Collector export |
 | pat-service | `PAT_HASH_KEY`, `PAT_COOKIE_KEY` (32+ bytes each; rotating the hash key kills every PAT), `PAT_GATEWAY_CLIENT_SECRET` | pat-service, Keycloak client `pat-gateway` |
 | Open WebUI | `WEBUI_SECRET_KEY` (keep stable), `OPENWEBUI_AUTOMATIONS_PAT` | Open WebUI sessions, the Automations connection |
-| Engines | `INFERENCE_ENGINE` (`vllm`, `sglang`, `ninfer`), `SGLANG_API_KEY`, `NINFER_API_KEY`, `EXTERNAL_API_KEY` | `make engine-up`, `helm-up`, `llmd-up` |
+| Engines | `VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS`, `NINFER_API_KEY`, `EXTERNAL_API_KEY` | `make engines-up`, `<engine>-up`, `helm-up` |
 | Feature flags | `WEB_SEARCH_ENABLED`, `REPOWISE_ENABLED` | pat-service, Open WebUI tools, agents, `stack-up` ([MCP](../mcp/README.md)) |
 | Site | `STACK_BASE_URL` (required on the remote profile), `GRAFANA_BASE_URL`, `REPOWISE_PUBLIC_ORIGIN` | Makefile origin substitution, OIDC |
 | repowise | `REPOWISE_API_KEY`, `REPOWISE_OIDC_CLIENT_SECRET`, `REPOWISE_PAT` | `make repowise-up` |
@@ -49,12 +49,12 @@ From `.env.example` (every key there must be set on a real site) plus the option
 ## How .env reaches the cluster
 
 ```
-.env --(Makefile -include)--> make variables: STACK_BASE_URL, INFERENCE_ENGINE, *_ENABLED, ...
+.env --(Makefile -include)--> make variables: STACK_BASE_URL, *_REPLICAS, *_ENABLED, ...
   |
   +--(scripts/helm-env-values)--> helm/airgap-stack/runtime.secret.yaml (gitignored)
           `runtimeEnvironment:` every KEY=VALUE
        --(make helm-up)--> Secret airgap-runtime  --envFrom/secretKeyRef--> workloads
-                      \--> derived Secrets: sglang-api-key, ninfer-api-key, external-api-key
+                      \--> derived Secrets: ninfer-api-key, external-api-key
                       \--> ConfigMap openwebui-tool-servers (entries whose flag is "true")
   +--(make agents-up)--> ConfigMap agents/agent-images (images + MCP flags)
   +--(make repowise-up)--> Secrets repowise, repowise-credential, repowise-oidc
@@ -84,9 +84,9 @@ From `.env.example` (every key there must be set on a real site) plus the option
 | `config/gateway/remote-wsl-values.yaml` | Envoy Gateway controller | `make gateway-up` |
 
 Values set by the Makefile on top of the files: the public origin
-(`oidc.publicBaseURL`, `oidc.externalIssuer` from `STACK_BASE_URL`) and the
-live engine (`inference.sglang.enabled`, `inference.ninfer.live`,
-`router.modelServers.*` from `INFERENCE_ENGINE`).
+(`oidc.publicBaseURL`, `oidc.externalIssuer` from `STACK_BASE_URL`) and each
+engine release's `replicas` (from `VLLM_REPLICAS`, `SGLANG_REPLICAS`,
+`NINFER_REPLICAS`).
 
 ## Service settings in manifests
 
@@ -116,9 +116,9 @@ deploys it.
 
 | Target | Applies |
 | --- | --- |
-| `make stack-up` | everything of the remote profile, in order (gateways, operators, GPU objects, `engine-up`, web search if enabled, provisioning) |
+| `make stack-up` | everything of the remote profile, in order (gateways, operators, GPU objects, `helm-up`, `engines-up`, web search if enabled, provisioning) |
 | `make helm-up` | `airgap-stack`: routes, rate limits, rendered workloads, `airgap-runtime`; then Keycloak client provisioning |
-| `make engine-up` | switch or (re)start the live engine ([engines](../engines/README.md#switching-the-live-engine)) |
+| `make engines-up` | apply every engine's replicas in GPU-safe order ([engines](../engines/README.md#engine-replicas)) |
 | `make vllm-up`, `sglang-up`, `ninfer-up`, `embeddings-up` | one engine release |
 | `make llmd-up` | the EPP release |
 | `make monitoring-up` | Grafana, dashboards, Loki, Tempo |

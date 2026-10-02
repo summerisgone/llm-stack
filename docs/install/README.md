@@ -39,7 +39,7 @@ next piece of work, tracked in
 | k3d API port, model root | `deploy/vllm-qwen38-nvfp4/k3d-create-nvidia` (`K3D_API_PORT`, `K3D_MODEL_ROOT`) |
 | Model directory | `k8s/overlays/remote-wsl-vllm-nvfp4/model-volume.yaml` |
 | Served model name, GPU sizing, launch flags | `helm/vllm-inference/values.yaml` (and `helm/sglang-inference/values.yaml` if SGLang is used) |
-| Live engine | `INFERENCE_ENGINE` in `.env`, applied by `make engine-up` |
+| Engine replicas | `VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS` in `.env`, applied by `make engines-up` |
 | Which backends the gateway advertises | `helm/airgap-stack/values.yaml` (`inference.*.enabled`), `k8s/overlays/remote-wsl-vllm-nvfp4/openwebui-oidc-patch.yaml` (`OPENAI_API_CONFIGS`) |
 | SSH host for remote `kubectl` | `docs/operations/README.md` |
 | Every credential | see [docs/security](../security/README.md) |
@@ -70,9 +70,9 @@ kubectl apply -f k8s/overlays/remote-wsl-vllm-nvfp4/gpu-runtime-smoke.yaml
 kubectl -n airgap-ai-stack logs pod/cuda-runtime-smoke
 kubectl -n airgap-ai-stack delete pod cuda-runtime-smoke
 
-# 6. Deploy. This is the whole stack: prerequisites, GPU objects, the engine
-#    named by INFERENCE_ENGINE in .env (vllm by default), the Helm release
-#    that owns routing, llm-d, and Keycloak client reconciliation.
+# 6. Deploy. This is the whole stack: prerequisites, GPU objects, the Helm
+#    release that owns routing, the engines (*_REPLICAS in .env, one vLLM by
+#    default), llm-d, and Keycloak client reconciliation.
 make stack-up
 
 # 7. Verify.
@@ -80,8 +80,8 @@ make llmd-nvfp4-smoke                               # needs the GPU free
 make smoke-nogpu                                    # everything except the model calls
 
 # 8. Optional: another engine on the same card, e.g. SGLang.
-#    .env: INFERENCE_ENGINE=sglang and SGLANG_API_KEY set, then:
-make engine-up
+#    .env: VLLM_REPLICAS=0 SGLANG_REPLICAS=1, then:
+make engines-up
 ```
 
 Step 6 is the only deploy command for the stack. `kubectl apply -k` on the remote overlay

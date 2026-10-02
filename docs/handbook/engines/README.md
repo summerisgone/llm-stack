@@ -3,17 +3,18 @@
 [Русский](README.ru.md) | [Handbook index](../README.md)
 
 The engine is the process that runs the model on the GPU. vLLM and SGLang are
-first-class: they sit behind llm-d EPP and get queueing and fair share.
-ninfer can take the same model name but bypasses EPP. llama.cpp and external
-OpenAI-compatible APIs are extra model names. This page covers the
-first-class engines and the one command that switches between all three
-in-cluster engines; [adding an engine](adding-an-engine.md) covers the rest.
+first-class: their pods are members of the `qwen-3.8-27b` pool behind llm-d
+EPP and get queueing and fair share. ninfer cannot join EPP and serves its own
+model name, `qwen-3.8-27b-ninfer`. llama.cpp and external OpenAI-compatible
+APIs are extra model names too. This page covers the pool, the engine
+replicas and the one command that applies them;
+[adding an engine](adding-an-engine.md) covers the rest.
 
 **Contents**
 
 - [Engine matrix](#engine-matrix)
 - [How a first-class engine is wired](#how-a-first-class-engine-is-wired)
-- [Switching the live engine](#switching-the-live-engine)
+- [Engine replicas](#engine-replicas)
 - [Changing an engine's settings](#changing-an-engines-settings)
 - [Embeddings](#embeddings)
 - [Checks after a change](#checks-after-a-change)
@@ -26,76 +27,74 @@ in-cluster engines; [adding an engine](adding-an-engine.md) covers the rest.
 | --- | --- | --- | --- | --- | --- |
 | vLLM 0.27.1 | `qwen-3.8-27b` | `helm/vllm-inference`, `make vllm-up` | yes | native `/metrics` (`vllm:*`) | default |
 | SGLang 0.5.19 | `qwen-3.8-27b` | `helm/sglang-inference`, `make sglang-up` | yes | native `/metrics` (`sglang:*`) | first-class alternative |
-| ninfer | `qwen-3.8-27b` | `helm/ninfer-inference`, `make ninfer-up` | no, direct route | JSONL log re-exported by a sidecar (`ninfer_*`) | pilot |
+| ninfer | `qwen-3.8-27b-ninfer` | `helm/ninfer-inference`, `make ninfer-up` | no, direct route | JSONL log re-exported by a sidecar (`ninfer_*`) | pilot |
 | llama.cpp | `llamacpp-local` | host Docker, `deploy/llamacpp` | no | none | optional, off |
 | external API | `external-api` | not managed | no | none | optional, off |
 | bge-m3 (embeddings) | `bge-m3` | `helm/embeddings-inference`, `make embeddings-up` | no, own route | native | on |
 
-All in-cluster engines mount the same read-only model PV and request
-`nvidia.com/gpu: 1`, so only one can run.
+Every engine pod requests `nvidia.com/gpu: 1` and runs on a GPU worker
+(`node-role/inference=true`,
+[ADR 0019](../../adr/0019-inference-plane-gpu-worker-nodes.md)). With one GPU,
+one engine pod runs at a time.
 
 ## How a first-class engine is wired
 
 ```
 AIGatewayRoute llmd, rule openai-qwen38nvfp4 (model == qwen-3.8-27b)
   -> AIServiceBackend llmd-qwen-test-openai            (never an engine directly)
-  -> EPP: InferencePool selector app.kubernetes.io/name=<engine deployment>, port 8000|30000
-  -> engine pod, labelled llm-d.ai/engine-type=vllm|sglang
+  -> EPP: InferencePool selector llm-d.ai/model=qwen-3.8-27b, port 8000
+  -> any vLLM or SGLang pod with that label, llm-d.ai/engine-type=vllm|sglang
 ```
 
-Three things must agree for EPP to dispatch to an engine, and
-`make engine-up` sets all three from one variable:
+Two labels on the pod, both set by the engine chart, make it a pool member:
 
-1. **The selector and port** in EPP's `router.modelServers`
-   (`LLMD_ENGINE_SETS` in the Makefile, passed to `make llmd-up`).
-2. **The engine-type label** on the pod (`llm-d.ai/engine-type`, set by the
-   engine chart). EPP's `core-metrics-extractor` reads it to know the metric
-   names for queue depth and KV use; without it EPP assumes vLLM, the metrics
-   do not parse and the endpoint goes stale.
-3. **The upstream key.** SGLang requires a bearer token. With
-   `inference.sglang.enabled=true` (set by `make helm-up` when
-   `INFERENCE_ENGINE=sglang`) the airgap-stack chart creates the
-   `sglang-api-key` Secret from `SGLANG_API_KEY` and a
-   `BackendSecurityPolicy` that injects it on the EPP path. vLLM needs none.
+1. **`llm-d.ai/model`** (the chart's `inference.servedModelName`): EPP's
+   `router.modelServers.matchLabels` in `config/llmd/router-nvfp4-values.yaml`
+   selects on it, on port 8000 for every engine.
+2. **`llm-d.ai/engine-type`**: EPP's `core-metrics-extractor` reads it to
+   know the metric names for queue depth and KV use. Without it EPP assumes
+   vLLM, SGLang metrics do not parse and the endpoint goes stale. vLLM and
+   SGLang pods can therefore share the pool.
 
-The gateway rule itself never changes between vLLM and SGLang. For ninfer the
-same rule is pointed at ninfer's own backend (`inference.ninfer.live=true`).
+Engines run without an API key. The NetworkPolicy `inference-pool-members`
+(`helm/airgap-stack/templates/llmd.yaml`) admits only the EPP pod and
+Prometheus to port 8000 of any pod with `llm-d.ai/model`.
 
-## Switching the live engine
+ninfer is not a pool member: rule `openai-ninfer` (model ==
+`qwen-3.8-27b-ninfer`) goes straight to its `AIServiceBackend`, with its
+API key injected by the gateway and no EPP queueing or fair share.
 
-The live engine is one variable in `.env`:
+## Engine replicas
+
+Capacity is replicas per engine, set in `.env`:
 
 ```sh
 # .env
-INFERENCE_ENGINE=sglang        # vllm | sglang | ninfer
+VLLM_REPLICAS=0
+SGLANG_REPLICAS=1
+NINFER_REPLICAS=0
 ```
 
 ```sh
-make engine-up
+make engines-up
 ```
 
-`engine-up` runs, in this order:
+`engines-up` runs, in this order:
 
 1. scales the GPU embeddings pod to 0 (the LLM engine must start first,
    [ADR 0013](../../adr/0013-embeddings-api-bge-m3.md));
-2. scales the other engines to 0 and waits for their pods to go;
-3. `make helm-up`: routes `qwen-3.8-27b` (to EPP, or straight to ninfer) and
-   creates the engine's API key Secret;
-4. `make <engine>-up` and waits until the engine is Ready (model load takes
-   a few minutes);
-5. `make llmd-up`: points EPP at the engine;
-6. `make embeddings-up` and scales embeddings back to 1.
+2. applies the engines going to 0 and waits for their pods to go;
+3. applies the others with `make <engine>-up` and waits until they are Ready
+   (model load takes a few minutes);
+4. `make llmd-up`;
+5. `make embeddings-up` and scales embeddings back to 1.
 
-Clients keep sending `qwen-3.8-27b`; requests fail during the switch, so warn
-users first. `helm-up` and `llmd-up` read `INFERENCE_ENGINE` every time they
-run, so keep `.env` equal to what is running: a plain `make helm-up` with a
-stale value re-routes the model name. A one-off
-`make engine-up INFERENCE_ENGINE=vllm` works for that invocation only.
-`make stack-up` brings up the engine named in `.env` the same way.
-
-Committed values (`inference.sglang.enabled`, `inference.ninfer.live`,
-`router.modelServers`) are render defaults for vLLM; they no longer record
-which engine a site runs.
+`make <engine>-up` alone applies that engine's values with its replica
+count from `.env`. With one GPU keep the total at 1: `qwen-3.8-27b` answers
+while vLLM or SGLang has a replica, `qwen-3.8-27b-ninfer` while ninfer has
+one. Moving the GPU between vLLM and SGLang changes nothing for clients;
+moving it to ninfer leaves `qwen-3.8-27b` without endpoints, so warn users
+first. With more GPUs, vLLM and SGLang replicas add up in one pool.
 
 ## Changing an engine's settings
 
@@ -103,7 +102,7 @@ Launch flags are values, not manifests: `helm/vllm-inference/values.yaml`
 (`maxModelLen`, `maxNumSeqs`, `gpuMemoryUtilization`, ...) and
 `helm/sglang-inference/values.yaml` (`contextLength`, `maxRunningRequests`,
 `memFractionStatic`, ...). Apply with `make vllm-up` / `make sglang-up`
-while that engine is live; only its pod restarts. What each value does and
+while that engine has replicas; only its pods restart. What each value does and
 how they trade against each other: [KV cache](../inference/kv-cache.md).
 When the GPU embeddings server is on, restart it after the engine
 (`kubectl -n airgap-ai-stack rollout restart deploy/embeddings-bge-m3`).
@@ -137,16 +136,16 @@ kubectl -n airgap-ai-stack get aigatewayroute llmd -o jsonpath='{range .spec.rul
 make llmd-nvfp4-smoke      # PAT issue, inference, rate limit, revoke (STACK_BASE_URL set)
 ```
 
-On EPP's `:9090/metrics`, `llm_d_epp_ready_endpoints` is 1 for vLLM or
-SGLang (0 with ninfer, which EPP does not serve), and
+On EPP's `:9090/metrics`, `llm_d_epp_ready_endpoints` equals the vLLM plus
+SGLang replicas (0 while only ninfer runs, which EPP does not serve), and
 `llm_d_epp_flow_control_stale_endpoints` stays 0.
 
 ## Where it lives
 
 - Charts: `helm/vllm-inference`, `helm/sglang-inference`,
   `helm/ninfer-inference`, `helm/embeddings-inference`
-- Switch logic: `Makefile` (`INFERENCE_ENGINE`, `engine-up`,
-  `LLMD_ENGINE_SETS`, `HELM_ENGINE_SETS`)
+- Replicas: `Makefile` (`VLLM_REPLICAS`, `SGLANG_REPLICAS`,
+  `NINFER_REPLICAS`, `engines-up`)
 - Gateway rules: `helm/airgap-stack/templates/llmd.yaml`,
   `inference-backends.yaml`
 - Images: `versions.lock.env`; the vLLM image is built on the GPU host

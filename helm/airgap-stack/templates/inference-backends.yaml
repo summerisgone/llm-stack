@@ -6,12 +6,9 @@
 # AIGatewayRoute rules live in llmd.yaml, next to the vLLM rule they extend.
 # See docs/adr/0006-pluggable-inference-backends.md.
 #
-# SGLang is deliberately not here: it shares the canonical `qwen-3.8-27b`
-# model name with vLLM and is always reached through llm-d EPP instead (the
-# same AIGatewayRoute rule and AIServiceBackend as vLLM, in llmd.yaml) so
-# that switching the live engine never drops fair-share queueing. See
-# TASK-qos-fair-share.md §7.1 and docs/adr/0008-per-user-fair-share.md
-# "SGLang portability".
+# vLLM and SGLang are deliberately not here: they are members of the
+# `qwen-3.8-27b` pool behind llm-d EPP (llmd.yaml, ADR 0019), so their
+# traffic never skips fair-share queueing.
 {{- if .Values.inference.llamacpp.enabled }}
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
@@ -97,15 +94,9 @@ spec:
 # above, but ninfer runs as an in-cluster Deployment (helm/ninfer-inference,
 # make ninfer-up) requesting its own nvidia.com/gpu: "1" -- unlike llamacpp's
 # host-run container, its host/port is a k8s Service DNS name, not
-# host.k3d.internal. It still cannot join llm-d EPP itself (see ADR-0015
-# Instructions §6) -- but unlike llamacpp/externalApi, it does not get its
-# own model name/route either: when inference.ninfer.live is true, the
-# canonical qwen-3.8-27b rule in llmd.yaml points straight at
-# ninfer-openai below instead of the EPP backend, so an engine swap is
-# invisible to clients. This Backend/AIServiceBackend pair (and its
-# BackendSecurityPolicy below) are the same regardless of `live` --
-# `enabled` alone just means "ninfer is deployed and reachable", `live`
-# is the separate switch for "the shared name currently points at it".
+# host.k3d.internal. It cannot join llm-d EPP (see ADR-0015 Instructions
+# §6), so like llamacpp/externalApi it is its own model name
+# (inference.ninfer.modelName) with its own rule in llmd.yaml (ADR 0019).
 {{- if .Values.inference.ninfer.enabled }}
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
@@ -133,7 +124,7 @@ spec:
     prefix: /v1
 {{- if .Values.runtimeEnvironment.NINFER_API_KEY }}
 ---
-# ninfer-serve enforces --api-key like sglang does; unlike llamacpp (no
+# ninfer-serve enforces --api-key; unlike llamacpp (no
 # auth), the gateway must inject it on the way to ninfer's own AIServiceBackend.
 # Same secret name the ninfer-inference chart's apiKeySecret value expects,
 # so both the inbound (server --api-key) and outbound (gateway Authorization

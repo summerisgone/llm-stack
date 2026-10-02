@@ -36,6 +36,10 @@ spec:
         # EPP builds read.
         llm-d.ai/engine-type: vllm
         inference.networking.k8s.io/engine-type: vllm
+        # The model's InferencePool selects its pods by this label, whatever
+        # the engine (ADR 0019); the NetworkPolicy in helm/airgap-stack
+        # admits only EPP and Prometheus to them.
+        llm-d.ai/model: {{ .Values.inference.servedModelName | quote }}
     spec:
       runtimeClassName: {{ .Values.runtimeClassName }}
       enableServiceLinks: false

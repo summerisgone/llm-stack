@@ -12,16 +12,16 @@ Task brief: `~/agent/ninfer-pilot-task.md`.
 in-cluster Deployment (`helm/ninfer-inference`), bypassing llm-d's EPP
 fair-share queue -- it cannot join EPP itself, see "EPP / fair-share" below.
 
-**Seamless swap under the canonical model name, not its own.** Unlike
-llama.cpp/externalApi, ninfer does not advertise a `ninfer-*` model id.
-`inference.ninfer.live` (`helm/airgap-stack/values.yaml`) toggles whether
-the one shared `openai-qwen38nvfp4` route rule (`llmd.yaml`) points at
-ninfer's direct backend or at llm-d EPP (vLLM/SGLang) -- clients keep
-sending `model: qwen-3.8-27b` unchanged across the swap, same as a
-vLLM<->SGLang engine change. The cost of that seamlessness is real, not
-free: see "Compatibility gaps" below, in addition to losing EPP fair-share.
+**Its own model name since ADR 0019: `qwen-3.8-27b-ninfer`.** Like
+llama.cpp/externalApi, ninfer has its own exact-match rule (`openai-ninfer`
+in `llmd.yaml`) to its direct backend; `qwen-3.8-27b` always stays on the
+llm-d EPP pool. Clients opt in by sending `model: qwen-3.8-27b-ninfer`, and
+the gaps below ("Compatibility gaps", no EPP fair-share) apply only to them.
+On one GPU it answers only while `NINFER_REPLICAS` is 1 and the pool's
+replicas are 0 (`make engines-up`).
 
-**Live on this cluster as of 2026-09-19** (`inference.ninfer.live: true`).
+**Ran live on this cluster from 2026-09-19** under the canonical name (the
+retired `inference.ninfer.live` switch).
 `ninfer-qwen38` is `Running` (2/2: engine + `jsonl_exporter` sidecar),
 `usage.prompt_tokens`/`completion_tokens` confirmed non-zero on
 `POST /v1/chat/completions` with `model: qwen-3.8-27b` (MTP speculative
@@ -80,26 +80,18 @@ k3d image import ghcr.io/summerisgone/ninfer:latest -c llm-stack
 # 3. Create the PVC (adds to gpu-objects-up's GPU_OBJECTS list)
 make gpu-objects-up
 
-# 4. Set NINFER_API_KEY in .env (same pattern as SGLANG_API_KEY), then
+# 4. Set NINFER_API_KEY in .env, then
 make helm-up      # creates the ninfer-api-key Secret + BackendSecurityPolicy
-make ninfer-up    # helm/ninfer-inference
+# 5. .env: NINFER_REPLICAS=1 and the pool's VLLM_REPLICAS/SGLANG_REPLICAS=0
+make engines-up   # helm/ninfer-inference
 ```
 
-`inference.ninfer.enabled` wires the Backend/AIServiceBackend and the
-`ninfer-api-key` Secret (deployed, reachable, but not yet the one clients
-hit). `inference.ninfer.live` is the separate switch that actually points
-the canonical `qwen-3.8-27b` route rule at it:
-
-```sh
-helm upgrade --install airgap-stack helm/airgap-stack \
-  --namespace airgap-ai-stack --values helm/airgap-stack/values.yaml \
-  --set inference.ninfer.enabled=true --set inference.ninfer.live=true
-```
+`inference.ninfer.enabled` wires the Backend/AIServiceBackend, the
+`ninfer-api-key` Secret and the `openai-ninfer` rule.
 
 `inference.ninfer.modelName` in `helm/airgap-stack/values.yaml` and
 `inference.servedModelName` in `helm/ninfer-inference/values.yaml` are both
-`qwen-3.8-27b` -- the same name vLLM/SGLang use, not a ninfer-specific one.
-Keep the two in sync (ninfer's own `--model-id` must equal the route's
+`qwen-3.8-27b-ninfer`. Keep the two in sync (ninfer's own `--model-id` must equal the route's
 match value or requests get rejected as a model-id mismatch, per upstream
 `docs/serving.md`).
 
@@ -248,9 +240,8 @@ Track this decision here, not by rediscovering it from a latency spike.
 
 ## Compatibility gaps (not just EPP fair-share)
 
-`inference.ninfer.live: true` makes ninfer answer for the same model name
-real clients already use, so gaps here are user-visible the moment it is
-flipped, not scoped to a `ninfer-*` opt-in name anymore.
+These gaps are visible to clients of `qwen-3.8-27b-ninfer` only; clients
+that need them stay on `qwen-3.8-27b`.
 
 ### No constrained/JSON-mode output at all
 
@@ -288,8 +279,8 @@ one confirmed to actually bite in practice so far.
 
 `core-metrics-extractor.defaultEngine` (`config/llmd/router-nvfp4-values.yaml`)
 is **not** set to `ninfer`, and ninfer is **not** routed through llm-d's EPP
--- `inference.ninfer.live` only retargets the AI Gateway route rule
-(`llmd.yaml`), never the EPP `modelServers` block. Two independent reasons,
+-- its `openai-ninfer` rule (`llmd.yaml`) goes straight to its backend, and
+its pods carry no `llm-d.ai/model` label, so the EPP pool never selects them. Two independent reasons,
 not one:
 
 - Whether the installed llm-d chart recognizes any `defaultEngine` value

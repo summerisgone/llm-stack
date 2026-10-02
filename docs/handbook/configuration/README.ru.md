@@ -41,7 +41,7 @@
 | Bootstrap и клиент Langfuse | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `LANGFUSE_INIT_*` | первый старт Langfuse, экспорт из OTEL Collector |
 | pat-service | `PAT_HASH_KEY`, `PAT_COOKIE_KEY` (каждый от 32 байт; смена ключа хэша убивает все PAT), `PAT_GATEWAY_CLIENT_SECRET` | pat-service, клиент Keycloak `pat-gateway` |
 | Open WebUI | `WEBUI_SECRET_KEY` (держать стабильным), `OPENWEBUI_AUTOMATIONS_PAT` | сессии Open WebUI, подключение Automations |
-| Движки | `INFERENCE_ENGINE` (`vllm`, `sglang`, `ninfer`), `SGLANG_API_KEY`, `NINFER_API_KEY`, `EXTERNAL_API_KEY` | `make engine-up`, `helm-up`, `llmd-up` |
+| Движки | `VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS`, `NINFER_API_KEY`, `EXTERNAL_API_KEY` | `make engines-up`, `<engine>-up`, `helm-up` |
 | Флаги функций | `WEB_SEARCH_ENABLED`, `REPOWISE_ENABLED` | pat-service, инструменты Open WebUI, агенты, `stack-up` ([MCP](../mcp/README.ru.md)) |
 | Площадка | `STACK_BASE_URL` (обязателен на удалённом профиле), `GRAFANA_BASE_URL`, `REPOWISE_PUBLIC_ORIGIN` | подстановка origin в Makefile, OIDC |
 | repowise | `REPOWISE_API_KEY`, `REPOWISE_OIDC_CLIENT_SECRET`, `REPOWISE_PAT` | `make repowise-up` |
@@ -51,12 +51,12 @@
 ## Как .env попадает в кластер
 
 ```
-.env --(Makefile -include)--> переменные make: STACK_BASE_URL, INFERENCE_ENGINE, *_ENABLED, ...
+.env --(Makefile -include)--> переменные make: STACK_BASE_URL, *_REPLICAS, *_ENABLED, ...
   |
   +--(scripts/helm-env-values)--> helm/airgap-stack/runtime.secret.yaml (в .gitignore)
           `runtimeEnvironment:` каждая пара KEY=VALUE
        --(make helm-up)--> Secret airgap-runtime  --envFrom/secretKeyRef--> нагрузки
-                      \--> производные Secret-ы: sglang-api-key, ninfer-api-key, external-api-key
+                      \--> производные Secret-ы: ninfer-api-key, external-api-key
                       \--> ConfigMap openwebui-tool-servers (записи, чей флаг "true")
   +--(make agents-up)--> ConfigMap agents/agent-images (образы и MCP-флаги)
   +--(make repowise-up)--> Secret-ы repowise, repowise-credential, repowise-oidc
@@ -85,9 +85,9 @@
 | `config/gateway/remote-wsl-values.yaml` | контроллер Envoy Gateway | `make gateway-up` |
 
 Значения, которые Makefile ставит поверх файлов: публичный origin
-(`oidc.publicBaseURL`, `oidc.externalIssuer` из `STACK_BASE_URL`) и живой
-движок (`inference.sglang.enabled`, `inference.ninfer.live`,
-`router.modelServers.*` из `INFERENCE_ENGINE`).
+(`oidc.publicBaseURL`, `oidc.externalIssuer` из `STACK_BASE_URL`) и
+`replicas` каждого релиза движка (из `VLLM_REPLICAS`, `SGLANG_REPLICAS`,
+`NINFER_REPLICAS`).
 
 ## Настройки сервисов в манифестах
 
@@ -117,9 +117,9 @@ Grafana); vLLM и llm-d (версия чарта и digest-ы, образ EPP и
 
 | Цель | Применяет |
 | --- | --- |
-| `make stack-up` | весь удалённый профиль по порядку (шлюзы, операторы, GPU-объекты, `engine-up`, веб-поиск, если включён, провижининг) |
+| `make stack-up` | весь удалённый профиль по порядку (шлюзы, операторы, GPU-объекты, `helm-up`, `engines-up`, веб-поиск, если включён, провижининг) |
 | `make helm-up` | `airgap-stack`: маршруты, rate limit-ы, отрендеренные нагрузки, `airgap-runtime`; затем провижининг клиентов Keycloak |
-| `make engine-up` | переключить или (пере)запустить живой движок ([движки](../engines/README.ru.md#переключение-живого-движка)) |
+| `make engines-up` | применить реплики всех движков в безопасном для GPU порядке ([движки](../engines/README.ru.md#реплики-движков)) |
 | `make vllm-up`, `sglang-up`, `ninfer-up`, `embeddings-up` | один релиз движка |
 | `make llmd-up` | релиз EPP |
 | `make monitoring-up` | Grafana, дашборды, Loki, Tempo |

@@ -29,14 +29,13 @@ GPU и как размен контекста на параллелизм).
   -> под llm-d EPP (llmd-qwen-test-epp): sidecar Envoy + ext-proc
        flow control: очередь по полосе и по пользователю, отправка, пока нет насыщения
        scheduling: скоринг эндпоинтов, выбор одного
-  -> под движка (vLLM :8000 или SGLang :30000), OpenAI API
+  -> под движка (vLLM или SGLang, :8000), OpenAI API
 ```
 
 Имя модели, которое шлют клиенты, `qwen-3.8-27b` (`inference.modelName`),
-одинаково при любом живом движке. Шлюз маршрутизирует по этому имени; в какие
-поды движка отправлять, EPP знает из селектора `modelServers`, который
-`make llmd-up` выводит из `INFERENCE_ENGINE`
-([движки](../engines/README.ru.md#переключение-живого-движка)).
+обозначает пул, а не движок. Шлюз маршрутизирует по этому имени; EPP
+отправляет запросы в любой под vLLM или SGLang с меткой
+`llm-d.ai/model=qwen-3.8-27b` ([движки](../engines/README.ru.md#реплики-движков)).
 
 AI Gateway также создаёт по одному GenAI-спану на запрос (промпт, ответ,
 модель, токены, пользователь, сессия), который попадает в Langfuse
@@ -81,7 +80,7 @@ pat-service никогда не придерживает запрос; см.
 
 | Трафик | Почему | Следствие |
 | --- | --- | --- |
-| `qwen-3.8-27b` при `INFERENCE_ENGINE=ninfer` | у ninfer нет `/metrics`, которые мог бы читать EPP ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | маршрут указывает прямо на ninfer: ни полос, ни справедливости, только rate limit на пользователя |
+| `qwen-3.8-27b-ninfer` | у ninfer нет `/metrics`, которые мог бы читать EPP ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | своё правило указывает прямо на ninfer: ни полос, ни справедливости, только rate limit на пользователя |
 | `llamacpp-local`, `external-api` (если включены) | свои имена моделей и правила маршрута ([ADR 0006](../../adr/0006-pluggable-inference-backends.md)) | то же: очереди перед ними нет |
 | эмбеддинги `bge-m3` | отдельный маршрут `embeddings`, свой rate limit | в общую очередь с чатом не попадают |
 
@@ -103,7 +102,7 @@ pat-service никогда не придерживает запрос; см.
 - Маршруты и политики шлюза: `helm/airgap-stack/templates/llmd.yaml`,
   `inference-backends.yaml`, `embeddings.yaml`; values `inference.*`
 - EPP: `config/llmd/router-nvfp4-values.yaml`, `make llmd-up`
-- Движки: `helm/*-inference/values.yaml`, `make engine-up`
+- Движки: `helm/*-inference/values.yaml`, `make engines-up`
 - Runbook-и: [inference-backends.md](../../operations/inference-backends.md),
   [vllm-inference.md](../../operations/vllm-inference.md)
 
