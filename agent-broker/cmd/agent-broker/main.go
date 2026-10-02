@@ -31,6 +31,9 @@ type server struct {
 	backend  Backend
 	catalog  *Catalog
 	client   *http.Client
+	// pipe lists the runtimes served over the interaction protocol
+	// (interact.go, docs/adr/0021).
+	pipe map[string]bool
 }
 
 func env(key, def string) string {
@@ -165,10 +168,16 @@ func main() {
 		slots:   slots,
 		backend: backend,
 		catalog: catalog,
+		pipe:    map[string]bool{},
 		// No overall timeout: agent turns run for minutes. The request
 		// context cancels the upstream call when the client goes away.
 		client: &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 0,
 			DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext}},
+	}
+	for _, name := range strings.Split(os.Getenv("AGENT_PIPE_RUNTIMES"), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			s.pipe[name] = true
+		}
 	}
 	srv := &http.Server{Addr: env("LISTEN_ADDR", ":8080"), Handler: s.routes(),
 		ReadHeaderTimeout: 10 * time.Second}
@@ -208,6 +217,8 @@ func (s *server) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /v1/models", s.withUser(s.models))
 	mux.HandleFunc("POST /v1/chat/completions", s.withUser(s.chat))
+	mux.HandleFunc("POST /v1/agent/turns", s.withUser(s.turn))
+	mux.HandleFunc("POST /v1/agent/permissions", s.withUser(s.permission))
 	return mux
 }
 

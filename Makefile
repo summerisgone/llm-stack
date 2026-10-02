@@ -20,7 +20,7 @@ ENGINE_DEPLOYMENT_vllm = vllm-qwen38-nvfp4
 ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test openwebui-agent-pipe websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -564,6 +564,13 @@ agents-test:
 	python3 -m unittest discover -s agent-catalog -p 'test_*.py'
 	cd agent-broker && go vet ./... && go test ./...
 	cd agent-adapter && node --test
+	python3 -m unittest discover -s config/openwebui -p 'test_*.py'
+
+# Installs or updates the Open WebUI agent Pipe (config/openwebui/
+# agent_pipe.py, docs/adr/0021) through the admin API, with one model per
+# runtime in AGENT_PIPE_RUNTIMES. Needs OPENWEBUI_API_KEY (an admin's key).
+openwebui-agent-pipe:
+	STACK_BASE_URL=$(STACK_BASE_URL) AGENT_PIPE_RUNTIMES=$(AGENT_PIPE_RUNTIMES) ./scripts/openwebui-agent-pipe
 
 # Applies k8s/agents, then the values it cannot hold itself because they
 # come from versions.lock.env and .env (WEB_SEARCH_ENABLED, docs/adr/0017;
@@ -582,6 +589,7 @@ agents-up:
 		--from-literal=DSH_PUBLIC_ORIGIN=$(DSH_PUBLIC_ORIGIN) \
 		--from-literal=WEB_SEARCH_ENABLED=$(or $(WEB_SEARCH_ENABLED),false) \
 		--from-literal=REPOWISE_ENABLED=$(or $(REPOWISE_ENABLED),false) \
+		--from-literal=AGENT_PIPE_RUNTIMES=$(AGENT_PIPE_RUNTIMES) \
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n agents set image deployment/agent-broker catalog-index=$(AGENT_CATALOG_IMAGE) broker=$(AGENT_BROKER_IMAGE)
 	$(KUBECTL) -n agents rollout restart deployment/agent-broker

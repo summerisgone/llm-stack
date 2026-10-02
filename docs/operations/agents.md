@@ -109,12 +109,67 @@ kubectl -n airgap-ai-stack get securitypolicy dsh-web -o jsonpath='{.status.ance
 kubectl -n agents logs deploy/agent-broker | grep 'dsh web'
 ```
 
-Symptoms: a 403 "untrusted host" page from dsh means the `Host` the pod got
+Symptoms: a login loop or `CSRF_token_validation_failed` in the edge log
+with `"url":"http://...` inside the OIDC `state` means Envoy lost the site
+proxy's `X-Forwarded-Proto` (ClientTrafficPolicy `edge-external-site-proxy`
+missing, or the proxy not sending it); a 403 "untrusted host" page from dsh means the `Host` the pod got
 is not the public authority (check `DSH_WEB_HOST` in the pod env); a loop
 back to Keycloak means the `dsh-web` client's redirect URI does not match
 `DSH_PUBLIC_ORIGIN/oauth2/callback`. `dsh web` never prints its launch
 token to the logs unmasked; the broker fetches it from agent-adapter
 `/web-token`.
+
+## Interactive agent Pipe (dsh)
+
+[ADR 0021](../adr/0021-openwebui-pipe-and-acp-agent-integration.md). An Open
+WebUI Pipe (`config/openwebui/agent_pipe.py`, function `agent_pipe`) offers
+`DeepSeek agent (personal, interactive)` next to the connection-2 model.
+It shows tool progress as status lines and collapsible blocks, asks the
+user in a browser confirmation dialog before each tool the agent wants
+permission for, and Stop cancels the turn.
+
+Path: Pipe -> broker `POST /v1/agent/turns` and `/v1/agent/permissions`
+(user's Keycloak token from the Pipe's `__oauth_token__`) -> agent-adapter
+same paths -> dsh over ACP stdio. The broker-to-adapter protocol is NDJSON
+events per turn plus a permission POST (`agent-broker/cmd/agent-broker/
+interact.go`); it is not ACP. There is no reconnect: closing the turn's
+response (Stop, closed tab, broker restart) cancels the turn and any
+pending permission request, and the Pipe reports a stream that ended
+without `done` as an unknown outcome.
+
+Rules the adapter enforces:
+
+- Denial, a timeout (`PERMISSION_TIMEOUT_SECONDS`, default 300; the Pipe
+  gives up after 270), a closed browser or an API client without one is a
+  rejection; approval is `allow_once` only.
+- The chat's earlier user messages must contain every prompt the agent
+  session already received, in order (hashes in the PVC's
+  `agent-turns.json`). Edit, regenerate and branching from an earlier
+  message are refused with a message; the user starts a new chat.
+- A chat started on the `dsh-agent` connection continues the same dsh
+  session; a chat the agent has no session for gets a notice that earlier
+  messages are not in its context.
+- Attachments are refused, not dropped.
+
+Enable, per runtime (only `dsh` is supported):
+
+1. `.env`: `AGENT_PIPE_RUNTIMES=dsh`, then `make agents-up` (broker).
+2. `make openwebui-agent-pipe` (admin `OPENWEBUI_API_KEY` in `.env`):
+   creates or updates the function from the repository, activates it and
+   sets its `MODELS` valve. The agent images must include this
+   agent-adapter (`make agent-adapter-images` or the GHCR build).
+
+Rollback: `AGENT_PIPE_RUNTIMES=` and both commands again. The Pipe stays
+installed with no models; `dsh-agent` on connection 2 is unchanged, and
+chats keep their dsh sessions.
+
+Checks:
+
+```sh
+kubectl -n agents get configmap agent-images -o jsonpath='{.data.AGENT_PIPE_RUNTIMES}'
+kubectl -n agents logs deploy/agent-broker | grep 'agent turn'
+kubectl -n agents logs <dsh-agent-pod> -c agent | grep 'agent turn failed'
+```
 
 ## Deploy and update
 

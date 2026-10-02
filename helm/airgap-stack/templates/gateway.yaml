@@ -35,3 +35,24 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
+---
+# ADR 0004: the site proxy terminates TLS and is the one hop in front of the
+# external listener. Trusting it makes Envoy keep the proxy's
+# X-Forwarded-Proto (https) instead of overwriting it with the plaintext
+# scheme, and take the client IP from its X-Forwarded-For. Envoy's own OIDC
+# (dsh-web, repowise) builds its post-login redirect from that scheme; with
+# http there the browser comes back without the session cookies and loops.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: edge-external-site-proxy
+  namespace: {{ .Values.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: edge
+      sectionName: external
+  clientIPDetection:
+    xForwardedFor:
+      numTrustedHops: 1

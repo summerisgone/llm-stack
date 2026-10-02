@@ -30,12 +30,14 @@ class Endpoints:
             self.issuer = f"{sso_base}/realms/{self.realm}"
             self.dashboard = f"{base}/platform"
             self.api = f"{base}/v1"
+            self.webui = base
         else:
             self.mode = "host"
             sso_base = "http://sso.ai.localhost:8080/sso"
             self.issuer = f"{sso_base}/realms/{self.realm}"
             self.dashboard = "http://tokens.ai.localhost:8080"
             self.api = "http://api.ai.localhost:8080/v1"
+            self.webui = "http://ai.localhost:8080"
 
     def open(self, method, url, data=None, headers=None):
         headers = dict(headers or {})

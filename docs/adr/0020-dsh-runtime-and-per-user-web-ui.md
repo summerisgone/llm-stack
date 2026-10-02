@@ -64,7 +64,10 @@ What the dsh sources say:
    (`helm/airgap-stack/templates/dsh-web.yaml`) matches that host and sends
    everything to agent-broker's web proxy (`agents/agent-broker:8081`,
    ReferenceGrant in `k8s/agents`). Route timeout off (cold start,
-   WebSocket).
+   WebSocket). ClientTrafficPolicy `edge-external-site-proxy` trusts the
+   site proxy as one hop, so Envoy keeps its `X-Forwarded-Proto: https`:
+   Envoy's OIDC builds the post-login redirect from it, and with `http` the
+   browser returns without the session cookies and loops through Keycloak.
 5. **Authentication.** SecurityPolicy `dsh-web`: Envoy OIDC with Keycloak
    client `dsh-web` (`make provision-dsh-oidc`), `forwardAccessToken`. The
    broker verifies the token like a chat request (`ai-user` / `ai-admin`),
