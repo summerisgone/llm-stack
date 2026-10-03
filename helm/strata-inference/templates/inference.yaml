@@ -67,6 +67,9 @@ metadata:
     app.kubernetes.io/name: {{ .Values.name }}
 spec:
   replicas: {{ .Values.replicas }}
+  # A cold node cache is a 127 GB fill from MinIO before the engine starts;
+  # the default 10 minutes marks the rollout failed while it is still copying.
+  progressDeadlineSeconds: 3600
   strategy:
     type: Recreate
   selector:
