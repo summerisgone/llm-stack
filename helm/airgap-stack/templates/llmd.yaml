@@ -226,6 +226,21 @@ spec:
       backendRefs:
         - name: ninfer-openai
     {{- end }}
+    # Strata, like ninfer: its own model name on a direct route, sharing the
+    # GPU with the pool (deploy/strata/README.md).
+    {{- if .Values.inference.strata.enabled }}
+    - name: openai-strata
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ .Values.inference.strata.modelName }}
+      timeouts:
+        request: 10m
+      streamIdleTimeout: 10m
+      backendRefs:
+        - name: strata-openai
+    {{- end }}
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy

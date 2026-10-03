@@ -49,3 +49,21 @@ e5d078b00e6c1223b32444db8c1001dc71d86ceef8ee706b5bf084c3a43a1f9c  models/RadixAr
 ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003  models/RadixArk-Qwen3.8-27B-NVFP4/vocab.json
 # ninfer v3 artifact, single file (helm/ninfer-inference). Hashed 2026-10-02.
 74d2c57145e6ff11d1d2faa79594477f9bc903a611af1fb20218189fbbb77d82  models/qwen3_8_27b_nvfp4.ninfer
+# Strata Qwen3.8-Flash-Next IQ3_S, prepared by Strata setup.py (deploy/strata/README.md). Hashed 2026-10-03.
+4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3  models/strata-qwen3.8-flash-next-iq3_s/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf
+316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113  models/strata-qwen3.8-flash-next-iq3_s/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf
+c724dc0b0822ada5d2977bf5bde821605feabaa64ea2e0045b67ca656329070a  models/strata-qwen3.8-flash-next-iq3_s/mtp/rt/dense.bin
+991456cf4eb266eb8a888c349e548d11bc640f5dbd9149439aa9786af0f732fd  models/strata-qwen3.8-flash-next-iq3_s/mtp/rt/dense.txt
+b1e1d3a7a9e4bf862dcd5923ce661fb59bbd07907e594df5cf86a62ac235cb91  models/strata-qwen3.8-flash-next-iq3_s/mtp/rt/draft_vocab.bin
+09398406be61f1f54c93861f449e48b8df0bfccbc9ec9b2b7636775a6ea9244f  models/strata-qwen3.8-flash-next-iq3_s/mtp/rt/experts.bin
+51df3cd6ffd0d38c2da8e2d3a95a604b4a96c20b06fc639a9bf477282a42b86a  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/conversions.json
+d2af3d8331e5c7a1985d1d589747230f9d56719a6d33c7cddc9ee6b81cde6b13  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/dense.bin
+ed9d0a872b4d9fb992a05f3f5114107b0689767f0d95e2fb7e2ffe091000e67c  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/experts.bin
+5a18d0c1f89ac64c08998010c81536fcd6b67557778f8f2dfc36539ad0150cad  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/experts.bin.src.json
+b2a014878c3b61d6a6f915e194055a5e68ede34f9465dd1cb13249d902f008ac  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/index.txt
+d9ac2dfa3ee63c55c9c6a6db26f72da0cec0ee41733f007e5cbbbba71617aa5d  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/native_experts.txt
+12827f24b742ea4e80cdc12dbcf9622227056b9f797252a3149263d4f9aaadce  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/tokenizer/chat_template.jinja
+4ba698529766c7a2f5052083ea10cdf2485577f5237a332ee291054eb11e3332  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/tokenizer/merges.txt
+5088c8c298fc06af8382ddb3b76c888703ac2634e82263b97eedcc2ad202738b  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/tokenizer/token_type.json
+c0bd435efbc6c3b28964b47999afe16c4ad268c7c7c4e8cb3af410796a6f30bf  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/tokenizer/tokenizer.json
+4ba64f0332abcfb0b600b7df1537d1e836e68009d5fb7cdb77339738dc6365c4  models/strata-qwen3.8-flash-next-iq3_s/packs/iq3_s/tokenizer/vocab.json

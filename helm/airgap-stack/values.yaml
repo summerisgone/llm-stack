@@ -91,6 +91,16 @@ inference:
     host: ninfer-qwen38.airgap-ai-stack.svc.cluster.local
     port: 18080
     modelName: qwen-3.8-27b-ninfer
+  # Strata (deploy/strata/README.md): Qwen3.8-Flash-Next IQ3_S as an
+  # in-cluster Deployment (helm/strata-inference, make strata-up), its own
+  # model name on a direct rule like ninfer -- no EPP queue or fair share.
+  # Strata serves one request at a time behind its own FIFO. Requires the
+  # strata-api-key Secret from helm-up (STRATA_API_KEY in .env).
+  strata:
+    enabled: true
+    host: strata-flash-next.airgap-ai-stack.svc.cluster.local
+    port: 8000
+    modelName: qwen-3.8-flash-next
   # bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Unlike
   # llamacpp/externalApi above, this flag also controls a second
   # AIGatewayRoute (templates/embeddings.yaml), not just a rule inside

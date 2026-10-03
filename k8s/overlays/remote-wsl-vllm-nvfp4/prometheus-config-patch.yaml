@@ -62,6 +62,22 @@ data:
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_node_name]
             target_label: node
+      # Strata (deploy/strata/README.md): its /metrics is JSON; this scrapes
+      # the metrics-exporter sidecar (helm/strata-inference) on :9400.
+      - job_name: strata
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [airgap-ai-stack]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
+            regex: strata-flash-next;9400
+            action: keep
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
       - job_name: embeddings-bge-m3
         metrics_path: /metrics
         kubernetes_sd_configs:

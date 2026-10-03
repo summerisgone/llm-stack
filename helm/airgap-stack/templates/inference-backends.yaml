@@ -155,6 +155,64 @@ spec:
 {{- end }}
 {{- end }}
 ---
+# Strata (deploy/strata/README.md): an in-cluster Deployment
+# (helm/strata-inference, make strata-up) under its own model name
+# (inference.strata.modelName), the same shape as ninfer above.
+{{- if .Values.inference.strata.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: strata
+  namespace: {{ .Values.namespace }}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: {{ .Values.inference.strata.host }}
+        port: {{ .Values.inference.strata.port }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: strata-openai
+  namespace: {{ .Values.namespace }}
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: strata
+  schema:
+    name: OpenAI
+    prefix: /v1
+{{- if .Values.runtimeEnvironment.STRATA_API_KEY }}
+---
+# serve/server.py enforces --api-key (STRATA_API_KEY); the gateway injects
+# the same value. The strata-inference chart's apiKeySecret reads it too.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: strata-api-key
+  namespace: {{ .Values.namespace }}
+type: Opaque
+stringData:
+  apiKey: {{ .Values.runtimeEnvironment.STRATA_API_KEY | quote }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: strata-api-key
+  namespace: {{ .Values.namespace }}
+spec:
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: strata-api-key
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: strata-openai
+{{- end }}
+{{- end }}
+---
 # bge-m3 embeddings (docs/adr/0013-embeddings-api-bge-m3.md). Direct backend
 # like llamacpp/externalApi above, but its AIGatewayRoute is a separate
 # object (templates/embeddings.yaml), not a rule inside `llmd` -- see that

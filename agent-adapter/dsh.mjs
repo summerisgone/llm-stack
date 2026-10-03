@@ -8,13 +8,18 @@
 // and permission requests reach the user only on the interaction path
 // (server.mjs /v1/agent/turns, docs/adr/0021).
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 export async function start({ home, cwd }) {
   const dshHome = join(home, 'dsh')
   mkdirSync(cwd, { recursive: true })
+  // fsGroup makes kubelet add group rw to the profile volume at every mount;
+  // dsh refuses a credentials file readable beyond its owner.
+  try {
+    chmodSync(join(dshHome, '.credentials.yaml'), 0o600)
+  } catch {}
   const env = { ...process.env, DSH_HOME: dshHome }
   const exit = (name) => (code) => {
     console.error(JSON.stringify({ msg: `${name} exited`, code }))

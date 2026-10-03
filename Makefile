@@ -10,17 +10,19 @@ include versions.lock.env
 -include .env
 
 # Engine capacity is replicas per engine (ADR 0019). vLLM and SGLang pods are
-# members of the qwen-3.8-27b pool behind EPP; ninfer is its own model name
-# (qwen-3.8-27b-ninfer). Set the counts in .env; `make engines-up` applies
+# members of the qwen-3.8-27b pool behind EPP; ninfer (qwen-3.8-27b-ninfer)
+# and Strata (qwen-3.8-flash-next) are their own model names. Set the counts in .env; `make engines-up` applies
 # them. One GPU here: keep the total at 1. docs/handbook/engines/README.md.
 VLLM_REPLICAS ?= 1
 SGLANG_REPLICAS ?= 0
 NINFER_REPLICAS ?= 0
+STRATA_REPLICAS ?= 0
 ENGINE_DEPLOYMENT_vllm = vllm-qwen38-nvfp4
 ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
+ENGINE_DEPLOYMENT_strata = strata-flash-next
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test openwebui-agent-pipe websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down strata-up strata-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test openwebui-agent-pipe websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -258,10 +260,29 @@ ninfer-up:
 ninfer-down:
 	$(HELM) uninstall $(NINFER_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
 
+# Strata, Qwen3.8-Flash-Next IQ3_S under its own model name (deploy/strata/README.md).
+# Requires the image imported on the GPU node, the model in MinIO
+# (scripts/models-upload) and the strata-api-key Secret from helm-up
+# (STRATA_API_KEY in .env). One GPU: the other engines must be at 0.
+STRATA_CHART = helm/strata-inference
+STRATA_RELEASE = strata-inference
+
+strata-up:
+	$(HELM) upgrade --install $(STRATA_RELEASE) $(STRATA_CHART) \
+		--namespace $(K8S_NAMESPACE) \
+		--values $(STRATA_CHART)/values.yaml \
+		--set replicas=$(STRATA_REPLICAS) \
+		--take-ownership \
+		$(HELM_FORCE_CONFLICTS) \
+		--wait --timeout 30m
+
+strata-down:
+	$(HELM) uninstall $(STRATA_RELEASE) --namespace $(K8S_NAMESPACE) --ignore-not-found
+
 # bge-m3 embeddings deployment (docs/adr/0013-embeddings-api-bge-m3.md). Edit
 # helm/embeddings-inference/values.yaml, then run `make embeddings-up`.
 # `accelerator: cpu` (the default) has no ordering constraint. `accelerator:
-# gpu` is refused unless the live LLM engine (vLLM, SGLang or ninfer) already has a
+# gpu` is refused unless the live LLM engine (vLLM, SGLang, ninfer or Strata) already has a
 # Running pod -- the ADR's fixed start order, checked here since Helm itself
 # has no notion of "another release's Deployment is Ready".
 EMBEDDINGS_CHART = helm/embeddings-inference
@@ -270,9 +291,9 @@ EMBEDDINGS_RELEASE = embeddings-inference
 embeddings-up:
 	@accel=$$(awk '/^accelerator:/{print $$2; exit}' $(EMBEDDINGS_CHART)/values.yaml); \
 	if [ "$$accel" = "gpu" ]; then \
-		running=$$($(KUBECTL) -n $(K8S_NAMESPACE) get pods -l 'app.kubernetes.io/name in (vllm-qwen38-nvfp4,sglang-qwen38,ninfer-qwen38)' --field-selector=status.phase=Running -o name 2>/dev/null); \
+		running=$$($(KUBECTL) -n $(K8S_NAMESPACE) get pods -l 'app.kubernetes.io/name in (vllm-qwen38-nvfp4,sglang-qwen38,ninfer-qwen38,strata-flash-next)' --field-selector=status.phase=Running -o name 2>/dev/null); \
 		if [ -z "$$running" ]; then \
-			echo "embeddings-up: accelerator: gpu requires the live LLM engine (vLLM, SGLang or ninfer) to be Ready first -- see docs/adr/0013-embeddings-api-bge-m3.md 'Start order is fixed'." >&2; \
+			echo "embeddings-up: accelerator: gpu requires the live LLM engine (vLLM, SGLang, ninfer or Strata) to be Ready first -- see docs/adr/0013-embeddings-api-bge-m3.md 'Start order is fixed'." >&2; \
 			exit 1; \
 		fi; \
 	fi
@@ -396,11 +417,11 @@ endif
 	$(MAKE) provision-realm-security
 	$(MAKE) provision-openwebui-offline-access
 
-# Apply VLLM_REPLICAS, SGLANG_REPLICAS and NINFER_REPLICAS in the order a
+# Apply VLLM_REPLICAS, SGLANG_REPLICAS, NINFER_REPLICAS and STRATA_REPLICAS in the order a
 # shared GPU allows: GPU embeddings and the engines going to 0 stop first,
 # then the others start, then EPP, then GPU embeddings (ADR 0013 start
 # order). Changing which engine serves is a replica change (ADR 0019).
-engine_replicas = $(if $(filter vllm,$(1)),$(VLLM_REPLICAS),$(if $(filter sglang,$(1)),$(SGLANG_REPLICAS),$(NINFER_REPLICAS)))
+engine_replicas = $(if $(filter vllm,$(1)),$(VLLM_REPLICAS),$(if $(filter sglang,$(1)),$(SGLANG_REPLICAS),$(if $(filter strata,$(1)),$(STRATA_REPLICAS),$(NINFER_REPLICAS))))
 engines-up:
 	@accel=$$(awk '/^accelerator:/{print $$2; exit}' $(EMBEDDINGS_CHART)/values.yaml); \
 	if [ "$$accel" = gpu ] && $(KUBECTL) -n $(K8S_NAMESPACE) get deployment/embeddings-bge-m3 >/dev/null 2>&1; then \
@@ -418,14 +439,19 @@ engines-up:
 		$(MAKE) ninfer-up && \
 		$(KUBECTL) -n $(K8S_NAMESPACE) wait --for=delete pod -l app.kubernetes.io/name=$(ENGINE_DEPLOYMENT_ninfer) --timeout=5m; \
 	fi
+	@if [ "$(call engine_replicas,strata)" = 0 ]; then \
+		$(MAKE) strata-up && \
+		$(KUBECTL) -n $(K8S_NAMESPACE) wait --for=delete pod -l app.kubernetes.io/name=$(ENGINE_DEPLOYMENT_strata) --timeout=5m; \
+	fi
 	@if [ "$(call engine_replicas,vllm)" != 0 ]; then $(MAKE) vllm-up; fi
 	@if [ "$(call engine_replicas,sglang)" != 0 ]; then $(MAKE) sglang-up; fi
 	@if [ "$(call engine_replicas,ninfer)" != 0 ]; then $(MAKE) ninfer-up; fi
+	@if [ "$(call engine_replicas,strata)" != 0 ]; then $(MAKE) strata-up; fi
 	$(MAKE) llmd-up
 	$(MAKE) embeddings-up
 	$(KUBECTL) -n $(K8S_NAMESPACE) scale deployment/embeddings-bge-m3 --replicas=1
 	$(KUBECTL) -n $(K8S_NAMESPACE) rollout status deployment/embeddings-bge-m3 --timeout=10m
-	@printf 'Engine replicas: vllm=%s sglang=%s ninfer=%s\n' '$(VLLM_REPLICAS)' '$(SGLANG_REPLICAS)' '$(NINFER_REPLICAS)'
+	@printf 'Engine replicas: vllm=%s sglang=%s ninfer=%s strata=%s\n' '$(VLLM_REPLICAS)' '$(SGLANG_REPLICAS)' '$(NINFER_REPLICAS)' '$(STRATA_REPLICAS)'
 
 # Compatibility aliases for the previous target names.
 nvfp4-up: stack-up

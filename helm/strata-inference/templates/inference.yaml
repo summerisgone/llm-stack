@@ -1,0 +1,206 @@
+{{- $q := .Values.inference.quant -}}
+{{- $shard := printf "/model/models/%s/Qwen3.8-Flash-Next-GSQ-RCO-%s-0000%%d-of-00002.gguf" $q $q -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.name }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Values.name }}
+  ports:
+    - name: http
+      port: {{ .Values.inference.port }}
+      targetPort: http
+    {{- if .Values.metricsExporter.enabled }}
+    - name: metrics
+      port: {{ .Values.metricsExporter.port }}
+      targetPort: metrics
+    {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.name }}
+data:
+  # The engine config Strata's setup.py writes (strata-<quant>.json), with
+  # the paths of the cached model directory mounted at /model.
+  strata.json: |
+    {
+      "exe": "/opt/strata/engine/strata",
+      "args": [
+        "--pack", "/model/packs/{{ lower $q }}",
+        "--native", "{{ printf $shard 1 }}",
+        "--ple-gguf", "{{ printf $shard 2 }}",
+        "--expert-profile", "/opt/strata/data/expert-profile.bin",
+        "--expert-cache", "auto",
+        "--prefill", "auto",
+        "--spec", "{{ .Values.inference.spec }}",
+        "--spec-min-p", "{{ .Values.inference.specMinP }}",
+        "--mtp", "/model/mtp/rt",
+        "--max-context", "{{ .Values.inference.maxContext }}",
+        "--kv", "{{ .Values.inference.kv }}",
+        "--vram-reserve-mib", "{{ .Values.inference.vramReserveMiB }}",
+        "--resident-experts"
+      ],
+      "cwd": "/opt/strata",
+      "tokenizer": "/model/packs/{{ lower $q }}/tokenizer",
+      "model_name": {{ .Values.inference.servedModelName | quote }},
+      "lib_dirs": ["/usr/local/cuda/lib64"]
+    }
+{{- if .Values.metricsExporter.enabled }}
+  metrics_exporter.py: |
+{{ .Files.Get "files/metrics_exporter.py" | indent 4 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Values.name }}
+    spec:
+      runtimeClassName: {{ .Values.runtimeClassName }}
+      enableServiceLinks: false
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      initContainers:
+        # ADR 0019: fill this node's model cache from MinIO and verify it
+        # against models/checksums.txt before the engine starts.
+        - name: model-cache
+          image: {{ .Values.modelCache.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "/scripts/model-cache-fill.sh", {{ .Values.modelCache.model | quote }}]
+          env:
+            - name: MINIO_URL
+              value: {{ .Values.modelCache.minioURL | quote }}
+          securityContext:
+            # The hostPath cache directory is created root-owned.
+            runAsUser: 0
+          volumeMounts:
+            - name: model
+              mountPath: /cache
+            - name: model-cache-scripts
+              mountPath: /scripts
+              readOnly: true
+      containers:
+        # The image's entrypoint runs setup.py, which downloads from Hugging
+        # Face; the server is started directly on the cached model instead.
+        - name: strata
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          workingDir: /opt/strata
+          command: [".venv/bin/python", "serve/server.py", "--engine", "strata",
+                    "--config", "/etc/strata/strata.json",
+                    "--host", "0.0.0.0", "--port", {{ .Values.inference.port | quote }}]
+          env:
+            # serve/server.py reads its --api-key default from here.
+            - name: STRATA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecret }}
+                  key: apiKey
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+          ports:
+            - name: http
+              containerPort: {{ .Values.inference.port }}
+          # The port opens only once the model is loaded.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 900
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: model
+              mountPath: /model
+              subPath: {{ .Values.modelCache.model }}
+              readOnly: true
+            - name: config
+              mountPath: /etc/strata/strata.json
+              subPath: strata.json
+              readOnly: true
+        {{- if .Values.metricsExporter.enabled }}
+        # ADR 0015 Tier 2/3 adapter: polls the server's JSON /metrics on
+        # localhost and re-exposes it as Prometheus text.
+        - name: metrics-exporter
+          image: {{ .Values.metricsExporter.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/opt/metrics_exporter.py"]
+          env:
+            - name: STRATA_URL
+              value: "http://127.0.0.1:{{ .Values.inference.port }}"
+            - name: STRATA_EXPORTER_PORT
+              value: {{ .Values.metricsExporter.port | quote }}
+            - name: STRATA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecret }}
+                  key: apiKey
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metricsExporter.port }}
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 64Mi
+            limits:
+              cpu: "250m"
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /opt/metrics_exporter.py
+              subPath: metrics_exporter.py
+              readOnly: true
+        {{- end }}
+      volumes:
+        - name: model
+          hostPath:
+            path: {{ .Values.modelCache.hostPath }}
+            type: DirectoryOrCreate
+        - name: model-cache-scripts
+          configMap:
+            name: model-cache
+        - name: config
+          configMap:
+            name: {{ .Values.name }}

@@ -3,4 +3,4 @@
 - id: acp
   config:
     provider: pat
-    model: qwen-3.8-27b
+    model: qwen-3.8-27b-ninfer

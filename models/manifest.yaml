@@ -8,6 +8,15 @@ models:
   qwen3_8_27b_nvfp4.ninfer:
     path: models/qwen3_8_27b_nvfp4.ninfer
     sha256_manifest: models/checksums.txt
+  # Strata's prepared IQ3_S (deploy/strata/README.md): the GGUF shards
+  # (models/IQ3_S) at the revision Strata's setup.py pins, plus what its
+  # setup.py builds from them (packs/iq3_s with the low-RAM experts.bin) and
+  # the MTP draft layer it extracts from Qwen/Qwen3.8-Flash-Next (mtp/rt).
+  strata-qwen3.8-flash-next-iq3_s:
+    source: ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF
+    revision: ed59f92082b1e93c0e96d60a8b11aab089b52f09
+    path: models/strata-qwen3.8-flash-next-iq3_s
+    sha256_manifest: models/checksums.txt
   qwen25-0.5b-instruct:
     source: Qwen/Qwen2.5-0.5B-Instruct
     revision: 7ae557604adf67be50417f59c2c2f167def9a775

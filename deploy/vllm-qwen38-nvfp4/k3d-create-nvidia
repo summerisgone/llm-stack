@@ -9,8 +9,11 @@ model_root=${K3D_MODEL_ROOT:-/home/llmstack/models}
 k3s_image=${K3D_K3S_IMAGE:-rancher/k3s:v1.35.5-k3s1}
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-test -f "$model_root/RadixArk-Qwen3.8-27B-NVFP4/config.json" || {
-  printf '%s\n' "Model config not found below: $model_root" >&2
+# The host model store is only the source for scripts/models-upload (ADR
+# 0019): engines read weights from MinIO through the node cache, so no model
+# has to be present here.
+test -d "$model_root" || {
+  printf '%s\n' "Model store directory not found: $model_root" >&2
   exit 1
 }
 for file in \

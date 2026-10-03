@@ -16,8 +16,11 @@ server="k3d-$cluster-server-0"
 node="k3d-$cluster-agent-0"
 local_images=${GPU_AGENT_LOCAL_IMAGES:-"docker.io/llm-stack/vllm-qwen38-nvfp4:0.27.1 docker.io/llm-stack/k8s-device-plugin:0.20.0"}
 
-test -f "$model_root/RadixArk-Qwen3.8-27B-NVFP4/config.json" || {
-  printf '%s\n' "Model config not found below: $model_root" >&2
+# The host model store is only the source for scripts/models-upload (ADR
+# 0019): engines read weights from MinIO through the node cache, so no model
+# has to be present here.
+test -d "$model_root" || {
+  printf '%s\n' "Model store directory not found: $model_root" >&2
   exit 1
 }
 if docker container inspect "$node" >/dev/null 2>&1; then

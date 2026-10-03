@@ -74,10 +74,10 @@ the second node's containerd fails with "too many open files".
 `stack-up` applies the GPU prerequisites from the `remote-wsl-vllm-nvfp4`
 overlay, installs the vLLM server from `helm/vllm-inference`, then the
 application stack and routing from `helm/airgap-stack`, then the llm-d
-standalone router. The overlay creates a static, `Retain` PV and read-only
-PVC rooted at `/var/lib/models/RadixArk-Qwen3.8-27B-NVFP4` in
-`k3d-llm-stack-agent-0`; the node receives that path from
-`/home/llmstack/models` during cluster creation. The Deployment uses
+standalone router. The engine pod's `model-cache` initContainer fills
+`/var/lib/llm-stack/models` on the GPU node from MinIO (ADR 0019); the
+host model store (`K3D_MODEL_ROOT`, mounted read-only at `/var/lib/models`)
+is only the source for `scripts/models-upload`. The Deployment uses
 `RuntimeClass/nvidia`, requests `nvidia.com/gpu: 1`, and `Recreate` so a
 rollout never loads two copies of the 27B model into the single RTX 5090.
 Its launch flags are values in `helm/vllm-inference/values.yaml`; `make
