@@ -82,6 +82,8 @@ def main():
     )
     signature = b64url(hmac.new(cookie_key.encode(), payload.encode(), hashlib.sha256).digest())
     session_cookie = f"{payload}.{signature}"
+    # Session-bound CSRF token (pat-service admin.go csrfToken).
+    csrf_token = b64url(hmac.new(cookie_key.encode(), f"csrf.{session_cookie}".encode(), hashlib.sha256).digest())
 
     body = json.dumps({"name": token_name, "expires_in_days": args.expires_in_days}).encode()
     try:
@@ -89,7 +91,12 @@ def main():
             "POST",
             f"{ep.dashboard}/api/tokens",
             data=body,
-            headers={"Content-Type": "application/json", "Cookie": f"pat_session={session_cookie}"},
+            headers={
+                "Content-Type": "application/json",
+                "Cookie": f"pat_session={session_cookie}",
+                "X-CSRF-Token": csrf_token,
+                "Sec-Fetch-Site": "same-origin",
+            },
         ) as resp:
             created = json.load(resp)
     except urllib.error.HTTPError as e:

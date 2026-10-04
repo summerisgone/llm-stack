@@ -176,7 +176,7 @@ func (a *app) issueAgentToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database unavailable", 503)
 		return
 	}
-	if _, err := tx.Exec(r.Context(), `INSERT INTO personal_access_tokens (id,owner_subject,owner_name,token_hash,token_prefix,name,expires_at,issued_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, id, s.Subject, ownerName, a.tokenHash(value), value[:15], agentTokenName, expires, agentIssuedBy); err != nil {
+	if _, err := tx.Exec(r.Context(), `INSERT INTO personal_access_tokens (id,owner_issuer,owner_subject,owner_name,token_hash,token_prefix,name,expires_at,issued_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, a.cfg.issuer, s.Subject, ownerName, a.tokenHash(value), value[:15], agentTokenName, expires, agentIssuedBy); err != nil {
 		http.Error(w, "could not create token", 500)
 		return
 	}

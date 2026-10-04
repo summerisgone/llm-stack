@@ -48,6 +48,20 @@ spec:
         issuer: {{ .Values.oidc.externalIssuer }}
         remoteJWKS:
           uri: http://keycloak.{{ .Values.namespace }}.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+  # Only pat-service's own client-credentials token is accepted
+  # (docs/adr/0022 section 5): a user's Keycloak token, from Open WebUI or
+  # anywhere else, must go through pat-service's accounting first.
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: pat-service-only
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: azp
+                values: [pat-gateway]
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy

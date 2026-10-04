@@ -22,8 +22,12 @@ spec:
             # serve (helm/airgap-stack/values.yaml inference.modelName) --
             # add/remove entries here in step with which backends are enabled.
             #
-            # Index 1 is a second connection, reached through pat-service
-            # rather than the private gateway directly -- the PAT below is
+            # Index 0 is pat-service's private entry point for the user's
+            # Keycloak token (docs/adr/0022 section 5), not the AI Gateway:
+            # direct chat is accounted like PAT traffic.
+            #
+            # Index 1 is a second connection, reached through pat-service's
+            # public PAT entry point -- the PAT below is
             # opaque, not a JWT, so it must go through pat-service's
             # swap-and-forward proxy, never straight to ai-gateway-private
             # (see docs/adr/0003, scripts/kc-pat-issue). It exists because
@@ -50,7 +54,7 @@ spec:
             - name: OPENAI_API_CONFIGS
               value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["default","qwen-3.8-27b","qwen-3.8-flash-next"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent","pi-agent","opencode-agent","dsh-agent"]}}'
             - name: OPENAI_API_BASE_URLS
-              value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://agent-broker.agents.svc.cluster.local:8080/v1
+              value: http://pat-service.airgap-ai-stack.svc.cluster.local:8081/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://agent-broker.agents.svc.cluster.local:8080/v1
             # Issued for https://ai.example.com specifically (not a shared service
             # account), so per-user rate limits and usage stay attributed
             # correctly. Index 0 has no static key (system_oauth), hence the

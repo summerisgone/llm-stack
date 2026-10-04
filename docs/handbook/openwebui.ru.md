@@ -41,24 +41,33 @@ workspace-модели, knowledge, промпты, инструменты и н�
 ## Как подключено
 
 ```
-браузер --SSO--> Open WebUI --(Keycloak-токен пользователя)--> ai-gateway-private -> EPP -> движок
+браузер --SSO--> Open WebUI --(Keycloak-токен пользователя)--> pat-service :8081 /v1 -> ai-gateway-private -> EPP -> движок
                      |--(общий PAT для automations)----------> pat-service /v1
                      |--(Keycloak-токен пользователя)--------> agent-broker (namespace agents)
                      \--(Keycloak-токен пользователя)--------> pat-service /mcp/<name>/   (инструменты)
 ```
 
 - `auth_type: system_oauth` значит, что Open WebUI прикладывает к запросу
-  access token вошедшего пользователя. Шлюз, брокер и pat-service проверяют
-  его сами; никто не верит Open WebUI на слово.
+  access token вошедшего пользователя. Брокер и pat-service проверяют его
+  сами; никто не верит Open WebUI на слово.
+- Чат идёт в приватную точку входа pat-service (порт 8081, без маршрута,
+  открыт по NetworkPolicy только для Open WebUI), а не в AI Gateway:
+  pat-service проверяет токен (issuer, подпись, клиент `open-webui`, роль
+  `ai-user` или `ai-admin`), пишет usage в тот же журнал, что и PAT-трафик,
+  и обращается к шлюзу со своими учётными данными
+  ([ADR 0022](../adr/0022-pat-service-admin-console.md), раздел 5). Другие
+  токены шлюз не принимает.
 - `ENABLE_FORWARD_USER_INFO_HEADERS=true` добавляет `X-User-Name` / `X-User-Id`,
   а для агентов - `X-OpenWebUI-Chat-Id`, по которому на каждый чат держится
   одна сессия агента.
 - `TASK_MODEL_EXTERNAL=default`: заголовки чатов, теги, follow-up и поисковые запросы
   генерирует модель текущего движка, а не агент (иначе каждый был бы полным ходом агента).
-- Трафик Open WebUI не проходит через pat-service, поэтому полосы приоритета
-  у него нет: EPP кладёт его в запасную полосу `0`, самую нижнюю
-  ([очереди](inference/queues-and-fair-share.ru.md)). В Langfuse у таких
-  трейсов есть пользователь, но нет ключа сессии.
+- Так как чат проходит через pat-service, у него те же ключ сессии и полоса
+  `warm` / `normal` / `demoted`, что у PAT-трафика, и тот же tenant
+  справедливости EPP (Keycloak subject), вместо запасной полосы `0`, в
+  которую он попадал при прямом обращении к шлюзу
+  ([очереди](inference/queues-and-fair-share.ru.md)). Заголовки `X-User-*`,
+  которые пересылает Open WebUI, там отбрасываются; pat-service ставит свои.
 
 ## Подключения к моделям
 
@@ -68,7 +77,7 @@ workspace-модели, knowledge, промпты, инструменты и н�
 
 | Индекс | Base URL | Аутентификация | Модели | Зачем |
 | --- | --- | --- | --- | --- |
-| `0` | `ai-gateway-private...:8080/v1` | `system_oauth` | `qwen-3.8-27b` (задана явно) | чат; каталога моделей, который Open WebUI мог бы обнаружить, у шлюза нет |
+| `0` | `pat-service...:8081/v1` | `system_oauth` | `default`, `qwen-3.8-27b`, `qwen-3.8-flash-next` (заданы явно) | чат через приватную точку входа pat-service; каталога моделей, который Open WebUI мог бы обнаружить, у шлюза нет |
 | `1` | `pat-service...:8080/v1` | `bearer` `OPENWEBUI_AUTOMATIONS_PAT` | обнаруживаются, префикс `automations` | Automations работают без браузерной сессии, им нужны статические учётные данные |
 | `2` | `agent-broker.agents...:8080/v1` | `system_oauth` | `hermes-agent`, `pi-agent`, `opencode-agent`, `dsh-agent` (заданы явно) | персональные агенты; брокер отдаёт список моделей только по токену пользователя |
 

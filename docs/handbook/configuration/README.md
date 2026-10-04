@@ -37,7 +37,7 @@ From `.env.example` (every key there must be set on a real site) plus the option
 | Group | Keys | Used by |
 | --- | --- | --- |
 | Langfuse bootstrap and client | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `LANGFUSE_INIT_*` | Langfuse first start, OTEL Collector export |
-| pat-service | `PAT_HASH_KEY`, `PAT_COOKIE_KEY` (32+ bytes each; rotating the hash key kills every PAT), `PAT_GATEWAY_CLIENT_SECRET` | pat-service, Keycloak client `pat-gateway` |
+| pat-service | `PAT_HASH_KEY`, `PAT_COOKIE_KEY` (32+ bytes each; rotating the hash key kills every PAT), `PAT_GATEWAY_CLIENT_SECRET`, `PAT_DIRECTORY_CLIENT_SECRET` (empty disables the admin console) | pat-service, Keycloak clients `pat-gateway` and `pat-directory` |
 | Open WebUI | `WEBUI_SECRET_KEY` (keep stable), `OPENWEBUI_AUTOMATIONS_PAT` | Open WebUI sessions, the Automations connection |
 | Engines | `VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS`, `NINFER_API_KEY`, `EXTERNAL_API_KEY` | `make engines-up`, `<engine>-up`, `helm-up` |
 | Feature flags | `WEB_SEARCH_ENABLED`, `REPOWISE_ENABLED` | pat-service, Open WebUI tools, agents, `stack-up` ([MCP](../mcp/README.md)) |

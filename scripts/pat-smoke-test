@@ -105,7 +105,15 @@ signature=base64.urlsafe_b64encode(hmac.new(os.environ["PAT_COOKIE_KEY"].encode(
 print(payload+"."+signature)
 ')
 
+# State-changing dashboard calls carry the session-bound CSRF token
+# (pat-service admin.go csrfToken); non-browser clients mark themselves
+# same-origin since they send no Origin.
+csrf_token=$(PAT_COOKIE_KEY="$cookie_key" PAT_SESSION="$session_cookie" python3 -c '
+import base64,hashlib,hmac,os
+print(base64.urlsafe_b64encode(hmac.new(os.environ["PAT_COOKIE_KEY"].encode(),("csrf."+os.environ["PAT_SESSION"]).encode(),hashlib.sha256).digest()).rstrip(b"=").decode())
+')
 created=$(stack_curl -fsS -X POST -H 'Content-Type: application/json' -H "Cookie: pat_session=$session_cookie" \
+  -H "X-CSRF-Token: $csrf_token" -H 'Sec-Fetch-Site: same-origin' \
   -d '{"name":"PAT smoke test","expires_in_days":1}' "$dashboard/api/tokens")
 pat=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
 pat_id=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
@@ -141,7 +149,7 @@ if [ "$verify_chat" = true ]; then
 else
   printf '%s\n' 'Accepted the PAT for the model catalogue; inference calls skipped (INFERENCE_SMOKE_VERIFY_CHAT=false).'
 fi
-test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Cookie: pat_session=$session_cookie" "$dashboard/api/tokens/$pat_id")" = 204
+test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Cookie: pat_session=$session_cookie" -H "X-CSRF-Token: $csrf_token" -H 'Sec-Fetch-Site: same-origin' "$dashboard/api/tokens/$pat_id")" = 204
 test "$(stack_curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $pat" "$api/models")" = 401
 printf '%s\n' 'Revocation took effect immediately; the PAT can no longer reach inference.'
 

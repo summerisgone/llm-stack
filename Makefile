@@ -30,7 +30,7 @@ ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
 ENGINE_DEPLOYMENT_strata = strata-flash-next
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down strata-up strata-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test openwebui-agent-pipe websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke inference-bypass-test preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down strata-up strata-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test openwebui-agent-pipe websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -537,6 +537,11 @@ helm-down:
 
 pat-smoke:
 	./scripts/pat-smoke-test
+
+# ADR 0022 stage 3: Open WebUI, the AI Gateway, the endpoint picker and the
+# direct engines are reachable for inference only through pat-service.
+inference-bypass-test:
+	./scripts/inference-bypass-test
 
 # Everything that can be checked without a cluster and without the GPU:
 # rendering, chart validity, and a guard against the generated chart

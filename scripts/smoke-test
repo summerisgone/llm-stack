@@ -73,10 +73,11 @@ role = connection.execute(
 assert role == ("pending",), role
 '
 
-# Chat traffic must use the signed-in user's token against the private AI
-# Gateway. The model list differs per profile, so only the auth mode is fixed.
+# Chat traffic must use the signed-in user's token against pat-service's
+# private entry point (docs/adr/0022 section 5), never the AI Gateway. The
+# model list differs per profile, so only the auth mode is fixed.
 deployment_env openwebui OPENAI_API_CONFIGS | grep -q '"auth_type":"system_oauth"'
-deployment_env openwebui OPENAI_API_BASE_URL | grep -q '^http://ai-gateway-private\.'
+deployment_env openwebui OPENAI_API_BASE_URL | grep -q '^http://pat-service\.[a-z-]*\.svc\.cluster\.local:8081/v1$'
 
 if [ "$require_lmstudio" = true ]; then
   kubectl -n "$namespace" rollout status deployment/lmstudio-upstream --timeout=30s

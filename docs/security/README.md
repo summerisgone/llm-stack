@@ -22,10 +22,12 @@ real users.
          /          Open WebUI          <- Keycloak SSO only
 
 [Cluster only, no public listener]
-  ai-gateway-private (ClusterIP)
-    <- Open WebUI          (signed-in user's Keycloak token)
-    <- PAT service         (its own service-account JWT, after PAT lookup)
-    -> llm-d EPP -> vLLM
+  PAT service :8081 (private inference entry point, NetworkPolicy: Open WebUI only)
+    <- Open WebUI          (signed-in user's Keycloak token, client open-webui)
+  ai-gateway-private (ClusterIP, NetworkPolicy: PAT service only)
+    <- PAT service         (its own service-account JWT, after PAT or token check;
+                            the gateway rejects every other token)
+    -> llm-d EPP -> vLLM / SGLang   (EPP and direct engines: gateway only)
 
 [Operator only, no public route]
   grafana-nodeport, langfuse-nodeport   <- reachable on the host network only
@@ -33,8 +35,12 @@ real users.
 
 Four properties hold this together, and each is checked by a smoke test:
 
-1. **The AI Gateway has no public listener.** Nothing outside the cluster can
-   reach the model except through Open WebUI or the PAT service.
+1. **The AI Gateway has no public listener, and only the PAT service may call
+   it.** Every inference request, Open WebUI chat included, passes the PAT
+   service's accounting first (`make inference-bypass-test`). External
+   backends outside the cluster (`inference.externalApi`, `llamacpp`) are
+   not covered by NetworkPolicy: a pod that knows their host address can
+   still reach them.
 2. **`/v1` accepts only PATs.** Client-supplied `X-User-*` headers are
    stripped at the edge before the PAT service sees them, so a caller cannot
    assert an identity. The PAT service adds them back only after a successful
@@ -122,6 +128,7 @@ tracked files in clear text. Rotating a credential means changing it in
 | Realm user `demo` | `k8s/realm-demo.json` — delete rather than rotate |
 | `open-webui` client secret | `k8s/base/applications.yaml` (`OAUTH_CLIENT_SECRET`) and `k8s/realm-demo.json` |
 | `pat-gateway` client secret | `.env` (`PAT_GATEWAY_CLIENT_SECRET`) and `k8s/realm-demo.json` — **known to be out of sync today**, see below |
+| `pat-directory` client secret | `.env` (`PAT_DIRECTORY_CLIENT_SECRET`), `k8s/realm-demo.json` and `helm/airgap-stack/values.yaml`; `make provision-pat-oidc` applies the `.env` value to Keycloak |
 | `grafana` client secret | `k8s/realm-demo.json`, `config/gateway-addons/values.yaml`, `scripts/provision-grafana-oidc` (`GRAFANA_OIDC_CLIENT_SECRET`) |
 | Grafana admin | `k8s/base/applications.yaml` and `config/gateway-addons/values.yaml` |
 | Langfuse `NEXTAUTH_SECRET`, `SALT`, `ENCRYPTION_KEY` | `k8s/base/applications.yaml`, both the web and worker Deployments — the encryption key is a fixed `0123456789abcdef…` pattern |

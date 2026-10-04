@@ -9,10 +9,7 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -85,7 +82,7 @@ func (p pricing) cost(model string, promptTokens, cachedTokens, completionTokens
 // ensureStreamUsage reports ok=false unchanged for any body that isn't a
 // streaming chat-completion request, or that already asked for usage. For
 // one that is, it returns body with `stream_options.include_usage: true`
-// added, so vLLM/SGLang emit a final usage-bearing chunk that sseUsageReader
+// added, so vLLM/SGLang emit a final usage-bearing chunk that sseLedgerReader
 // can read -- the only way to price streamed chat traffic, which is most
 // coding-agent traffic (docs/adr/0008-per-user-fair-share.md Stage 4's
 // documented gap this closes). Round-tripping through map[string]any
@@ -115,116 +112,6 @@ func ensureStreamUsage(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return out, true
-}
-
-// sseUsageTailBytes bounds how much of a streamed chat-completion response
-// sseUsageReader keeps: not the whole reply (which can run to hundreds of
-// KB for a long agent turn), just enough trailing bytes to hold the last
-// couple of SSE `data:` lines, since the usage-bearing chunk is always the
-// final content event before `data: [DONE]`.
-const sseUsageTailBytes = 8 << 10
-
-// sseUsageReader passes every byte read from body through unmodified (so
-// the client sees the exact same stream and timing it always has) while
-// keeping a bounded tail of it. When body ends, it scans that tail for a
-// usage object and calls onUsage once, if one was found. A client that
-// disconnects before the upstream response itself ends can prevent that
-// final Read/EOF from ever happening -- usage silently goes unrecorded for
-// that one response, the same class of degradation every other observation
-// point in this file accepts rather than adding retry/flush machinery for.
-type sseUsageReader struct {
-	body    io.ReadCloser
-	tail    []byte
-	done    bool
-	onUsage func(model string, promptTokens, cachedTokens, completionTokens int64)
-}
-
-func newSSEUsageReader(body io.ReadCloser, onUsage func(string, int64, int64, int64)) *sseUsageReader {
-	return &sseUsageReader{body: body, onUsage: onUsage}
-}
-
-func (s *sseUsageReader) Read(p []byte) (int, error) {
-	n, err := s.body.Read(p)
-	if n > 0 {
-		s.tail = append(s.tail, p[:n]...)
-		if len(s.tail) > sseUsageTailBytes {
-			s.tail = append([]byte(nil), s.tail[len(s.tail)-sseUsageTailBytes:]...)
-		}
-	}
-	if err != nil {
-		s.finish()
-	}
-	return n, err
-}
-
-// Close is a no-op: main.go's proxy defers Close on the *original*
-// resp.Body (captured before recordUsage reassigns it), so this is never
-// actually called on the wrapper in practice, but it must exist to satisfy
-// io.ReadCloser and must not double-close the shared underlying body.
-func (s *sseUsageReader) Close() error { return nil }
-
-func (s *sseUsageReader) finish() {
-	if s.done {
-		return
-	}
-	s.done = true
-	if model, prompt, cached, completion, ok := parseSSEUsageTail(s.tail); ok {
-		s.onUsage(model, prompt, cached, completion)
-	}
-}
-
-var sseDataPrefix = []byte("data: ")
-var sseDone = []byte("[DONE]")
-
-// parseSSEUsageTail scans tail's lines for `data: {...}` chunks carrying a
-// non-null "usage" object and returns the last one found -- last, not
-// first, because only the terminal chunk of an include_usage stream carries
-// it; every content chunk before it has "usage": null.
-func parseSSEUsageTail(tail []byte) (model string, promptTokens, cachedTokens, completionTokens int64, ok bool) {
-	for _, line := range bytes.Split(tail, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		payload, has := bytes.CutPrefix(line, sseDataPrefix)
-		if !has || bytes.Equal(payload, sseDone) {
-			continue
-		}
-		var parsed struct {
-			Model string `json:"model"`
-			Usage *struct {
-				PromptTokens        int64 `json:"prompt_tokens"`
-				CompletionTokens    int64 `json:"completion_tokens"`
-				PromptTokensDetails struct {
-					CachedTokens int64 `json:"cached_tokens"`
-				} `json:"prompt_tokens_details"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal(payload, &parsed) != nil || parsed.Usage == nil {
-			continue
-		}
-		model, promptTokens, cachedTokens, completionTokens, ok =
-			parsed.Model, parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens, true
-	}
-	return
-}
-
-// recordQosEvent writes one qos_events row, priced from a.pricing. It never
-// calls qos.RecordCost -- callers that need the scheduler's abstract cost
-// unit updated call that separately (recordUsage does, for chat; not for
-// embeddings, per docs/adr/0013-embeddings-api-bge-m3.md). A failed insert
-// is logged and otherwise ignored: this always runs after the proxied
-// response has already been delivered, so there is nothing left to degrade
-// except the usage panel's own completeness.
-func (a *app) recordQosEvent(ctx context.Context, owner, ownerName, tokenID, tokenName, sessionID, model, band string, promptTokens, cachedTokens, completionTokens int64) {
-	if a.db == nil { // unit tests construct an app with no live pat-db
-		return
-	}
-	cost := a.pricing.cost(model, promptTokens, cachedTokens, completionTokens)
-	_, err := a.db.Exec(ctx, `INSERT INTO qos_events
-		(owner_subject, owner_name, token_id, token_name, session_id, model, band, prompt_tokens, cached_tokens, completion_tokens, cost_amount)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		owner, ownerName, tokenID, tokenName, sessionID, model, band, promptTokens, cachedTokens, completionTokens, cost)
-	if err != nil {
-		log.Printf("qos event insert: %v", err)
-	}
 }
 
 type dailyUsage struct {
@@ -295,7 +182,7 @@ func (a *app) usageSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := a.db.Query(r.Context(), `
-		SELECT session_id, max(model), max(token_name), min(created_at), max(created_at), count(*),
+		SELECT session_id, max(model), max(token_name), min(created_at), max(created_at), count(*) FILTER (WHERE usage_quality = 'actual'),
 		       COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost_amount),0)
 		FROM qos_events
 		WHERE owner_subject=$1 AND session_id <> ''

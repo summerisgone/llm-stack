@@ -1,0 +1,97 @@
+#!/usr/bin/env sh
+set -eu
+
+# ADR 0022 stage 3 acceptance: every inference path goes through pat-service.
+# Run against a deployed stack after Open WebUI has moved to pat-service's
+# private entry point. From inside the Open WebUI pod (the client that used to
+# call the AI Gateway directly) it checks that:
+#   - pat-service's private port is reachable and refuses tokens of other
+#     OIDC clients;
+#   - the private AI Gateway, the endpoint picker and the direct engine
+#     backends are not reachable at all;
+# and from the pat-service pod that the AI Gateway rejects any Keycloak token
+# other than pat-service's own client credential.
+# A realm token is needed for that; the read-only pat-directory client's is
+# used, so no user is created. Its secret never leaves the pods' stdin.
+
+namespace=${K8S_NAMESPACE:-airgap-ai-stack}
+gateway_namespace=${GATEWAY_NAMESPACE:-envoy-gateway-system}
+[ -f .env ]
+directory_secret=$(sed -n 's/^PAT_DIRECTORY_CLIENT_SECRET=//p' .env | tail -n 1)
+[ -n "$directory_secret" ] || { printf '%s\n' 'PAT_DIRECTORY_CLIENT_SECRET is not set in .env' >&2; exit 1; }
+
+kubectl -n "$namespace" rollout status deployment/openwebui --timeout=60s >/dev/null
+kubectl -n "$namespace" rollout status deployment/pat-service --timeout=60s >/dev/null
+
+# A refused connection to a Service without ready endpoints proves nothing,
+# so only targets with endpoints are probed.
+ready() {
+  [ -n "$(kubectl -n "$1" get endpointslices -l "kubernetes.io/service-name=$2" -o jsonpath='{.items[*].endpoints[?(@.conditions.ready==true)].addresses[0]}' 2>/dev/null)" ]
+}
+blocked_targets=""
+add_target() { # namespace service port
+  if ready "$1" "$2"; then
+    blocked_targets="$blocked_targets http://$2.$1.svc.cluster.local:$3/"
+  else
+    printf '%s\n' "skip: $1/$2 has no ready endpoints"
+  fi
+}
+add_target "$gateway_namespace" ai-gateway-private 8080
+add_target "$namespace" llmd-qwen-test-epp 8081
+add_target "$namespace" embeddings-bge-m3 80
+add_target "$namespace" ninfer-qwen38 18080
+add_target "$namespace" strata-flash-next 8000
+
+keycloak="http://keycloak.$namespace.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/token"
+private="http://pat-service.$namespace.svc.cluster.local:8081/v1/models"
+
+printf '%s\n%s\n' "$directory_secret" "$blocked_targets" | kubectl -n "$namespace" exec -i deployment/openwebui -- python3 -c '
+import json, sys, urllib.error, urllib.parse, urllib.request
+secret = sys.stdin.readline().strip()
+targets = sys.stdin.readline().split()
+keycloak, private = sys.argv[1], sys.argv[2]
+form = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": "pat-directory", "client_secret": secret}).encode()
+token = json.load(urllib.request.urlopen(keycloak, form, timeout=10))["access_token"]
+
+def status(url, auth=None):
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + auth} if auth else {})
+    try:
+        return urllib.request.urlopen(req, timeout=5).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+failed = False
+def check(name, ok, detail):
+    global failed
+    print(("ok:   " if ok else "FAIL: ") + name + " (" + detail + ")")
+    failed |= not ok
+
+code = status(private)
+check("private entry reachable from Open WebUI", code == 401, "HTTP %d without token" % code)
+code = status(private, token)
+check("private entry refuses another client token", code == 403, "HTTP %d" % code)
+for url in targets:
+    try:
+        code = status(url, token)
+        check("blocked from Open WebUI: " + url, False, "answered HTTP %d" % code)
+    except Exception as e:
+        check("blocked from Open WebUI: " + url, True, type(e).__name__)
+sys.exit(1 if failed else 0)
+' "$keycloak" "$private"
+
+# Network policy lets pat-service through, so the gateway's own check is
+# visible here: a realm token that is not pat-gateway must get 403.
+if ready "$gateway_namespace" ai-gateway-private; then
+  printf '%s\n' "$directory_secret" | kubectl -n "$namespace" exec -i deployment/pat-service -- sh -c '
+    read -r secret
+    token=$(wget -qO- --post-data "grant_type=client_credentials&client_id=pat-directory&client_secret=$secret" "$1" | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
+    [ -n "$token" ] || { echo "FAIL: no directory token"; exit 1; }
+    out=$(wget -S -O /dev/null --header "Authorization: Bearer $token" "$2" 2>&1 || true)
+    if printf "%s" "$out" | grep -q " 403 "; then
+      echo "ok:   AI Gateway rejects a non-pat-gateway token (HTTP 403)"
+    else
+      echo "FAIL: AI Gateway accepted or failed differently:"; printf "%s\n" "$out" | grep "HTTP/" ; exit 1
+    fi
+  ' sh "$keycloak" "http://ai-gateway-private.$gateway_namespace.svc.cluster.local:8080/v1/models"
+fi
+printf '%s\n' 'Inference reaches models only through pat-service.'

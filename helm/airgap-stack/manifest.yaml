@@ -2,8 +2,12 @@
 kind	name	kindline
 ServiceAccount	pat-service	apiVersion: v1
 ServiceAccount	prometheus	apiVersion: v1
+Role	pat-service-topology	apiVersion: rbac.authorization.k8s.io/v1
 Role	prometheus-discovery	apiVersion: rbac.authorization.k8s.io/v1
+ClusterRole	pat-service-topology-nodes	apiVersion: rbac.authorization.k8s.io/v1
+RoleBinding	pat-service-topology	apiVersion: rbac.authorization.k8s.io/v1
 RoleBinding	prometheus-discovery	apiVersion: rbac.authorization.k8s.io/v1
+ClusterRoleBinding	pat-service-topology-nodes	apiVersion: rbac.authorization.k8s.io/v1
 ConfigMap	gpu-exporter-script	apiVersion: v1
 ConfigMap	grafana-provisioning	apiVersion: v1
 ConfigMap	otel-collector-config	apiVersion: v1
@@ -37,6 +41,7 @@ DaemonSet	node-exporter	apiVersion: apps/v1
 ClickHouseInstallation	langfuse-clickhouse	apiVersion: clickhouse.altinity.com/v1
 GatewayClass	envoy	apiVersion: gateway.networking.k8s.io/v1
 Tenant	minio	apiVersion: minio.min.io/v2
+NetworkPolicy	pat-service	apiVersion: networking.k8s.io/v1
 Cluster	keycloak-db	apiVersion: postgresql.cnpg.io/v1
 Cluster	langfuse-db	apiVersion: postgresql.cnpg.io/v1
 Cluster	pat-db	apiVersion: postgresql.cnpg.io/v1

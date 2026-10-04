@@ -40,72 +40,6 @@ func TestEnsureStreamUsageDegradesOnUnparsableBody(t *testing.T) {
 	}
 }
 
-func TestParseSSEUsageTailFindsTheTerminalUsageChunk(t *testing.T) {
-	tail := "data: {\"choices\":[{\"delta\":{}}],\"usage\":null}\n\n" +
-		"data: {\"model\":\"qwen\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":20}}}\n\n" +
-		"data: [DONE]\n\n"
-
-	model, prompt, cached, completion, ok := parseSSEUsageTail([]byte(tail))
-	if !ok {
-		t.Fatal("ok = false, want true: tail carries a usage chunk")
-	}
-	if model != "qwen" || prompt != 100 || cached != 20 || completion != 10 {
-		t.Fatalf("got (%q,%d,%d,%d), want (qwen,100,20,10)", model, prompt, cached, completion)
-	}
-}
-
-func TestParseSSEUsageTailNoUsageChunk(t *testing.T) {
-	tail := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}],\"usage\":null}\n\ndata: [DONE]\n\n"
-	if _, _, _, _, ok := parseSSEUsageTail([]byte(tail)); ok {
-		t.Fatal("ok = true, want false: no chunk in this tail carries usage")
-	}
-}
-
-func TestParseSSEUsageTailDegradesOnTruncatedJSON(t *testing.T) {
-	tail := "data: {\"usage\":{\"prompt_tokens\":1" // cut mid-object, as a tail-window truncation would produce
-	if _, _, _, _, ok := parseSSEUsageTail([]byte(tail)); ok {
-		t.Fatal("ok = true for truncated JSON, want false")
-	}
-}
-
-func TestSSEUsageReaderPassesBodyThroughUnmodified(t *testing.T) {
-	body := "data: {\"choices\":[],\"usage\":null}\n\ndata: [DONE]\n\n"
-	var calls int
-	reader := newSSEUsageReader(io.NopCloser(strings.NewReader(body)), func(string, int64, int64, int64) { calls++ })
-
-	got, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(got) != body {
-		t.Fatalf("body = %q, want %q unchanged", got, body)
-	}
-	if calls != 0 {
-		t.Fatalf("onUsage called %d times, want 0: no chunk in this stream carries usage", calls)
-	}
-}
-
-func TestSSEUsageReaderCallsOnUsageOnceOnEOF(t *testing.T) {
-	body := "data: {\"model\":\"qwen\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\ndata: [DONE]\n\n"
-	var model string
-	var prompt, completion int64
-	var calls int
-	reader := newSSEUsageReader(io.NopCloser(strings.NewReader(body)), func(m string, p, _, c int64) {
-		calls++
-		model, prompt, completion = m, p, c
-	})
-
-	if _, err := io.ReadAll(reader); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if calls != 1 {
-		t.Fatalf("onUsage called %d times, want exactly 1", calls)
-	}
-	if model != "qwen" || prompt != 5 || completion != 2 {
-		t.Fatalf("got (%q,%d,%d), want (qwen,5,2)", model, prompt, completion)
-	}
-}
-
 func TestRecordUsageStreamingFeedsTokenAndCostCounters(t *testing.T) {
 	a := testApp()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -114,11 +48,7 @@ func TestRecordUsageStreamingFeedsTokenAndCostCounters(t *testing.T) {
 		"data: [DONE]\n\n"
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
 
-	got, err := io.ReadAll(a.recordUsage(r, resp, "alice", "alice", "tok-1", "test token", "sess-1", "unknown", qos.BandNormal))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(got) != body {
+	if got := deliver(a, r, resp, testRecord(r, "sess-1", "unknown", qos.BandNormal)); got != body {
 		t.Fatalf("streamed body = %q, want %q unchanged", got, body)
 	}
 

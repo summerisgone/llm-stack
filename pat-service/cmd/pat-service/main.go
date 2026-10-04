@@ -16,11 +16,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math/big"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -153,6 +155,29 @@ type config struct {
 	// through the airgap-runtime Secret.
 	mcpServers        map[string]string
 	mcpCallsPerMinute int
+	// publicOrigin (scheme://host of OIDC_REDIRECT_URL) is the only Origin
+	// accepted on state-changing dashboard requests.
+	publicOrigin string
+	// directoryClientID/directorySecret are the read-only Keycloak client
+	// the admin console checks current ai-admin membership with
+	// (directory.go). No secret: the admin console stays unavailable.
+	directoryClientID string
+	directorySecret   string
+	// Admin console topology (docs/adr/0022 section 8): the namespace the
+	// stack runs in, the application and gateway Prometheus servers (empty
+	// disables those panels) and their scrape interval, which decides when a
+	// reading counts as stale.
+	topologyNamespace    string
+	prometheusURL        string
+	gatewayPrometheusURL string
+	scrapeInterval       time.Duration
+	// Private inference entry point (private.go): its listen address (empty
+	// disables it), the OIDC clients whose tokens it accepts, and when the
+	// operator moved Open WebUI onto it, from which point the ledger covers
+	// every configured inference path.
+	privateInferenceAddr string
+	privateClients       map[string]bool
+	coverageSince        *time.Time
 }
 
 type app struct {
@@ -167,9 +192,12 @@ type app struct {
 	agents    *agentKube
 	// mcpLimiter backs the per-user MCP call limit (mcp.go).
 	mcpLimiter windowCounter
+	// directory is nil when no directory client is configured.
+	directory *directory
 }
 
 type session struct {
+	Issuer   string   `json:"iss"`
 	Subject  string   `json:"sub"`
 	Username string   `json:"preferred_username"`
 	Roles    []string `json:"roles"`
@@ -185,6 +213,7 @@ type loginState struct {
 type claims struct {
 	Issuer            string `json:"iss"`
 	Subject           string `json:"sub"`
+	AuthorizedParty   string `json:"azp"`
 	PreferredUsername string `json:"preferred_username"`
 	Expires           int64  `json:"exp"`
 	RealmAccess       struct {
@@ -254,7 +283,11 @@ func main() {
 		agents:     newAgentKube(cfg.agentsNamespace),
 		mcpLimiter: qosStore,
 	}
+	a.directory = newDirectory(cfg.internalIssuer, cfg.directoryClientID, cfg.directorySecret, a.http)
 	if err := a.migrate(ctx); err != nil {
+		log.Fatal(err)
+	}
+	if err := a.backfillIssuer(ctx); err != nil {
 		log.Fatal(err)
 	}
 	go qosMetrics.RunActiveSweep(ctx, qosStore, cfg.qosSessionTTL, 30*time.Second)
@@ -268,6 +301,14 @@ func main() {
 		log.Printf("PAT service metrics listening on %s", metricsServer.Addr)
 		log.Fatal(metricsServer.ListenAndServe())
 	}()
+
+	if cfg.privateInferenceAddr != "" {
+		private := &http.Server{Addr: cfg.privateInferenceAddr, Handler: newPrivateMux(a), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+		go func() {
+			log.Printf("PAT service private inference listening on %s", private.Addr)
+			log.Fatal(private.ListenAndServe())
+		}()
+	}
 
 	mux := newMux(a)
 	server := &http.Server{Addr: ":8080", Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
@@ -290,6 +331,16 @@ func newMux(a *app) *http.ServeMux {
 	mux.HandleFunc("GET /api/usage/daily", a.usageDaily)
 	mux.HandleFunc("GET /api/usage/sessions", a.usageSessions)
 	mux.HandleFunc("GET /api/usage/limit", a.usageLimit)
+	mux.HandleFunc("GET /api/session", a.sessionInfo)
+	mux.HandleFunc("GET /api/admin/users", a.adminUsers)
+	mux.HandleFunc("GET /api/admin/audit", a.adminAudit)
+	mux.HandleFunc("GET /api/admin/users/{subject}", a.adminUserDetail)
+	mux.HandleFunc("GET /api/admin/users/{subject}/requests", a.adminUserRequests)
+	mux.HandleFunc("GET /api/admin/users/{subject}/sessions", a.adminUserSessions)
+	mux.HandleFunc("GET /api/admin/overview", a.adminOverview)
+	mux.HandleFunc("GET /api/admin/inference", a.adminInference)
+	mux.HandleFunc("GET /api/admin/nodes", a.adminNodes)
+	mux.HandleFunc("GET /api/admin/routes", a.adminRoutes)
 	// ServeMux rejects a method-agnostic /v1/ route alongside GET /. OpenAI
 	// uses these methods; explicit registrations also make the public surface
 	// intentionally narrow.
@@ -393,7 +444,38 @@ func loadConfig() (config, error) {
 		mcpServers[s.name] = u
 	}
 	mcpCallsPerMinute := readIntEnv("MCP_CALLS_PER_MINUTE", 30)
-	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, agentsNamespace, agentTTLDays, mcpServers, mcpCallsPerMinute}, nil
+	origin := publicOrigin(redirect)
+	if origin == "" {
+		return config{}, errors.New("OIDC_REDIRECT_URL must be an absolute URL")
+	}
+	directoryClientID := os.Getenv("PAT_DIRECTORY_CLIENT_ID")
+	if directoryClientID == "" {
+		directoryClientID = "pat-directory"
+	}
+	directorySecret := os.Getenv("PAT_DIRECTORY_CLIENT_SECRET")
+	topologyNamespace := os.Getenv("TOPOLOGY_NAMESPACE")
+	if topologyNamespace == "" {
+		topologyNamespace = "airgap-ai-stack"
+	}
+	prometheusURL := strings.TrimRight(os.Getenv("PROMETHEUS_URL"), "/")
+	gatewayPrometheusURL := strings.TrimRight(os.Getenv("GATEWAY_PROMETHEUS_URL"), "/")
+	scrapeInterval := time.Duration(readIntEnv("PROMETHEUS_SCRAPE_INTERVAL_SECONDS", 15)) * time.Second
+	privateInferenceAddr := os.Getenv("PRIVATE_INFERENCE_ADDR")
+	privateClients := map[string]bool{}
+	for _, c := range strings.Split(os.Getenv("PRIVATE_INFERENCE_CLIENTS"), ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			privateClients[c] = true
+		}
+	}
+	var coverageSince *time.Time
+	if v := os.Getenv("INFERENCE_COVERAGE_SINCE"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return config{}, errors.New("INFERENCE_COVERAGE_SINCE must be RFC 3339")
+		}
+		coverageSince = &t
+	}
+	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, agentsNamespace, agentTTLDays, mcpServers, mcpCallsPerMinute, origin, directoryClientID, directorySecret, topologyNamespace, prometheusURL, gatewayPrometheusURL, scrapeInterval, privateInferenceAddr, privateClients, coverageSince}, nil
 }
 
 // readIntEnv reads an optional integer threshold, falling back to def when
@@ -426,25 +508,57 @@ func readFloatEnv(name string, def float64) float64 {
 	return f
 }
 
+// migrationFiles are applied once each, in lexical order, and recorded in
+// schema_migrations. Never edit an applied file; add a new one.
+//
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
 func (a *app) migrate(ctx context.Context) error {
-	_, err := a.db.Exec(ctx, `CREATE TABLE IF NOT EXISTS personal_access_tokens (
- id text PRIMARY KEY, owner_subject text NOT NULL, owner_name text NOT NULL DEFAULT '', token_hash bytea NOT NULL UNIQUE,
- token_prefix text NOT NULL, name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
- expires_at timestamptz, revoked_at timestamptz, last_used_at timestamptz);
- ALTER TABLE personal_access_tokens ADD COLUMN IF NOT EXISTS owner_name text NOT NULL DEFAULT '';
- CREATE INDEX IF NOT EXISTS personal_access_tokens_owner_active_idx
- ON personal_access_tokens (owner_subject, created_at DESC) WHERE revoked_at IS NULL;
- CREATE TABLE IF NOT EXISTS qos_events (
- id bigserial PRIMARY KEY, owner_subject text NOT NULL, owner_name text NOT NULL DEFAULT '',
- session_id text NOT NULL DEFAULT '', model text NOT NULL, band text NOT NULL,
- prompt_tokens bigint NOT NULL DEFAULT 0, cached_tokens bigint NOT NULL DEFAULT 0, completion_tokens bigint NOT NULL DEFAULT 0,
- cost_amount numeric(12,4) NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now());
- CREATE INDEX IF NOT EXISTS qos_events_owner_day_idx ON qos_events (owner_subject, created_at);
- CREATE INDEX IF NOT EXISTS qos_events_owner_session_idx ON qos_events (owner_subject, session_id, created_at);
- ALTER TABLE qos_events ADD COLUMN IF NOT EXISTS token_id text NOT NULL DEFAULT '';
- ALTER TABLE qos_events ADD COLUMN IF NOT EXISTS token_name text NOT NULL DEFAULT '';
- CREATE INDEX IF NOT EXISTS qos_events_token_idx ON qos_events (token_id);
- ALTER TABLE personal_access_tokens ADD COLUMN IF NOT EXISTS issued_by text NOT NULL DEFAULT 'user';`)
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	// Replicas starting together wait here; the lock is released at commit.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('pat-service-migrations'))`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+ version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+		return err
+	}
+	names, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		version := strings.TrimSuffix(path.Base(name), ".sql")
+		tag, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING`, version)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		body, err := migrationFiles.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, string(body)); err != nil {
+			return fmt.Errorf("migration %s: %w", version, err)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// backfillIssuer stamps rows written before owner_issuer existed with the
+// configured issuer (docs/adr/0022 section 2). A no-op once done.
+func (a *app) backfillIssuer(ctx context.Context) error {
+	if _, err := a.db.Exec(ctx, `UPDATE personal_access_tokens SET owner_issuer=$1 WHERE owner_issuer=''`, a.cfg.issuer); err != nil {
+		return err
+	}
+	_, err := a.db.Exec(ctx, `UPDATE qos_events SET owner_issuer=$1 WHERE owner_issuer=''`, a.cfg.issuer)
 	return err
 }
 
@@ -473,6 +587,7 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	// public Open WebUI origin for the "Open WebUI" link.
 	page = []byte(strings.Replace(string(page), "{{URL_PREFIX}}", a.cfg.urlPrefix, 1))
 	page = []byte(strings.Replace(string(page), "{{WEBUI_URL}}", a.cfg.webuiURL, 1))
+	page = []byte(strings.Replace(string(page), "{{CSRF_TOKEN}}", a.csrfToken(r), 1))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(page)
@@ -528,12 +643,13 @@ func (a *app) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid SSO response", 502)
 		return
 	}
-	cl, err := a.verifyJWT(r.Context(), result.AccessToken)
+	cl, err := a.verifyJWT(r.Context(), result.AccessToken, a.cfg.clientID)
 	if err != nil || !hasAIUserRole(cl.RealmAccess.Roles) {
 		http.Error(w, "AI Stack role is required", http.StatusForbidden)
 		return
 	}
 	if err := a.setSignedCookie(w, cookieName, session{
+		Issuer:   cl.Issuer,
 		Subject:  cl.Subject,
 		Username: cl.PreferredUsername,
 		Roles:    cl.RealmAccess.Roles,
@@ -547,6 +663,10 @@ func (a *app) callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {
+	if !a.sameOrigin(r) {
+		http.Error(w, "cross-origin request", http.StatusForbidden)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.cfg.secureCookies, SameSite: http.SameSiteLaxMode})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -622,7 +742,7 @@ func (a *app) createToken(w http.ResponseWriter, r *http.Request) {
 	if ownerName == "" {
 		ownerName = s.Subject
 	}
-	_, err = a.db.Exec(r.Context(), `INSERT INTO personal_access_tokens (id,owner_subject,owner_name,token_hash,token_prefix,name,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`, id, s.Subject, ownerName, a.tokenHash(value), value[:15], input.Name, expires)
+	_, err = a.db.Exec(r.Context(), `INSERT INTO personal_access_tokens (id,owner_issuer,owner_subject,owner_name,token_hash,token_prefix,name,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, id, a.cfg.issuer, s.Subject, ownerName, a.tokenHash(value), value[:15], input.Name, expires)
 	if err != nil {
 		http.Error(w, "could not create token", 500)
 		return
@@ -653,6 +773,7 @@ func (a *app) revokeToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
+	receivedAt := time.Now()
 	if !strings.HasPrefix(r.URL.Path, "/v1/") {
 		http.NotFound(w, r)
 		return
@@ -662,7 +783,7 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 		openAIError(w, 401, "Invalid authentication credentials")
 		return
 	}
-	id, owner, ownerName, tokenName, err := a.lookupPAT(r.Context(), token)
+	id, owner, ownerName, tokenName, issuedBy, err := a.lookupPAT(r.Context(), token)
 	if errors.Is(err, errDatabaseUnavailable) {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -671,6 +792,25 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 		openAIError(w, 401, "Invalid authentication credentials")
 		return
 	}
+	source := "pat"
+	if issuedBy == agentIssuedBy {
+		source = "agent"
+	}
+	a.forwardInference(w, r, receivedAt, inferenceCaller{owner: owner, ownerName: ownerName, tokenID: id, tokenName: tokenName, source: source})
+}
+
+// inferenceCaller is the verified owner of an inference request. Both entry
+// points (PAT /v1 and the private Keycloak listener) derive it only from
+// credentials they checked themselves.
+type inferenceCaller struct {
+	owner, ownerName, tokenID, tokenName, source string
+}
+
+// forwardInference is the one admission and accounting path for every
+// entry point (docs/adr/0022 section 5): session and band assignment,
+// server-set identity headers, the gateway credential and the ledger row.
+func (a *app) forwardInference(w http.ResponseWriter, r *http.Request, receivedAt time.Time, c inferenceCaller) {
+	owner, ownerName := c.owner, c.ownerName
 	if a.cfg.logClientShape {
 		r.Body = a.logClientShape(r, owner)
 	}
@@ -695,7 +835,7 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 		ownerName = owner
 	}
 	req.Header.Set("X-User-Name", ownerName)
-	req.Header.Set("X-Pat-Token-Id", id)
+	req.Header.Set("X-Pat-Token-Id", c.tokenID)
 	// llm-d flow control treats this header as the fairness tenant. It must be
 	// derived after PAT validation; allowing a caller to provide it would let a
 	// tenant bypass its own queue by creating arbitrary fairness identities.
@@ -707,38 +847,46 @@ func (a *app) proxy(w http.ResponseWriter, r *http.Request) {
 	if sessionResult.SessionID != "" {
 		req.Header.Set("X-Session-Key", sessionResult.SessionID)
 	}
-	resp, err := a.proxyHTTP.Do(req)
-	if err != nil {
-		if strings.Contains(r.URL.Path, "/chat/completions") {
-			a.qos.Metrics().RequestsTotal.WithLabelValues(owner, string(sessionResult.Band), "error").Inc()
-		}
-		http.Error(w, "inference unavailable", 502)
-		return
-	}
-	defer resp.Body.Close()
 	model := sessionResult.Model
 	if model == "" {
 		model = "unknown"
 	}
-	resp.Body = a.recordUsage(r, resp, owner, ownerName, id, tokenName, sessionResult.SessionID, model, sessionResult.Band)
+	requestID, _ := randomURL(12)
+	rec := &requestRecord{
+		requestID: requestID, source: c.source, owner: owner, ownerName: ownerName, tokenID: c.tokenID, tokenName: c.tokenName,
+		sessionID: sessionResult.SessionID, model: model, band: string(sessionResult.Band), kind: ledgerKind(r.URL.Path),
+		receivedAt: receivedAt, dispatchedAt: time.Now(),
+	}
+	resp, err := a.proxyHTTP.Do(req)
+	if err != nil {
+		if rec.kind == "chat" {
+			a.qos.Metrics().RequestsTotal.WithLabelValues(owner, string(sessionResult.Band), "error").Inc()
+		}
+		http.Error(w, "inference unavailable", 502)
+		a.finishRequest(r, rec, err)
+		return
+	}
+	defer resp.Body.Close()
+	resp.Body = a.recordUsage(r, resp, rec)
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	_, copyErr := io.Copy(w, resp.Body)
+	a.finishRequest(r, rec, copyErr)
 }
 
 var errDatabaseUnavailable = errors.New("database unavailable")
 
 // lookupPAT resolves a live (not revoked, not expired) PAT and records its
 // use. Shared by /v1/ and /mcp/<name>/ so revocation cuts both.
-func (a *app) lookupPAT(ctx context.Context, token string) (id, owner, ownerName, tokenName string, err error) {
-	err = a.db.QueryRow(ctx, `SELECT id,owner_subject,owner_name,name FROM personal_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()`, a.tokenHash(token)).Scan(&id, &owner, &ownerName, &tokenName)
+func (a *app) lookupPAT(ctx context.Context, token string) (id, owner, ownerName, tokenName, issuedBy string, err error) {
+	err = a.db.QueryRow(ctx, `SELECT id,owner_subject,owner_name,name,issued_by FROM personal_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()`, a.tokenHash(token)).Scan(&id, &owner, &ownerName, &tokenName, &issuedBy)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
 	if _, err := a.db.Exec(ctx, `UPDATE personal_access_tokens SET last_used_at=now() WHERE id=$1`, id); err != nil {
-		return "", "", "", "", errDatabaseUnavailable
+		return "", "", "", "", "", errDatabaseUnavailable
 	}
-	return id, owner, ownerName, tokenName, nil
+	return id, owner, ownerName, tokenName, issuedBy, nil
 }
 
 // recordUsage is TASK-qos-fair-share.md §4.4: for a non-streaming
@@ -763,20 +911,18 @@ func (a *app) lookupPAT(ctx context.Context, token string) (id, owner, ownerName
 // observeSession's chat-only session/band assignment (band is always
 // qos.BandNormal there for this path, which would be misleading here).
 //
-// It also writes one qos_events row per completed chat or embeddings
-// response (usage.go) for the /platform usage panel -- pricing.cost, not
-// qos.RecordCost's alpha/beta units, since the panel shows real currency.
-// Embeddings get a row (band "embeddings", cost only) but never
-// qos.RecordCost, matching the reasoning above: embeddings carry no QoS
-// cost unit, only a real price.
-func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName, tokenID, tokenName, sessionID, model string, band qos.Band) io.ReadCloser {
-	isChat := strings.Contains(r.URL.Path, "/chat/completions")
-	isEmbeddings := strings.Contains(r.URL.Path, "/embeddings")
-	if !isChat && !isEmbeddings {
+// It fills rec with the response status and usage; finishRequest then
+// writes the ledger row (ledger.go) once the body has been delivered, and
+// feeds chat usage into qos.RecordCost. Embeddings get a row (band
+// "embeddings", cost only) but never qos.RecordCost: embeddings carry no
+// QoS cost unit, only a real price.
+func (a *app) recordUsage(r *http.Request, resp *http.Response, rec *requestRecord) io.ReadCloser {
+	if rec.kind == "" {
 		return resp.Body
 	}
-	recordBand := band
-	if isEmbeddings {
+	rec.status = resp.StatusCode
+	recordBand := rec.band
+	if rec.kind == "embeddings" {
 		recordBand = "embeddings"
 	}
 	outcome := "dispatched"
@@ -786,25 +932,17 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName
 	case resp.StatusCode >= 500:
 		outcome = "error"
 	}
-	a.qos.Metrics().RequestsTotal.WithLabelValues(owner, string(recordBand), outcome).Inc()
+	a.qos.Metrics().RequestsTotal.WithLabelValues(rec.owner, recordBand, outcome).Inc()
 
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		rec.streaming = true
 		// Embeddings never stream, and a non-200 stream (rare, but the
 		// gateway can emit an SSE error frame) never carries a usage
 		// chunk worth waiting for.
-		if !isChat || outcome != "dispatched" {
+		if rec.kind != "chat" || outcome != "dispatched" {
 			return resp.Body
 		}
-		ctx := r.Context()
-		return newSSEUsageReader(resp.Body, func(usageModel string, promptTokens, cachedTokens, completionTokens int64) {
-			if usageModel == "" {
-				usageModel = model
-			}
-			recordCtx, cancel := context.WithTimeout(ctx, a.cfg.qosEventTimeout)
-			defer cancel()
-			a.qos.RecordCost(recordCtx, owner, usageModel, promptTokens, cachedTokens, completionTokens)
-			a.recordQosEvent(recordCtx, owner, ownerName, tokenID, tokenName, sessionID, usageModel, string(recordBand), promptTokens, cachedTokens, completionTokens)
-		})
+		return newSSELedgerReader(resp.Body, rec)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, a.cfg.qosUsageMaxBody+1))
 	if err != nil {
@@ -816,7 +954,7 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName
 	}
 	var parsed struct {
 		Model string `json:"model"`
-		Usage struct {
+		Usage *struct {
 			PromptTokens        int64 `json:"prompt_tokens"`
 			CompletionTokens    int64 `json:"completion_tokens"`
 			PromptTokensDetails struct {
@@ -824,29 +962,12 @@ func (a *app) recordUsage(r *http.Request, resp *http.Response, owner, ownerName
 			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal(body, &parsed) != nil {
+	if json.Unmarshal(body, &parsed) != nil || parsed.Usage == nil {
 		return restored
 	}
-	usageModel := model
-	if parsed.Model != "" {
-		usageModel = parsed.Model
-	}
-	if isEmbeddings {
-		if parsed.Usage.PromptTokens > 0 {
-			a.qos.Metrics().EmbeddingTokensTotal.WithLabelValues(owner, usageModel).Add(float64(parsed.Usage.PromptTokens))
-			ctx, cancel := context.WithTimeout(r.Context(), a.cfg.qosEventTimeout)
-			defer cancel()
-			a.recordQosEvent(ctx, owner, ownerName, tokenID, tokenName, "", usageModel, string(recordBand), parsed.Usage.PromptTokens, 0, 0)
-		}
-		return restored
-	}
-	if parsed.Usage.PromptTokens > 0 || parsed.Usage.CompletionTokens > 0 {
-		ctx, cancel := context.WithTimeout(r.Context(), a.cfg.qosFingerprintTimeout)
-		a.qos.RecordCost(ctx, owner, usageModel, parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens)
-		cancel()
-		eventCtx, eventCancel := context.WithTimeout(r.Context(), a.cfg.qosEventTimeout)
-		defer eventCancel()
-		a.recordQosEvent(eventCtx, owner, ownerName, tokenID, tokenName, sessionID, usageModel, string(recordBand), parsed.Usage.PromptTokens, parsed.Usage.PromptTokensDetails.CachedTokens, parsed.Usage.CompletionTokens)
+	rec.usage = &tokenUsage{model: parsed.Model, prompt: parsed.Usage.PromptTokens, completion: parsed.Usage.CompletionTokens, cached: parsed.Usage.PromptTokensDetails.CachedTokens}
+	if rec.kind == "embeddings" {
+		rec.usage.cached, rec.usage.completion = 0, 0
 	}
 	return restored
 }
@@ -976,10 +1097,16 @@ func (a *app) tokenHash(token string) []byte {
 	h.Write([]byte(token))
 	return h.Sum(nil)
 }
+
+// requireSession also enforces CSRF on every state-changing dashboard call.
 func (a *app) requireSession(w http.ResponseWriter, r *http.Request) (session, bool) {
 	s, ok := a.currentSession(r)
 	if !ok {
 		openAIError(w, 401, "SSO login required")
+		return session{}, false
+	}
+	if isMutation(r) && !a.validCSRF(r) {
+		openAIError(w, 403, "CSRF check failed")
 		return session{}, false
 	}
 	return s, true
@@ -1028,7 +1155,9 @@ func (a *app) sign(value string) string {
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
-func (a *app) verifyJWT(ctx context.Context, raw string) (claims, error) {
+// verifyJWT checks signature, issuer, subject and expiry, and, when azp is
+// set, that the token was issued to that client.
+func (a *app) verifyJWT(ctx context.Context, raw, azp string) (claims, error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
 		return claims{}, errors.New("malformed JWT")
@@ -1041,7 +1170,7 @@ func (a *app) verifyJWT(ctx context.Context, raw string) (claims, error) {
 		return claims{}, errors.New("unsupported JWT")
 	}
 	var cl claims
-	if decodeJWTPart(parts[1], &cl) != nil || cl.Issuer != a.cfg.issuer || cl.Subject == "" || cl.Expires <= time.Now().Unix() {
+	if decodeJWTPart(parts[1], &cl) != nil || cl.Issuer != a.cfg.issuer || cl.Subject == "" || cl.Expires <= time.Now().Unix() || (azp != "" && cl.AuthorizedParty != azp) {
 		return claims{}, errors.New("invalid JWT claims")
 	}
 	key, err := a.key(ctx, head.KID)

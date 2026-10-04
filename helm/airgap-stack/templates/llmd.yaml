@@ -136,6 +136,74 @@ spec:
         - port: 8000
           protocol: TCP
 ---
+# The private AI Gateway takes inference only from pat-service, the single
+# accounting boundary (docs/adr/0022 section 5); metrics only from the two
+# Prometheus servers. Kubelet readiness probes are not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-gateway-private
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      gateway.envoyproxy.io/owning-gateway-name: ai-gateway-private
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pat-service
+      ports:
+        - port: 8080
+          protocol: TCP
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 19001
+          protocol: TCP
+---
+# The endpoint picker's proxy forwards into the pool, so it is an inference
+# entry point too: only the private AI Gateway may call it. Its gRPC ports
+# are reached over localhost by its own proxy sidecar.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llmd-endpoint-picker
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      llm-d-router-gateway: llmd-qwen-test-epp
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: ai-gateway-private
+      ports:
+        - port: 8081
+          protocol: TCP
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
+        - port: 19001
+          protocol: TCP
+---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIGatewayRoute
 metadata:
@@ -271,6 +339,20 @@ spec:
         issuer: {{ .Values.oidc.externalIssuer }}
         remoteJWKS:
           uri: http://keycloak.{{ .Values.namespace }}.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+  # Only pat-service's own client-credentials token is accepted
+  # (docs/adr/0022 section 5): a user's Keycloak token, from Open WebUI or
+  # anywhere else, must go through pat-service's accounting first.
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: pat-service-only
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: azp
+                values: [pat-gateway]
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy

@@ -17,6 +17,67 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  name: pat-service-topology
+  namespace: airgap-ai-stack
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - inference.networking.k8s.io
+  resources:
+  - inferencepools
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - aigateway.envoyproxy.io
+  resources:
+  - aigatewayroutes
+  - aiservicebackends
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - gateway.envoyproxy.io
+  resources:
+  - backends
+  - securitypolicies
+  - backendtrafficpolicies
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways
+  - httproutes
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: prometheus-discovery
   namespace: airgap-ai-stack
 rules:
@@ -30,6 +91,33 @@ rules:
   - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pat-service-topology-nodes
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pat-service-topology
+  namespace: airgap-ai-stack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pat-service-topology
+subjects:
+- kind: ServiceAccount
+  name: pat-service
+  namespace: airgap-ai-stack
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: prometheus-discovery
@@ -41,6 +129,19 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: prometheus
+  namespace: airgap-ai-stack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pat-service-topology-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pat-service-topology-nodes
+subjects:
+- kind: ServiceAccount
+  name: pat-service
   namespace: airgap-ai-stack
 ---
 apiVersion: v1
@@ -510,6 +611,9 @@ spec:
   - name: metrics
     port: 9090
     targetPort: metrics
+  - name: infer-private
+    port: 8081
+    targetPort: infer-private
   selector:
     app.kubernetes.io/name: pat-service
 ---
@@ -882,7 +986,7 @@ spec:
         - name: OPENAI_API_CONFIGS
           value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["default","qwen-3.8-27b","qwen-3.8-flash-next"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent","pi-agent","opencode-agent","dsh-agent"]}}'
         - name: OPENAI_API_BASE_URLS
-          value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://agent-broker.agents.svc.cluster.local:8080/v1
+          value: http://pat-service.airgap-ai-stack.svc.cluster.local:8081/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://agent-broker.agents.svc.cluster.local:8080/v1
         - name: OPENWEBUI_AUTOMATIONS_PAT
           valueFrom:
             secretKeyRef:
@@ -948,7 +1052,7 @@ spec:
         - name: OAUTH_ADMIN_ROLES
           value: ai-admin
         - name: OPENAI_API_BASE_URL
-          value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1
+          value: http://pat-service.airgap-ai-stack.svc.cluster.local:8081/v1
         - name: ENABLE_FORWARD_USER_INFO_HEADERS
           value: "true"
         - name: FORWARD_USER_INFO_HEADER_USER_NAME
@@ -1102,6 +1206,28 @@ spec:
             secretKeyRef:
               key: PAT_GATEWAY_CLIENT_SECRET
               name: airgap-runtime
+        - name: PAT_DIRECTORY_CLIENT_ID
+          value: pat-directory
+        - name: PAT_DIRECTORY_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: PAT_DIRECTORY_CLIENT_SECRET
+              name: airgap-runtime
+              optional: true
+        - name: PRIVATE_INFERENCE_ADDR
+          value: :8081
+        - name: PRIVATE_INFERENCE_CLIENTS
+          value: open-webui
+        - name: INFERENCE_COVERAGE_SINCE
+          valueFrom:
+            secretKeyRef:
+              key: INFERENCE_COVERAGE_SINCE
+              name: airgap-runtime
+              optional: true
+        - name: PROMETHEUS_URL
+          value: http://prometheus.airgap-ai-stack.svc.cluster.local:9090
+        - name: GATEWAY_PROMETHEUS_URL
+          value: http://prometheus.monitoring.svc.cluster.local
         - name: OIDC_ISSUER
           value: {{ .Values.oidc.publicBaseURL }}/sso/realms/ai-stack
         - name: OIDC_INTERNAL_ISSUER
@@ -1154,6 +1280,8 @@ spec:
           name: http
         - containerPort: 9090
           name: metrics
+        - containerPort: 8081
+          name: infer-private
         readinessProbe:
           httpGet:
             path: /healthz
@@ -1415,6 +1543,36 @@ spec:
     volumesPerServer: 1
   requestAutoCert: false
 ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pat-service
+  namespace: airgap-ai-stack
+spec:
+  ingress:
+  - ports:
+    - port: 8080
+      protocol: TCP
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: openwebui
+    ports:
+    - port: 8081
+      protocol: TCP
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - port: 9090
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pat-service
+  policyTypes:
+  - Ingress
+---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -1566,6 +1724,18 @@ data:
           "defaultClientScopes": ["basic"]
         },
         {
+          "clientId": "pat-directory",
+          "name": "PAT service admin console user directory (read-only)",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "secret": "pat-directory-demo-only",
+          "serviceAccountsEnabled": true,
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "defaultClientScopes": ["basic"]
+        },
+        {
           "clientId": "grafana",
           "name": "Grafana",
           "enabled": true,
@@ -1660,6 +1830,12 @@ data:
         }
       ],
       "users": [
+        {
+          "username": "service-account-pat-directory",
+          "enabled": true,
+          "serviceAccountClientId": "pat-directory",
+          "clientRoles": { "realm-management": ["view-users"] }
+        },
         {
           "username": "demo",
           "enabled": true,

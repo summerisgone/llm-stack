@@ -22,6 +22,7 @@ runtimeEnvironment:
   PAT_HASH_KEY: replace-this-with-a-unique-32-byte-minimum-pat-hash-key
   PAT_COOKIE_KEY: replace-this-with-a-unique-32-byte-minimum-cookie-signing-key
   PAT_GATEWAY_CLIENT_SECRET: pat-gateway-demo-only
+  PAT_DIRECTORY_CLIENT_SECRET: pat-directory-demo-only
   WEBUI_SECRET_KEY: replace-this-with-a-unique-openwebui-session-encryption-key
   # Upstream bearer tokens for optional inference backends (see `inference`
   # below). Empty means "no Authorization header is injected"; only set one

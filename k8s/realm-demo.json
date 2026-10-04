@@ -89,6 +89,18 @@
       "defaultClientScopes": ["basic"]
     },
     {
+      "clientId": "pat-directory",
+      "name": "PAT service admin console user directory (read-only)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "pat-directory-demo-only",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["basic"]
+    },
+    {
       "clientId": "grafana",
       "name": "Grafana",
       "enabled": true,
@@ -183,6 +195,12 @@
     }
   ],
   "users": [
+    {
+      "username": "service-account-pat-directory",
+      "enabled": true,
+      "serviceAccountClientId": "pat-directory",
+      "clientRoles": { "realm-management": ["view-users"] }
+    },
     {
       "username": "demo",
       "enabled": true,

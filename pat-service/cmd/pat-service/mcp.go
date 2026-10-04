@@ -65,7 +65,7 @@ func (a *app) mcpAuthenticate(r *http.Request) (mcpCaller, int) {
 		return mcpCaller{}, http.StatusUnauthorized
 	}
 	if strings.HasPrefix(token, "sk-") {
-		id, owner, ownerName, _, err := a.lookupPAT(r.Context(), token)
+		id, owner, ownerName, _, _, err := a.lookupPAT(r.Context(), token)
 		if errors.Is(err, errDatabaseUnavailable) {
 			return mcpCaller{}, http.StatusServiceUnavailable
 		}
@@ -74,7 +74,7 @@ func (a *app) mcpAuthenticate(r *http.Request) (mcpCaller, int) {
 		}
 		return mcpCaller{subject: owner, name: ownerName, tokenID: id}, http.StatusOK
 	}
-	cl, err := a.verifyJWT(r.Context(), token)
+	cl, err := a.verifyJWT(r.Context(), token, "")
 	if err != nil {
 		return mcpCaller{}, http.StatusUnauthorized
 	}

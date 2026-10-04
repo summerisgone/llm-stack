@@ -152,6 +152,44 @@ spec:
     - name: metrics
       port: 9090
       targetPort: metrics
+    # Private inference entry point for Open WebUI's Keycloak tokens
+    # (docs/adr/0022 section 5). No route references it; the
+    # pat-service NetworkPolicy below opens it to Open WebUI only.
+    - name: infer-private
+      port: 8081
+      targetPort: infer-private
+---
+# Ingress to pat-service: the public API and dashboard port stays open to
+# the edge and in-cluster clients (agents, Open WebUI automations, MCP); the
+# private inference port only to Open WebUI; metrics only to Prometheus.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pat-service
+  namespace: airgap-ai-stack
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pat-service
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openwebui
+      ports:
+        - port: 8081
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
 ---
 # Writes agent-cred-<id> and restarts the agent pod when a user issues a
 # agent key on /platform; its Role lives in k8s/agents/rbac.yaml.
@@ -160,6 +198,76 @@ kind: ServiceAccount
 metadata:
   name: pat-service
   namespace: airgap-ai-stack
+---
+# Read-only topology for the admin console (docs/adr/0022 sections 7-8):
+# engines, pools, routes and nodes. pat-service decodes only the fields it
+# shows; it never returns env, annotations or full command lines. No
+# secrets, no write verbs. Deployment changes stay with Helm (ADR 0022
+# section 7, a separate worker).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pat-service-topology
+  namespace: airgap-ai-stack
+rules:
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list]
+  - apiGroups: [inference.networking.k8s.io]
+    resources: [inferencepools]
+    verbs: [get, list]
+  - apiGroups: [aigateway.envoyproxy.io]
+    resources: [aigatewayroutes, aiservicebackends]
+    verbs: [get, list]
+  - apiGroups: [gateway.envoyproxy.io]
+    resources: [backends, securitypolicies, backendtrafficpolicies]
+    verbs: [get, list]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gateways, httproutes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pat-service-topology
+  namespace: airgap-ai-stack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pat-service-topology
+subjects:
+  - kind: ServiceAccount
+    name: pat-service
+    namespace: airgap-ai-stack
+---
+# Nodes are cluster-scoped; this is the only cluster-wide read.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pat-service-topology-nodes
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pat-service-topology-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pat-service-topology-nodes
+subjects:
+  - kind: ServiceAccount
+    name: pat-service
+    namespace: airgap-ai-stack
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -191,6 +299,8 @@ spec:
               containerPort: 8080
             - name: metrics
               containerPort: 9090
+            - name: infer-private
+              containerPort: 8081
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -212,6 +322,37 @@ spec:
                 secretKeyRef:
                   name: airgap-runtime
                   key: PAT_GATEWAY_CLIENT_SECRET
+            # Read-only Keycloak directory client for the admin console
+            # (docs/adr/0022 section 1): user list and current ai-admin
+            # membership. Without the secret /platform/admin answers 503.
+            - name: PAT_DIRECTORY_CLIENT_ID
+              value: pat-directory
+            - name: PAT_DIRECTORY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: PAT_DIRECTORY_CLIENT_SECRET
+                  optional: true
+            # Private inference entry point (docs/adr/0022 section 5): Open
+            # WebUI's Keycloak access tokens, same accounting as PATs.
+            - name: PRIVATE_INFERENCE_ADDR
+              value: ":8081"
+            - name: PRIVATE_INFERENCE_CLIENTS
+              value: open-webui
+            # When Open WebUI was moved onto the private entry point; usage
+            # views label earlier periods "PAT only". Set in .env at cutover.
+            - name: INFERENCE_COVERAGE_SINCE
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: INFERENCE_COVERAGE_SINCE
+                  optional: true
+            # Admin console hardware and route health (docs/adr/0022 section
+            # 8): fixed queries only. Unset disables those panels.
+            - name: PROMETHEUS_URL
+              value: http://prometheus.airgap-ai-stack.svc.cluster.local:9090
+            - name: GATEWAY_PROMETHEUS_URL
+              value: http://prometheus.monitoring.svc.cluster.local
             - name: OIDC_ISSUER
               value: https://ai.example.com/sso/realms/ai-stack
             - name: OIDC_INTERNAL_ISSUER
@@ -475,13 +616,14 @@ spec:
             - name: OAUTH_ADMIN_ROLES
               value: ai-admin
             - name: OPENAI_API_BASE_URL
-              value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1
-            # Fetch the model list and issue chat requests through Envoy AI
-            # Gateway with the signed-in user's Keycloak access token. Envoy
-            # validates this token and derives X-User-Id itself; Open WebUI
-            # cannot assert an identity by sending a header alone. The base
-            # URL lands on the private ClusterIP-only AIGatewayRoute
-            # which is JWT-guarded, NOT the public PAT-gated /v1.
+              value: http://pat-service.airgap-ai-stack.svc.cluster.local:8081/v1
+            # Fetch the model list and issue chat requests with the signed-in
+            # user's Keycloak access token through pat-service's private
+            # entry point (docs/adr/0022 section 5): pat-service verifies the
+            # token, derives the user from it, records usage in the same
+            # ledger as PATs and calls the private AI Gateway with its own
+            # credential. Identity headers Open WebUI sends are stripped
+            # there. This is NOT the public PAT-gated /v1.
             - name: OPENAI_API_CONFIGS
               value: '{"0":{"auth_type":"system_oauth","enable":true}}'
             - name: ENABLE_FORWARD_USER_INFO_HEADERS

@@ -7,6 +7,7 @@ public_base_url=${PUBLIC_BASE_URL:?PUBLIC_BASE_URL must be set (make passes STAC
 namespace=${K8S_NAMESPACE:-airgap-ai-stack}
 gateway_secret=$(sed -n 's/^PAT_GATEWAY_CLIENT_SECRET=//p' .env | tail -n 1)
 [ -n "$gateway_secret" ]
+directory_secret=$(sed -n 's/^PAT_DIRECTORY_CLIENT_SECRET=//p' .env | tail -n 1)
 
 # Keycloak realm-management admin. Rotated per site; never hardcode it.
 keycloak_admin_user=${KEYCLOAK_ADMIN_USER:-admin}
@@ -55,5 +56,20 @@ upsert_client() {
 upsert_client open-webui "{\"clientId\":\"open-webui\",\"name\":\"Open WebUI\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"secret\":\"openwebui-demo-secret\",\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"redirectUris\":[\"$public_base_url/oauth/oidc/callback\"],\"webOrigins\":[\"$public_base_url\"],\"attributes\":{\"post.logout.redirect.uris\":\"$public_base_url/auth\"},\"defaultClientScopes\":[\"basic\",\"profile\",\"email\",\"roles\",\"groups\"]}"
 upsert_client pat-dashboard "{\"clientId\":\"pat-dashboard\",\"name\":\"Personal access token dashboard\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":true,\"standardFlowEnabled\":true,\"directAccessGrantsEnabled\":false,\"redirectUris\":[\"$public_base_url/platform/auth/callback\"],\"webOrigins\":[\"$public_base_url\"],\"defaultClientScopes\":[\"basic\",\"profile\",\"email\",\"roles\",\"groups\"]}"
 upsert_client pat-gateway "{\"clientId\":\"pat-gateway\",\"name\":\"PAT service to Envoy AI Gateway\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"secret\":\"$gateway_secret\",\"serviceAccountsEnabled\":true,\"standardFlowEnabled\":false,\"directAccessGrantsEnabled\":false,\"attributes\":{\"access.token.lifespan\":\"315360000\"},\"defaultClientScopes\":[\"basic\"]}"
+
+# Read-only user directory for the admin console (docs/adr/0022 section 1):
+# realm-management view-users only, no role or credential administration.
+if [ -n "$directory_secret" ]; then
+  upsert_client pat-directory "{\"clientId\":\"pat-directory\",\"name\":\"PAT service admin console user directory (read-only)\",\"enabled\":true,\"protocol\":\"openid-connect\",\"publicClient\":false,\"secret\":\"$directory_secret\",\"serviceAccountsEnabled\":true,\"standardFlowEnabled\":false,\"directAccessGrantsEnabled\":false,\"defaultClientScopes\":[\"basic\"]}"
+  json_field() { python3 -c 'import json,sys; v=json.load(sys.stdin); v=v[0] if isinstance(v, list) else v; print(v[sys.argv[1]])' "$1"; }
+  directory_id=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients?clientId=pat-directory" | json_field id)
+  directory_sa=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients/$directory_id/service-account-user" | json_field id)
+  realm_management=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients?clientId=realm-management" | json_field id)
+  view_users=$(curl -fsS -H "Authorization: Bearer $admin_token" "$admin_api/clients/$realm_management/roles/view-users")
+  curl -fsS -X POST -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+    "$admin_api/users/$directory_sa/role-mappings/clients/$realm_management" -d "[$view_users]"
+else
+  printf '%s\n' 'PAT_DIRECTORY_CLIENT_SECRET is not set in .env; the admin console stays disabled.' >&2
+fi
 
 printf '%s\n' 'Open WebUI and PAT Keycloak clients are ready.'

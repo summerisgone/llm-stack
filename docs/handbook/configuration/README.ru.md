@@ -39,7 +39,7 @@
 | Группа | Ключи | Кто использует |
 | --- | --- | --- |
 | Bootstrap и клиент Langfuse | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `LANGFUSE_INIT_*` | первый старт Langfuse, экспорт из OTEL Collector |
-| pat-service | `PAT_HASH_KEY`, `PAT_COOKIE_KEY` (каждый от 32 байт; смена ключа хэша убивает все PAT), `PAT_GATEWAY_CLIENT_SECRET` | pat-service, клиент Keycloak `pat-gateway` |
+| pat-service | `PAT_HASH_KEY`, `PAT_COOKIE_KEY` (каждый от 32 байт; смена ключа хэша убивает все PAT), `PAT_GATEWAY_CLIENT_SECRET`, `PAT_DIRECTORY_CLIENT_SECRET` (пустой отключает админку) | pat-service, клиенты Keycloak `pat-gateway` и `pat-directory` |
 | Open WebUI | `WEBUI_SECRET_KEY` (держать стабильным), `OPENWEBUI_AUTOMATIONS_PAT` | сессии Open WebUI, подключение Automations |
 | Движки | `VLLM_REPLICAS`, `SGLANG_REPLICAS`, `NINFER_REPLICAS`, `NINFER_API_KEY`, `EXTERNAL_API_KEY` | `make engines-up`, `<engine>-up`, `helm-up` |
 | Флаги функций | `WEB_SEARCH_ENABLED`, `REPOWISE_ENABLED` | pat-service, инструменты Open WebUI, агенты, `stack-up` ([MCP](../mcp/README.ru.md)) |

@@ -1,29 +1,11 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
+import { base, send, date } from './api.js'
+import { Icon, Topbar } from './components.jsx'
+import AdminApp from './admin/AdminApp.jsx'
 
-// The public path prefix is injected by the Go server into the
-// <meta name="pat-base"> tag in index.html from the URL_PREFIX env var.
-// Reading it from a meta tag rather than an inline <script> keeps the page
-// compatible with the service's own CSP header (script-src 'self'). Empty
-// string when the dashboard is mounted at "/", otherwise the public path
-// prefix that the Gateway's URLRewrite filter strips before the request
-// reaches this service.
-const base = (document.querySelector('meta[name="pat-base"]')?.content || '').replace(/\/$/, '')
 const api = `${base}/api/tokens`
-
-// Public origin of Open WebUI, injected by the Go server from the WEBUI_URL
-// env var (set on the remote profile). Falls back to the local-mac dev host
-// so the development profile keeps working without that env var.
-const webui = (document.querySelector('meta[name="pat-webui"]')?.content || 'http://ai.localhost:8080').replace(/\/$/, '')
-
-function date(value) {
-  return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Never'
-}
-
-function Icon({ children, className = '' }) {
-  return <span aria-hidden="true" className={`icon ${className}`}>{children}</span>
-}
 
 // heatmapDays is how far back the calendar heatmap reaches -- 182 days is
 // about 26 weeks, the same span GitHub's own contribution graph shows by
@@ -140,7 +122,7 @@ function AgentKeyPanel({ current, onIssued, setNotice }) {
     setIssuing(true)
     setNotice(null)
     try {
-      const response = await fetch(`${base}/api/agent-token`, { method: 'POST' })
+      const response = await send(`${base}/api/agent-token`)
       if (!response.ok) throw new Error((await response.text()).trim() || 'Could not issue agent key')
       const data = await response.json()
       setNotice({ kind: 'success', text: `Agent key issued, valid until ${date(data.expires_at)}.${data.agent_restarted ? ' Your running agents were restarted.' : ''}` })
@@ -161,7 +143,7 @@ function AgentKeyPanel({ current, onIssued, setNotice }) {
   </div>
 }
 
-function App() {
+function App({ capabilities }) {
   const [tokens, setTokens] = useState([])
   const [tokensCurrency, setTokensCurrency] = useState('')
   const [loading, setLoading] = useState(true)
@@ -234,11 +216,7 @@ function App() {
     setCreating(true)
     setNotice(null)
     try {
-      const response = await fetch(api, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: form.name, expires_in_days: Number(form.days) }),
-      })
+      const response = await send(api, { json: { name: form.name, expires_in_days: Number(form.days) } })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error?.message || 'Could not create token')
       setNewToken(data)
@@ -266,7 +244,7 @@ function App() {
     if (!window.confirm(`Revoke “${token.name}”? This cannot be undone.`)) return
     setNotice(null)
     try {
-      const response = await fetch(`${api}/${token.id}`, { method: 'POST' })
+      const response = await send(`${api}/${token.id}`)
       if (!response.ok) throw new Error('Could not revoke token')
       setNotice({ kind: 'success', text: `“${token.name}” was revoked. It can no longer access inference.` })
       await load()
@@ -275,26 +253,13 @@ function App() {
     }
   }
 
-  async function logout() {
-    await fetch(`${base}/auth/logout`, { method: 'POST' })
-    window.location.assign(`${base}/`)
-  }
 
   const sessionsPages = Math.max(1, Math.ceil(sessionsTotal / sessionsPageSize))
   const activeCount = tokens.filter((token) => !token.revoked_at).length
   const agentToken = tokens.find((token) => token.issued_by === 'agents' && !token.revoked_at && new Date(token.expires_at) > new Date())
 
   return <main className="shell">
-    <nav className="topbar">
-      <a className="brand" href={`${base}/`} aria-label="AI Stack PAT dashboard">
-        <span className="brand-mark"><span></span><span></span><span></span></span>
-        <span>AI Stack <em>Console</em></span>
-      </a>
-      <div className="topbar-actions">
-        <a className="openwebui-link" href={webui}>Open WebUI <Icon>↗</Icon></a>
-        <button className="signout" onClick={logout}><Icon>↗</Icon> Sign out</button>
-      </div>
-    </nav>
+    <Topbar capabilities={capabilities} />
 
     <section className="hero">
       <div>
@@ -362,4 +327,16 @@ function App() {
   </main>
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+function Root() {
+  // null until /api/session answers, so the admin console does not flash
+  // "access denied" while loading.
+  const [capabilities, setCapabilities] = useState(null)
+  useEffect(() => {
+    fetch(`${base}/api/session`).then((r) => (r.ok ? r.json() : null)).then((s) => setCapabilities(s?.capabilities || [])).catch(() => setCapabilities([]))
+  }, [])
+  const path = window.location.pathname.slice(base.length)
+  if (path === '/admin' || path.startsWith('/admin/')) return <AdminApp capabilities={capabilities} path={path} />
+  return <App capabilities={capabilities || []} />
+}
+
+createRoot(document.getElementById('root')).render(<Root />)
