@@ -122,7 +122,7 @@ STRATA_API_KEY=<EXTERNAL_API_KEY> deploy/strata/run
 STRATA_API_KEY=<EXTERNAL_API_KEY> deploy/strata/smoke   # first start: up to ~15 min
 deploy/vllm-qwen38-nvfp4/k3d-host-dns            # pods resolve host.k3d.internal
 # back on the workstation:
-make helm-up                                     # route, key, Open WebUI model list
+make helm-up                                     # route, key, Open WebUI model list, `default` -> Strata
 make embeddings-up && kubectl -n airgap-ai-stack scale deploy/embeddings-bge-m3 --replicas=1
 ```
 

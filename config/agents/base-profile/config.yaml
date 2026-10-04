@@ -8,7 +8,7 @@ model:
   # from INFERENCE_KEY in agent-cred-<id>.
   base_url: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
   api_key: ${HERMES_INFERENCE_KEY}
-  default: qwen-3.8-27b-ninfer
+  default: default
 
 terminal:
   backend: local

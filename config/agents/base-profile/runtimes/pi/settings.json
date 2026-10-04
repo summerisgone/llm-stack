@@ -1,6 +1,6 @@
 {
   "defaultProvider": "pat",
-  "defaultModel": "qwen-3.8-27b-ninfer",
+  "defaultModel": "default",
   "defaultThinkingLevel": "medium",
   "enableSkillCommands": false
 }

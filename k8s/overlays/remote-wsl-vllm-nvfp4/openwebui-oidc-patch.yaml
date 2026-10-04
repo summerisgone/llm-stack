@@ -48,7 +48,7 @@ spec:
             # only with a user token; an agent whose image is unset in the
             # broker (PI_IMAGE / OPENCODE_IMAGE / DSH_IMAGE) answers 404.
             - name: OPENAI_API_CONFIGS
-              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["qwen-3.8-27b","qwen-3.8-flash-next"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent","pi-agent","opencode-agent","dsh-agent"]}}'
+              value: '{"0":{"auth_type":"system_oauth","enable":true,"model_ids":["default","qwen-3.8-27b","qwen-3.8-flash-next"]},"1":{"auth_type":"bearer","enable":true,"prefix_id":"automations"},"2":{"auth_type":"system_oauth","enable":true,"model_ids":["hermes-agent","pi-agent","opencode-agent","dsh-agent"]}}'
             - name: OPENAI_API_BASE_URLS
               value: http://ai-gateway-private.envoy-gateway-system.svc.cluster.local:8080/v1;http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1;http://agent-broker.agents.svc.cluster.local:8080/v1
             # Issued for https://ai.example.com specifically (not a shared service
@@ -65,6 +65,6 @@ spec:
               value: ;$(OPENWEBUI_AUTOMATIONS_PAT);
             # Title, tag and follow-up generation go to the model, never to
             # a Hermes agent: each would be a full agent turn in the user's
-            # sandbox.
+            # sandbox. `default` follows the live engine (inference.defaultModel).
             - name: TASK_MODEL_EXTERNAL
-              value: qwen-3.8-27b
+              value: default

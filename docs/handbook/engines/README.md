@@ -7,7 +7,8 @@ first-class: their pods are members of the `qwen-3.8-27b` pool behind llm-d
 EPP and get queueing and fair share. ninfer cannot join EPP and serves its own
 model name, `qwen-3.8-27b-ninfer`. Strata runs on the GPU host and serves
 `qwen-3.8-flash-next` through the external API slot. llama.cpp and external OpenAI-compatible
-APIs are extra model names too. This page covers the pool, the engine
+APIs are extra model names too. The model name `default` always reaches the
+engine that currently serves. This page covers the pool, the engine
 replicas and the one command that applies them;
 [adding an engine](adding-an-engine.md) covers the rest.
 
@@ -16,6 +17,7 @@ replicas and the one command that applies them;
 - [Engine matrix](#engine-matrix)
 - [How a first-class engine is wired](#how-a-first-class-engine-is-wired)
 - [Engine replicas](#engine-replicas)
+- [The `default` model name](#the-default-model-name)
 - [Changing an engine's settings](#changing-an-engines-settings)
 - [Embeddings](#embeddings)
 - [Checks after a change](#checks-after-a-change)
@@ -100,8 +102,44 @@ make engines-up
 count from `.env`. With one GPU keep the total at 1: `qwen-3.8-27b` answers
 while vLLM or SGLang has a replica, `qwen-3.8-27b-ninfer` while ninfer has
 one. Moving the GPU between vLLM and SGLang changes nothing for clients;
-moving it to ninfer leaves `qwen-3.8-27b` without endpoints, so warn users
-first. With more GPUs, vLLM and SGLang replicas add up in one pool.
+moving it to ninfer or Strata leaves `qwen-3.8-27b` without endpoints. Clients
+on `default` follow the switch after `make helm-up`; clients on an engine's
+own name must be warned. With more GPUs, vLLM and SGLang replicas add up in
+one pool.
+
+## The `default` model name
+
+`default` (`inference.defaultModel` in `helm/airgap-stack/values.yaml`) is an
+engine-neutral model name. The gateway sends it to the current engine and
+rewrites the request's `model` to that engine's own name
+(`modelNameOverride`), so clients set `model: default` once and keep it
+across engine switches. The catch-all rule follows it too: a request with an
+unknown model name lands on the same engine.
+
+| Engine replicas in `.env` | `default` goes to |
+| --- | --- |
+| `VLLM_REPLICAS` or `SGLANG_REPLICAS` above 0 | the `qwen-3.8-27b` pool, through EPP |
+| else `NINFER_REPLICAS` above 0 | ninfer, `qwen-3.8-27b-ninfer` |
+| else `STRATA_REPLICAS` above 0 | Strata in the cluster |
+| else `STRATA_ON_HOST=1` | Strata on the host, through `inference.externalApi` |
+
+The Makefile derives `DEFAULT_ENGINE` from this table; set it in `.env` to
+override (`pool`, `ninfer`, `strata`, `externalApi`, `llamacpp`). The route
+changes on `make helm-up`, not on `engines-up`, which prints the engine
+`default` resolves to. Switching the engine is therefore:
+
+```sh
+# .env: new *_REPLICAS
+make engines-up
+make helm-up      # moves `default` (and the catch-all) to the new engine
+```
+
+The model behind `default` changes with the engine: the response's `model`
+field names it. A client that depends on one model's behaviour (JSON mode,
+which ninfer refuses; Qwen3.8-27B rather than Flash-Next) uses that model's
+own name. The cloud agents (`config/agents/base-profile`) and Open WebUI's
+model list use `default`; agents assume a 131,072-token context, the
+smallest of the engines.
 
 ## Changing an engine's settings
 

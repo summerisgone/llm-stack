@@ -16,9 +16,9 @@
           maxTokensField: max_tokens
           thinkingFormat: qwen-chat-template
         models:
-          - id: qwen-3.8-27b-ninfer
-            name: Qwen 3.8 27B (ninfer)
-            contextWindow: 196608
+          - id: default
+            name: Default model (current engine)
+            contextWindow: 131072
             maxTokens: 32768
             input: [text]
             reasoningEfforts:
@@ -28,7 +28,7 @@
 - id: agent-default-model
   config:
     provider: pat
-    model: qwen-3.8-27b-ninfer
+    model: default
 
 # Uploads session logs with requests to DeepSeek's own API, which is never
 # called here; off so nothing tries.

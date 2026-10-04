@@ -21,6 +21,10 @@ STRATA_REPLICAS ?= 0
 # cluster: it holds the GPU outside Kubernetes, so GPU embeddings may start
 # without an engine pod. Keep every *_REPLICAS at 0 then.
 STRATA_ON_HOST ?= 0
+# The engine behind the engine-neutral model name `default`
+# (inference.defaultModel, applied by helm-up): the pool while vLLM or SGLang
+# runs, else ninfer, else Strata. Set it in .env to override.
+DEFAULT_ENGINE ?= $(if $(filter-out 0,$(VLLM_REPLICAS) $(SGLANG_REPLICAS)),pool,$(if $(filter-out 0,$(NINFER_REPLICAS)),ninfer,$(if $(filter-out 0,$(STRATA_REPLICAS)),strata,$(if $(filter 1,$(STRATA_ON_HOST)),externalApi,pool))))
 ENGINE_DEPLOYMENT_vllm = vllm-qwen38-nvfp4
 ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
@@ -456,6 +460,7 @@ engines-up:
 	$(KUBECTL) -n $(K8S_NAMESPACE) scale deployment/embeddings-bge-m3 --replicas=1
 	$(KUBECTL) -n $(K8S_NAMESPACE) rollout status deployment/embeddings-bge-m3 --timeout=10m
 	@printf 'Engine replicas: vllm=%s sglang=%s ninfer=%s strata=%s\n' '$(VLLM_REPLICAS)' '$(SGLANG_REPLICAS)' '$(NINFER_REPLICAS)' '$(STRATA_REPLICAS)'
+	@printf 'Model "default" -> %s: run make helm-up if that changed\n' '$(DEFAULT_ENGINE)'
 
 # Compatibility aliases for the previous target names.
 nvfp4-up: stack-up
@@ -500,7 +505,8 @@ helm-env-values:
 HELM_ORIGIN_SETS = --set oidc.publicBaseURL=$(STACK_ORIGIN) \
 	--set oidc.externalIssuer=$(STACK_ORIGIN)/sso/realms/ai-stack \
 	--set dshWeb.publicOrigin=$(DSH_PUBLIC_ORIGIN) \
-	--set-file modelCache.checksums=models/checksums.txt
+	--set-file modelCache.checksums=models/checksums.txt \
+	--set-string inference.defaultModel.engine=$(DEFAULT_ENGINE)
 
 helm-up: helm-render helm-env-values
 	@[ -n "$(STACK_ORIGIN)" ] || { echo "helm-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }

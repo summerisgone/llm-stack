@@ -152,14 +152,27 @@ spec:
       sectionName: private
   rules:
     # Catch-all: any request whose model name isn't an exact match below
-    # lands in the qwen-3.8-27b pool -- e.g. a client sending its own model
-    # string instead of the canonical name.
+    # lands on the default engine (inference.defaultModel), renamed to its
+    # model name -- e.g. a client sending its own model string.
     - name: openai
       timeouts:
         request: 10m
       streamIdleTimeout: 10m
       backendRefs:
-        - name: llmd-qwen-test-openai
+        {{- include "airgap-stack.defaultModelBackendRef" . | nindent 8 }}
+    # The engine-neutral name, listed in /v1/models: the same backend as the
+    # catch-all, under a name clients can keep across engine switches.
+    - name: openai-default
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ .Values.inference.defaultModel.modelName }}
+      timeouts:
+        request: 10m
+      streamIdleTimeout: 10m
+      backendRefs:
+        {{- include "airgap-stack.defaultModelBackendRef" . | nindent 8 }}
     # Declare the model to the EAG OpenAI model router under its canonical
     # name. EAG only advertises models in /v1/models that it sees in an
     # exact-match rule on the x-ai-eg-model header (the model parsed from the

@@ -19,9 +19,9 @@ launch settings are in [vllm-inference.md](vllm-inference.md).
 
 The canonical model name, `qwen-3.8-27b`, is a pool
 ([ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)). The
-exact-match rule on `AIGatewayRoute/llmd` (`openai-qwen38nvfp4`) and the
-catch-all `openai` always forward to `llmd-qwen-test-openai`, llm-d EPP's own
-backend, never to an engine directly. EPP dispatches to every pod labelled
+exact-match rule on `AIGatewayRoute/llmd` (`openai-qwen38nvfp4`) always
+forwards to `llmd-qwen-test-openai`, llm-d EPP's own backend, never to an
+engine directly. EPP dispatches to every pod labelled
 `llm-d.ai/model=qwen-3.8-27b` on port 8000
 (`config/llmd/router-nvfp4-values.yaml` `router.modelServers`), vLLM and
 SGLang alike, so llm-d's queue, priority bands and fair share cover every
@@ -29,6 +29,15 @@ member ([ADR 0008](../adr/0008-per-user-fair-share.md)). Which engines serve
 is their replica counts, not a routing change. The engines run without an
 API key; the NetworkPolicy `inference-pool-members` admits only EPP and
 Prometheus to them.
+
+The engine-neutral name `default` (rule `openai-default`) and the catch-all
+`openai` (any other model name) go to the engine named by
+`inference.defaultModel.engine`, with `modelNameOverride` set to that
+engine's model name: `llmd-qwen-test-openai` for `pool`, otherwise that
+backend's own `AIServiceBackend`. `make helm-up` sets the engine from
+`DEFAULT_ENGINE`, which the Makefile derives from the engine replicas
+([engines handbook](../handbook/engines/README.md#the-default-model-name)).
+The chart refuses an engine whose `inference.<engine>.enabled` is false.
 
 ninfer cannot join EPP (see "EPP / fair-share" in `deploy/ninfer/README.md`
 -- EPP's scoring plugins need a `/metrics` endpoint ninfer does not have), so

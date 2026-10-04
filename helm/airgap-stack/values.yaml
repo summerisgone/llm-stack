@@ -43,6 +43,16 @@ inference:
   # sending `model: qwen-3.8-27b` unchanged across engine switches.
   # Must match each engine chart's `inference.servedModelName`.
   modelName: qwen-3.8-27b
+  # Engine-neutral model name: always the engine that currently serves, so
+  # clients keep it across switches between the pool, ninfer and Strata. The
+  # gateway rewrites it to that engine's own model name (modelNameOverride),
+  # and the catch-all rule (any unknown name) follows it too. engine is one
+  # of pool (vLLM/SGLang through EPP), ninfer, strata, externalApi,
+  # llamacpp; helm-up sets it from DEFAULT_ENGINE (Makefile), derived from
+  # the engine replicas in .env.
+  defaultModel:
+    modelName: default
+    engine: pool
   # Per-user storm guard on the inference route (llmd-per-user-limit
   # BackendTrafficPolicy) -- frequency, not concurrency; admission is the
   # llm-d EPP flow control (utilization-detector, ADR 0012), not this

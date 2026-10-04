@@ -6,11 +6,11 @@
       "apiKey": "${AGENT_INFERENCE_KEY}",
       "models": [
         {
-          "id": "qwen-3.8-27b-ninfer",
-          "name": "Qwen 3.8 27B (ninfer)",
+          "id": "default",
+          "name": "Default model (current engine)",
           "reasoning": true,
           "input": ["text"],
-          "contextWindow": 196608,
+          "contextWindow": 131072,
           "maxTokens": 32768,
           "compat": {"thinkingFormat": "qwen-chat-template"}
         }
