@@ -14,6 +14,7 @@
 - [Схема C: первый класс за EPP](#схема-c-первый-класс-за-epp)
 - [Контракт метрик](#контракт-метрик)
 - [ninfer](#ninfer)
+- [Strata](#strata)
 - [llama.cpp](#llamacpp)
 - [Чеклист](#чеклист)
 - [Связанные страницы](#связанные-страницы)
@@ -122,6 +123,27 @@ Job-ы сбора лежат в
   маленькой draft-головой и префиксный кэш, который держался при длинных
   параллельных сессиях агентов. Подробности и риски:
   [deploy/ninfer](../../../deploy/ninfer/README.md).
+
+## Strata
+
+Qwen3.8-Flash-Next IQ3_S, имя модели `qwen-3.8-flash-next`, MoE-модель,
+которая работает на одной GPU плюс системной RAM. Схема A: Docker-контейнер
+на хосте (`deploy/strata/run`, `config/strata/`) на `host.k3d.internal:8095`,
+маршрут через `inference.externalApi` с `EXTERNAL_API_KEY`.
+
+- Занимает GPU в обход Kubernetes: пока он работает, все реплики движков
+  остаются 0, а `STRATA_ON_HOST=1` позволяет запустить GPU-эмбеддинги после
+  него.
+- Один запрос за раз за собственной FIFO; метрик в Prometheus нет.
+- Поды видят `host.k3d.internal` только через алиас CoreDNS из
+  `deploy/vllm-qwen38-nvfp4/k3d-host-dns` (k3s теряет запись k3d в NodeHosts
+  при изменении нод); то же касается llama.cpp.
+- Замер через кластер: prefill 2.3-4.8K tok/s, decode 83-116 tok/s.
+- Замер на хосте: prefill 3.7-5.4K tok/s, decode 136-152 tok/s.
+- `helm/strata-inference` запускает его по схеме B (веса из MinIO, sidecar
+  метрик `strata_*`). Здесь выключен: поду не хватило RAM под экспертов,
+  которых не держит GPU, и он работал в 5-6 раз медленнее.
+  Подробности: [deploy/strata](../../../deploy/strata/README.md).
 
 ## llama.cpp
 

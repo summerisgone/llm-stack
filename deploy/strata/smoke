@@ -1,0 +1,44 @@
+#!/usr/bin/env sh
+set -eu
+
+# Wait for the host-run Strata (deploy/strata/run) to load, then send one chat
+# completion and check that it reports usage.
+#   STRATA_API_KEY=<key> deploy/strata/smoke
+
+env_file=${STRATA_ENV_FILE:-"$(CDPATH= cd -- "$(dirname -- "$0")/../../config/strata" && pwd)/strata.env"}
+if [ -f "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+
+container_name=${STRATA_CONTAINER_NAME:-strata}
+port=${PORT:-8095}
+timeout=${STRATA_STARTUP_TIMEOUT_SECONDS:-600}
+endpoint="http://127.0.0.1:$port"
+: "${STRATA_API_KEY:?}"
+
+# The port opens only once the model is loaded.
+elapsed=0
+until curl --fail --silent "$endpoint/health" >/dev/null; do
+  if ! docker ps --format '{{.Names}}' | grep -qx "$container_name"; then
+    docker logs --tail 200 "$container_name" >&2 || true
+    printf '%s\n' 'Strata exited before becoming healthy.' >&2
+    exit 1
+  fi
+  if [ "$elapsed" -ge "$timeout" ]; then
+    docker logs --tail 200 "$container_name" >&2 || true
+    printf '%s\n' "Timed out after ${timeout}s waiting for Strata." >&2
+    exit 1
+  fi
+  sleep 5
+  elapsed=$((elapsed + 5))
+done
+
+curl --fail --silent --show-error "$endpoint/v1/chat/completions" \
+  -H "Authorization: Bearer $STRATA_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "qwen-3.8-flash-next", "messages": [{"role": "user", "content": "Reply with exactly the word READY."}], "max_tokens": 16, "reasoning_effort": "none"}' |
+  grep -q '"completion_tokens"'
+printf '%s\n' "Strata answered on $endpoint with usage."

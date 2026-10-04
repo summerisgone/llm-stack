@@ -14,6 +14,7 @@ integrated, with ninfer and llama.cpp as the worked examples. Read
 - [Pattern C: first-class behind EPP](#pattern-c-first-class-behind-epp)
 - [Metrics contract](#metrics-contract)
 - [ninfer](#ninfer)
+- [Strata](#strata)
 - [llama.cpp](#llamacpp)
 - [Checklist](#checklist)
 - [Related](#related)
@@ -120,6 +121,26 @@ targets with `namespace=airgap-ai-stack`); dashboards in
 - Strengths measured in the pilot: MTP speculative decoding with a small
   draft head and a prefix cache that held under long concurrent agent
   sessions. Details and risks: [deploy/ninfer](../../../deploy/ninfer/README.md).
+
+## Strata
+
+Qwen3.8-Flash-Next IQ3_S, model name `qwen-3.8-flash-next`, a MoE model
+that runs from one GPU plus system RAM. Pattern A: a host Docker container
+(`deploy/strata/run`, `config/strata/`) on `host.k3d.internal:8095`, routed
+through `inference.externalApi` with `EXTERNAL_API_KEY`.
+
+- It holds the GPU outside Kubernetes: every engine replica stays 0 while it
+  runs, and `STRATA_ON_HOST=1` lets GPU embeddings start after it.
+- One request at a time behind its own FIFO; no Prometheus metrics.
+- Pods reach `host.k3d.internal` only through the CoreDNS alias from
+  `deploy/vllm-qwen38-nvfp4/k3d-host-dns` (k3s drops k3d's NodeHosts entry
+  when nodes change); the same applies to llama.cpp.
+- Measured through the cluster: prefill 2.3-4.8K tok/s, decode 83-116 tok/s.
+- Measured on the host: prefill 3.7-5.4K tok/s, decode 136-152 tok/s.
+- `helm/strata-inference` runs it as pattern B (MinIO weights, `strata_*`
+  metrics sidecar). Off here: the pod got too little RAM for the experts the
+  GPU does not hold and ran 5-6x slower.
+  Details: [deploy/strata](../../../deploy/strata/README.md).
 
 ## llama.cpp
 

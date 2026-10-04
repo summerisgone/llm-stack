@@ -5,7 +5,8 @@
 The engine is the process that runs the model on the GPU. vLLM and SGLang are
 first-class: their pods are members of the `qwen-3.8-27b` pool behind llm-d
 EPP and get queueing and fair share. ninfer cannot join EPP and serves its own
-model name, `qwen-3.8-27b-ninfer`. llama.cpp and external OpenAI-compatible
+model name, `qwen-3.8-27b-ninfer`. Strata runs on the GPU host and serves
+`qwen-3.8-flash-next` through the external API slot. llama.cpp and external OpenAI-compatible
 APIs are extra model names too. This page covers the pool, the engine
 replicas and the one command that applies them;
 [adding an engine](adding-an-engine.md) covers the rest.
@@ -28,14 +29,18 @@ replicas and the one command that applies them;
 | vLLM 0.27.1 | `qwen-3.8-27b` | `helm/vllm-inference`, `make vllm-up` | yes | native `/metrics` (`vllm:*`) | default |
 | SGLang 0.5.19 | `qwen-3.8-27b` | `helm/sglang-inference`, `make sglang-up` | yes | native `/metrics` (`sglang:*`) | first-class alternative |
 | ninfer | `qwen-3.8-27b-ninfer` | `helm/ninfer-inference`, `make ninfer-up` | no, direct route | JSONL log re-exported by a sidecar (`ninfer_*`) | pilot |
+| Strata (Qwen3.8-Flash-Next IQ3_S) | `qwen-3.8-flash-next` | host Docker, `deploy/strata/run`; route `inference.externalApi` | no, direct route | none in Prometheus (own JSON `/metrics` on the host) | on, host-run |
+| Strata in the cluster | `qwen-3.8-flash-next` | `helm/strata-inference`, `make strata-up` | no, direct route | JSON `/metrics` re-exported by a sidecar (`strata_*`) | off: too little RAM on this node |
 | llama.cpp | `llamacpp-local` | host Docker, `deploy/llamacpp` | no | none | optional, off |
-| external API | `external-api` | not managed | no | none | optional, off |
+| external API | `external-api` | not managed | no | none | used by Strata |
 | bge-m3 (embeddings) | `bge-m3` | `helm/embeddings-inference`, `make embeddings-up` | no, own route | native | on |
 
 Every engine pod requests `nvidia.com/gpu: 1` and runs on a GPU worker
 (`node-role/inference=true`,
 [ADR 0019](../../adr/0019-inference-plane-gpu-worker-nodes.md)). With one GPU,
-one engine pod runs at a time.
+one engine pod runs at a time. Host-run Strata holds the same GPU outside
+Kubernetes: while it runs, every engine replica stays 0
+([deploy/strata](../../../deploy/strata/README.md)).
 
 ## How a first-class engine is wired
 
@@ -73,6 +78,8 @@ Capacity is replicas per engine, set in `.env`:
 VLLM_REPLICAS=0
 SGLANG_REPLICAS=1
 NINFER_REPLICAS=0
+STRATA_REPLICAS=0
+STRATA_ON_HOST=0   # 1 while Strata runs on the host and holds the GPU
 ```
 
 ```sh

@@ -17,6 +17,10 @@ VLLM_REPLICAS ?= 1
 SGLANG_REPLICAS ?= 0
 NINFER_REPLICAS ?= 0
 STRATA_REPLICAS ?= 0
+# 1 while Strata runs on the GPU host (deploy/strata/run) instead of in the
+# cluster: it holds the GPU outside Kubernetes, so GPU embeddings may start
+# without an engine pod. Keep every *_REPLICAS at 0 then.
+STRATA_ON_HOST ?= 0
 ENGINE_DEPLOYMENT_vllm = vllm-qwen38-nvfp4
 ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
@@ -290,7 +294,7 @@ EMBEDDINGS_RELEASE = embeddings-inference
 
 embeddings-up:
 	@accel=$$(awk '/^accelerator:/{print $$2; exit}' $(EMBEDDINGS_CHART)/values.yaml); \
-	if [ "$$accel" = "gpu" ]; then \
+	if [ "$$accel" = "gpu" ] && [ "$(STRATA_ON_HOST)" != 1 ]; then \
 		running=$$($(KUBECTL) -n $(K8S_NAMESPACE) get pods -l 'app.kubernetes.io/name in (vllm-qwen38-nvfp4,sglang-qwen38,ninfer-qwen38,strata-flash-next)' --field-selector=status.phase=Running -o name 2>/dev/null); \
 		if [ -z "$$running" ]; then \
 			echo "embeddings-up: accelerator: gpu requires the live LLM engine (vLLM, SGLang, ninfer or Strata) to be Ready first -- see docs/adr/0013-embeddings-api-bge-m3.md 'Start order is fixed'." >&2; \

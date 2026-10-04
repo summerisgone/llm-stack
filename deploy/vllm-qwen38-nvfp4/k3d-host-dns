@@ -1,0 +1,34 @@
+#!/usr/bin/env sh
+set -eu
+
+# Resolve host.k3d.internal from pods: the GPU host as seen from the k3d
+# network (its Docker bridge gateway). k3d writes it into CoreDNS NodeHosts
+# when the cluster is created, but k3s rewrites NodeHosts when nodes change
+# (k3d-add-gpu-agent), and host-run backends (deploy/strata, deploy/llamacpp)
+# stop resolving. coredns-custom is k3s's own extension point and survives
+# that. Run on the GPU host; safe to repeat.
+
+cluster=${K3D_CLUSTER:-llm-stack}
+gateway=$(docker network inspect "k3d-$cluster" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')
+[ -n "$gateway" ] || {
+  printf '%s\n' "No gateway found for Docker network k3d-$cluster" >&2
+  exit 1
+}
+
+kubectl apply -f - <<YAML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  host-k3d-internal.server: |
+    host.k3d.internal:53 {
+        hosts {
+            $gateway host.k3d.internal
+        }
+    }
+YAML
+kubectl -n kube-system rollout restart deployment/coredns
+kubectl -n kube-system rollout status deployment/coredns --timeout=120s
+printf '%s\n' "host.k3d.internal -> $gateway"

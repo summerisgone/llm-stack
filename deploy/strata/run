@@ -1,0 +1,57 @@
+#!/usr/bin/env sh
+set -eu
+
+# Start Strata on the GPU host as a Docker container (deploy/strata/README.md).
+# The cluster reaches it as inference.externalApi at host.k3d.internal:$PORT.
+#   STRATA_API_KEY=<EXTERNAL_API_KEY from .env> deploy/strata/run
+
+config_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../../config/strata" && pwd)
+env_file=${STRATA_ENV_FILE:-"$config_dir/strata.env"}
+if [ -f "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+
+image=${STRATA_IMAGE:?}
+model_dir=${STRATA_MODEL_DIR:?}
+container_name=${STRATA_CONTAINER_NAME:-strata}
+port=${PORT:-8095}
+engine_config=${STRATA_ENGINE_CONFIG:-"$config_dir/strata-iq3_s.json"}
+
+# It listens on every interface of the host, so it never runs without a key.
+[ -n "${STRATA_API_KEY:-}" ] || {
+  printf '%s\n' "STRATA_API_KEY is not set (the cluster's EXTERNAL_API_KEY)." >&2
+  exit 1
+}
+test -d "$model_dir/packs" || {
+  printf '%s\n' "Model directory not found or incomplete: $model_dir" >&2
+  exit 1
+}
+if docker container inspect "$container_name" >/dev/null 2>&1; then
+  printf '%s\n' "Container already exists: $container_name" >&2
+  printf '%s\n' "Remove it explicitly before starting a replacement." >&2
+  exit 1
+fi
+
+# The image's entrypoint runs setup.py, which downloads from Hugging Face;
+# the server is started directly on the prepared model instead. memlock is
+# unlimited for the page-locked experts the GPU does not hold.
+exec docker run \
+  --detach \
+  --name "$container_name" \
+  --restart unless-stopped \
+  --gpus all \
+  --ulimit memlock=-1 \
+  --publish "$port:$port" \
+  --env STRATA_API_KEY \
+  --env "PORT=$port" \
+  --volume "$model_dir:/model:ro" \
+  --volume "$engine_config:/etc/strata/strata.json:ro" \
+  --workdir /opt/strata \
+  --entrypoint .venv/bin/python \
+  "$image" \
+  serve/server.py --engine strata --config /etc/strata/strata.json \
+  --host 0.0.0.0 --port "$port" \
+  "$@"

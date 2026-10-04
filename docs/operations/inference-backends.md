@@ -15,7 +15,7 @@ launch settings are in [vllm-inference.md](vllm-inference.md).
 | SGLang | `qwen-3.8-27b` (pool member) | `helm/sglang-inference` release, `make sglang-up` | llm-d EPP | `SGLANG_REPLICAS`, `make engines-up` |
 | ninfer (pilot) | `qwen-3.8-27b-ninfer` (its own) | `helm/ninfer-inference` release, `make ninfer-up` | direct `AIServiceBackend`, bypasses EPP | `NINFER_REPLICAS`, `make engines-up` |
 | llama.cpp | `llamacpp-local` | `deploy/llamacpp` (host Docker) | direct `AIServiceBackend`, bypasses EPP | `inference.llamacpp.enabled` |
-| External API | `external-api` (or whatever `inference.externalApi.modelName` is set to) | not managed by this repo | direct `AIServiceBackend`, bypasses EPP | `inference.externalApi.enabled` |
+| External API | `external-api` (or whatever `inference.externalApi.modelName` is set to) | not managed by this repo; here: Strata on the GPU host, `qwen-3.8-flash-next` (`deploy/strata`) | direct `AIServiceBackend`, bypasses EPP | `inference.externalApi.enabled` |
 
 The canonical model name, `qwen-3.8-27b`, is a pool
 ([ADR 0019](../adr/0019-inference-plane-gpu-worker-nodes.md)). The

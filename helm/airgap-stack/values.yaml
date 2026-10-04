@@ -65,11 +65,16 @@ inference:
   # local-mac profile's default), Ollama, a hosted API. Plain HTTP only --
   # routing a public HTTPS endpoint needs a BackendTLSPolicy this chart does
   # not define. Setting enabled without a host is a configuration error.
+  #
+  # Used for Strata run on the GPU host (deploy/strata/README.md): the
+  # container from deploy/strata/run, model qwen-3.8-flash-next. Its key is
+  # EXTERNAL_API_KEY in .env, the same value the container gets as
+  # STRATA_API_KEY.
   externalApi:
-    enabled: false
-    host: ""
-    port: 1234
-    modelName: external-api
+    enabled: true
+    host: host.k3d.internal
+    port: 8095
+    modelName: qwen-3.8-flash-next
   # ninfer pilot (docs/adr/0015-third-party-engine-metrics-contract.md,
   # ~/agent/ninfer-pilot-task.md). Unlike llamacpp/externalApi above, ninfer
   # is an in-cluster Deployment (helm/ninfer-inference, make ninfer-up), so
@@ -96,8 +101,12 @@ inference:
   # model name on a direct rule like ninfer -- no EPP queue or fair share.
   # Strata serves one request at a time behind its own FIFO. Requires the
   # strata-api-key Secret from helm-up (STRATA_API_KEY in .env).
+  # Off: on this 48 GB WSL node the pod gets too little RAM for the experts
+  # the GPU does not hold and runs 5-6x slower than on the host, so Strata
+  # runs on the host as externalApi above. Do not enable both: they serve
+  # the same model name.
   strata:
-    enabled: true
+    enabled: false
     host: strata-flash-next.airgap-ai-stack.svc.cluster.local
     port: 8000
     modelName: qwen-3.8-flash-next

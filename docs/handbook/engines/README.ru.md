@@ -5,7 +5,8 @@
 Движок - процесс, который выполняет модель на GPU. vLLM и SGLang -
 "граждане первого класса": их поды входят в пул `qwen-3.8-27b` за llm-d EPP
 и получают очередь и fair share. ninfer не может войти в EPP и обслуживает
-своё имя модели, `qwen-3.8-27b-ninfer`. llama.cpp и внешние
+своё имя модели, `qwen-3.8-27b-ninfer`. Strata работает на GPU-хосте и
+обслуживает `qwen-3.8-flash-next` через слот внешнего API. llama.cpp и внешние
 OpenAI-совместимые API - тоже отдельные имена моделей. Эта страница про
 пул, реплики движков и одну команду, которая их применяет; остальное - в
 [подключении движка](adding-an-engine.ru.md).
@@ -28,14 +29,18 @@ OpenAI-совместимые API - тоже отдельные имена мо�
 | vLLM 0.27.1 | `qwen-3.8-27b` | `helm/vllm-inference`, `make vllm-up` | да | нативные `/metrics` (`vllm:*`) | по умолчанию |
 | SGLang 0.5.19 | `qwen-3.8-27b` | `helm/sglang-inference`, `make sglang-up` | да | нативные `/metrics` (`sglang:*`) | альтернатива первого класса |
 | ninfer | `qwen-3.8-27b-ninfer` | `helm/ninfer-inference`, `make ninfer-up` | нет, прямой маршрут | JSONL-лог, переэкспортированный sidecar-ом (`ninfer_*`) | пилот |
+| Strata (Qwen3.8-Flash-Next IQ3_S) | `qwen-3.8-flash-next` | Docker на хосте, `deploy/strata/run`; маршрут `inference.externalApi` | нет, прямой маршрут | нет в Prometheus (свой JSON `/metrics` на хосте) | включён, на хосте |
+| Strata в кластере | `qwen-3.8-flash-next` | `helm/strata-inference`, `make strata-up` | нет, прямой маршрут | JSON `/metrics`, переэкспортированный sidecar-ом (`strata_*`) | выключен: мало RAM на этой ноде |
 | llama.cpp | `llamacpp-local` | Docker на хосте, `deploy/llamacpp` | нет | нет | опционально, выключен |
-| внешний API | `external-api` | не управляется стеком | нет | нет | опционально, выключен |
+| внешний API | `external-api` | не управляется стеком | нет | нет | занят Strata |
 | bge-m3 (эмбеддинги) | `bge-m3` | `helm/embeddings-inference`, `make embeddings-up` | нет, свой маршрут | нативные | включён |
 
 Каждый под движка запрашивает `nvidia.com/gpu: 1` и работает на GPU-ноде
 (`node-role/inference=true`,
 [ADR 0019](../../adr/0019-inference-plane-gpu-worker-nodes.md)). При одной
-GPU одновременно работает один под движка.
+GPU одновременно работает один под движка. Strata на хосте занимает ту же
+GPU в обход Kubernetes: пока он работает, все реплики движков остаются 0
+([deploy/strata](../../../deploy/strata/README.md)).
 
 ## Как подключён движок первого класса
 
@@ -73,6 +78,8 @@ ninfer не входит в пул: правило `openai-ninfer` (model ==
 VLLM_REPLICAS=0
 SGLANG_REPLICAS=1
 NINFER_REPLICAS=0
+STRATA_REPLICAS=0
+STRATA_ON_HOST=0   # 1, пока Strata работает на хосте и занимает GPU
 ```
 
 ```sh
