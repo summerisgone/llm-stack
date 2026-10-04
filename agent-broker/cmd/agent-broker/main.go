@@ -102,6 +102,14 @@ func main() {
 		}
 	}
 	stopGrace, _ := strconv.ParseInt(env("AGENT_STOP_GRACE_SECONDS", "30"), 10, 64)
+	// Runtimes migrated to ACP and the Open WebUI Pipe (docs/adr/0021): their
+	// pods run the agent over ACP and the broker serves interact.go for them.
+	pipe := map[string]bool{}
+	for _, name := range strings.Split(os.Getenv("AGENT_PIPE_RUNTIMES"), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			pipe[name] = true
+		}
+	}
 
 	var backend Backend
 	switch b := env("AGENT_BACKEND", "pods"); b {
@@ -127,6 +135,7 @@ func main() {
 			Repowise:     os.Getenv("REPOWISE_ENABLED") == "true",
 			DshMemLimit:  env("DSH_MEMORY_LIMIT", "2Gi"),
 			DshWebHost:   dshAuthority,
+			ACP:          pipe,
 		})
 	default:
 		slog.Error("unsupported AGENT_BACKEND", "backend", b)
@@ -168,16 +177,11 @@ func main() {
 		slots:   slots,
 		backend: backend,
 		catalog: catalog,
-		pipe:    map[string]bool{},
+		pipe:    pipe,
 		// No overall timeout: agent turns run for minutes. The request
 		// context cancels the upstream call when the client goes away.
 		client: &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 0,
 			DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext}},
-	}
-	for _, name := range strings.Split(os.Getenv("AGENT_PIPE_RUNTIMES"), ",") {
-		if name = strings.TrimSpace(name); name != "" {
-			s.pipe[name] = true
-		}
 	}
 	srv := &http.Server{Addr: env("LISTEN_ADDR", ":8080"), Handler: s.routes(),
 		ReadHeaderTimeout: 10 * time.Second}

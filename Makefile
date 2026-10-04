@@ -579,13 +579,13 @@ agent-broker-image:
 
 # pi, opencode and dsh agents behind agent-broker (agent-adapter/Dockerfile,
 # one target each). Tag = content hash of the adapter sources, recorded as
-# PI_IMAGE / OPENCODE_IMAGE / DSH_IMAGE in versions.lock.env. An empty one
+# PI_IMAGE / OPENCODE_IMAGE / DSH_IMAGE / HERMES_IMAGE in versions.lock.env. An empty one
 # (e.g. in .env) leaves that agent out of Open WebUI.
-AGENT_ADAPTER_SRC = agent-adapter/Dockerfile agent-adapter/package.json agent-adapter/server.mjs
+AGENT_ADAPTER_SRC = agent-adapter/Dockerfile agent-adapter/package.json agent-adapter/server.mjs agent-adapter/acp.mjs agent-adapter/pi-rpc
 agent-adapter-images:
 	cd agent-adapter && node --test
-	for rt in pi opencode dsh; do \
-		tag=$$(shasum -a 256 $(AGENT_ADAPTER_SRC) agent-adapter/$$rt.mjs | shasum -a 256 | cut -c1-12); \
+	for rt in pi opencode dsh hermes; do \
+		tag=$$(shasum -a 256 $(AGENT_ADAPTER_SRC) $$(ls agent-adapter/$$rt.mjs 2>/dev/null) | shasum -a 256 | cut -c1-12); \
 		image=llm-stack/agent-$$rt:$$tag; \
 		var=$$(printf %s $$rt | tr a-z A-Z)_IMAGE; \
 		docker buildx build --load $(AGENTS_BUILD_FLAGS) --target $$rt --tag $$image agent-adapter && \

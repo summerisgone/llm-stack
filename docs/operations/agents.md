@@ -119,23 +119,40 @@ back to Keycloak means the `dsh-web` client's redirect URI does not match
 token to the logs unmasked; the broker fetches it from agent-adapter
 `/web-token`.
 
-## Interactive agent Pipe (dsh)
+## Interactive agent Pipe and ACP
 
 [ADR 0021](../adr/0021-openwebui-pipe-and-acp-agent-integration.md). An Open
 WebUI Pipe (`config/openwebui/agent_pipe.py`, function `agent_pipe`) offers
-`DeepSeek agent (personal, interactive)` next to the connection-2 model.
-It shows tool progress as status lines and collapsible blocks, asks the
-user in a browser confirmation dialog before each tool the agent wants
-permission for, and Stop cancels the turn.
+`<agent> (personal, interactive)` for each runtime in `AGENT_PIPE_RUNTIMES`,
+next to the connection-2 models. It shows tool progress as status lines and
+collapsible blocks, asks the user in a browser confirmation dialog before
+each tool the agent wants permission for, and Stop cancels the turn.
 
 Path: Pipe -> broker `POST /v1/agent/turns` and `/v1/agent/permissions`
 (user's Keycloak token from the Pipe's `__oauth_token__`) -> agent-adapter
-same paths -> dsh over ACP stdio. The broker-to-adapter protocol is NDJSON
-events per turn plus a permission POST (`agent-broker/cmd/agent-broker/
-interact.go`); it is not ACP. There is no reconnect: closing the turn's
-response (Stop, closed tab, broker restart) cancels the turn and any
-pending permission request, and the Pipe reports a stream that ended
-without `done` as an unknown outcome.
+same paths -> the agent over ACP stdio (`agent-adapter/acp.mjs`). The
+broker-to-adapter protocol is NDJSON events per turn plus a permission POST
+(`agent-broker/cmd/agent-broker/interact.go`); it is not ACP. There is no
+reconnect: closing the turn's response (Stop, closed tab, broker restart)
+cancels the turn and any pending permission request, and the Pipe reports a
+stream that ended without `done` as an unknown outcome.
+
+A runtime listed in `AGENT_PIPE_RUNTIMES` runs over ACP for both paths: the
+broker sets `AGENT_PROTOCOL=acp` in its pod, and connection 2 keeps working
+through the same ACP session (permission requests are approved there, as
+before). dsh always runs over ACP.
+
+| Runtime | ACP agent | Asks permission for | Existing chats |
+| --- | --- | --- | --- |
+| dsh | `dsh --profile acp` | `bash`, `write`, `edit`, `str_replace_editor`: approval policy `ask` plus a PreToolUse hook (`runtimes/dsh/acp.patch.yml`, `approval-hooks.json`); still no bwrap sandbox (`DSH_PERMISSION_MODE=danger-full-access`) | same dsh session |
+| opencode | `opencode acp` (1.18.32) | `bash` and file edits (`OPENCODE_PERMISSION`); web tools stay denied | same opencode session |
+| pi | `pi-acp` 0.0.34 running `pi --mode rpc` with pi-mcp-adapter (`agent-adapter/pi-rpc`) | nothing: pi has no tool permissions, only extension confirmations | `pi-sessions/<key>` handed to pi-acp at start |
+| hermes | `hermes acp` from the upstream image (`[acp]` is in `[all]`) | commands Hermes classes as dangerous | new session (the native API server keeps none) |
+
+Hermes over ACP needs the `agent-hermes` image (upstream Hermes plus the
+adapter, `agent-adapter/Dockerfile` target `hermes`) as `HERMES_IMAGE`; the
+upstream image alone has no `/opt/agent` and the pod fails to start. The
+same image runs `hermes gateway run` when hermes is not listed.
 
 Rules the adapter enforces:
 
@@ -146,29 +163,33 @@ Rules the adapter enforces:
   session already received, in order (hashes in the PVC's
   `agent-turns.json`). Edit, regenerate and branching from an earlier
   message are refused with a message; the user starts a new chat.
-- A chat started on the `dsh-agent` connection continues the same dsh
-  session; a chat the agent has no session for gets a notice that earlier
-  messages are not in its context.
+- A chat the agent has no session for gets a notice that earlier messages
+  are not in its context.
 - Attachments are refused, not dropped.
 
-Enable, per runtime (only `dsh` is supported):
+Enable, per runtime:
 
-1. `.env`: `AGENT_PIPE_RUNTIMES=dsh`, then `make agents-up` (broker).
+1. `.env`: `AGENT_PIPE_RUNTIMES=dsh,opencode,pi,hermes` (any subset), then
+   `make agents-up AGENTS_OVERLAY=...` (broker). Running agents keep their
+   previous mode until they restart: delete their pods
+   (`kubectl -n agents delete pod -l app.kubernetes.io/managed-by=agent-broker`,
+   profiles stay) to switch at once.
 2. `make openwebui-agent-pipe` (admin `OPENWEBUI_API_KEY` in `.env`):
    creates or updates the function from the repository, activates it and
    sets its `MODELS` valve. The agent images must include this
    agent-adapter (`make agent-adapter-images` or the GHCR build).
 
-Rollback: `AGENT_PIPE_RUNTIMES=` and both commands again. The Pipe stays
-installed with no models; `dsh-agent` on connection 2 is unchanged, and
-chats keep their dsh sessions.
+Rollback: drop the runtime from `AGENT_PIPE_RUNTIMES` and run both commands
+again. Its Pipe model disappears and its pod runs natively again (pi SDK,
+opencode HTTP, `hermes gateway run`); opencode and pi chats keep their
+sessions, chats continued over ACP on Hermes do not carry back.
 
 Checks:
 
 ```sh
 kubectl -n agents get configmap agent-images -o jsonpath='{.data.AGENT_PIPE_RUNTIMES}'
 kubectl -n agents logs deploy/agent-broker | grep 'agent turn'
-kubectl -n agents logs <dsh-agent-pod> -c agent | grep 'agent turn failed'
+kubectl -n agents logs <agent-pod> | grep -E 'agent-adapter ready|agent turn failed'   # "protocol":"acp"
 ```
 
 ## Deploy and update

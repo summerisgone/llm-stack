@@ -2,13 +2,14 @@
 // agent-broker/backend.go) in front of agents without an OpenAI-compatible
 // server of their own: POST /v1/chat/completions (bearer API_SERVER_KEY) and
 // GET /health on AGENT_PORT. AGENT_RUNTIME picks the backend (pi.mjs,
-// opencode.mjs, dsh.mjs). GET /web-token hands dsh web's launch token to the
+// opencode.mjs, dsh.mjs; acp.mjs for pi, opencode and hermes with
+// AGENT_PROTOCOL=acp). GET /web-token hands dsh web's launch token to the
 // broker's web proxy. Open WebUI resends the whole conversation on every turn;
 // the agent keeps its own session instead, one per Open WebUI chat
 // (X-OpenWebUI-Chat-Id, forwarded by the broker), and only the last user
 // message is sent to it.
 //
-// Runtimes whose backend is `interactive` (dsh) also serve the broker's
+// Runtimes whose backend is `interactive` (every ACP backend) also serve the broker's
 // interaction protocol for the Open WebUI Pipe (docs/adr/0021). It is not
 // ACP; ACP stays between this process and the agent on stdio.
 //   POST /v1/agent/turns {chat_id, users: [user texts, last is the prompt]}
@@ -291,8 +292,16 @@ async function main() {
   const runtime = process.env.AGENT_RUNTIME
   const home = process.env.AGENT_HOME || '/opt/data/home'
   const apiKey = process.env.API_SERVER_KEY
-  if (!apiKey || !['pi', 'opencode', 'dsh'].includes(runtime)) {
-    console.error('API_SERVER_KEY and AGENT_RUNTIME=pi|opencode|dsh are required')
+  if (!apiKey || !['pi', 'opencode', 'dsh', 'hermes'].includes(runtime)) {
+    console.error('API_SERVER_KEY and AGENT_RUNTIME=pi|opencode|dsh|hermes are required')
+    process.exit(1)
+  }
+  // dsh speaks only ACP; the others over ACP when the broker migrated them
+  // (AGENT_PIPE_RUNTIMES, docs/adr/0021), else natively (pi.mjs,
+  // opencode.mjs; Hermes then runs its own API server without the adapter).
+  const acp = runtime === 'dsh' || process.env.AGENT_PROTOCOL === 'acp'
+  if (!acp && runtime === 'hermes') {
+    console.error('AGENT_RUNTIME=hermes needs AGENT_PROTOCOL=acp')
     process.exit(1)
   }
   let backend = null
@@ -304,15 +313,15 @@ async function main() {
     ready: () => backend !== null,
     backend: {
       prompt: (...args) => backend.prompt(...args),
-      interactive: runtime === 'dsh',
+      interactive: acp,
       hasSession: (key) => backend?.hasSession?.(key),
       webToken: () => backend?.webToken?.(),
     },
   })
   server.listen(Number(process.env.AGENT_PORT || 8642), '0.0.0.0')
-  const mod = await import(`./${runtime}.mjs`)
-  backend = await mod.start({ home, cwd: process.env.AGENT_CWD || '/work' })
-  console.log(JSON.stringify({ msg: 'agent-adapter ready', runtime }))
+  const mod = await import(runtime === 'dsh' || !acp ? `./${runtime}.mjs` : './acp.mjs')
+  backend = await mod.start({ home, cwd: process.env.AGENT_CWD || '/work', runtime })
+  console.log(JSON.stringify({ msg: 'agent-adapter ready', runtime, protocol: acp ? 'acp' : 'native' }))
   const stop = async () => {
     server.close()
     await backend.stop?.()

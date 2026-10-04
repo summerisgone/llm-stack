@@ -2,8 +2,9 @@ name: agent images
 
 # The agent fleet's first-party images (docs/adr/0014, docs/adr/0020):
 # agent-broker, agent-catalog (with config/agents/base-profile as the
-# `profile` build context) and the agent-adapter runtimes pi, opencode and
-# dsh. Tagged sha-<short sha> and latest; versions.lock.env pins the sha tag.
+# `profile` build context) and the agent-adapter runtimes pi, opencode, dsh
+# and hermes (upstream Hermes plus the adapter, docs/adr/0021). Tagged
+# sha-<short sha> and latest; versions.lock.env pins the sha tag.
 
 on:
   push:
@@ -41,6 +42,9 @@ jobs:
           - image: agent-dsh
             context: agent-adapter
             target: dsh
+          - image: agent-hermes
+            context: agent-adapter
+            target: hermes
     steps:
       - uses: actions/checkout@v4
 

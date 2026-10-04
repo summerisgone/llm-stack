@@ -358,7 +358,7 @@ def render_dsh(catalog, home, soul, servers):
                 "        headers:\n"
                 "          Authorization: !!js '`Bearer ${process.env.AGENT_INFERENCE_KEY}`'\n")
     write_atomic(os.path.join(dsh_home, "cordis.patch.yml"), patch)
-    for name in ("acp.patch.yml", "web.patch.yml"):
+    for name in ("acp.patch.yml", "web.patch.yml", "approval-hooks.json"):
         shutil.copyfile(os.path.join(src, name), os.path.join(dsh_home, name + ".tmp"))
         os.replace(os.path.join(dsh_home, name + ".tmp"), os.path.join(dsh_home, name))
     write_atomic(os.path.join(dsh_home, "AGENTS.md"), soul)

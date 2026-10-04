@@ -26,7 +26,7 @@ MODELS = {
     "opencode": "opencode-agent=OpenCode agent",
     "dsh": "dsh-agent=DeepSeek agent",
 }
-SUPPORTED = {"dsh"}  # runtimes whose adapter serves the interaction protocol
+SUPPORTED = set(MODELS)  # every runtime runs over ACP when listed (docs/adr/0021)
 
 
 def api_key():

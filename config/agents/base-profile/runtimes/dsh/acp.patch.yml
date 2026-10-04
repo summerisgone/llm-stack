@@ -4,3 +4,26 @@
   config:
     provider: pat
     model: default
+
+# Ask before shell commands and file writes (docs/adr/0021). The image runs
+# dsh with DSH_PERMISSION_MODE=danger-full-access (no bwrap sandbox inside
+# gVisor), which also sets the approval policy to never and leaves nothing to
+# ask about. Policy ask plus a PreToolUse hook answering "ask" for those tools
+# routes each call to session/request_permission: the Open WebUI Pipe asks
+# the user, connection 2 (agent-adapter) approves as before. The web profile
+# is unchanged.
+- id: approval
+  config:
+    policy: ask
+- id: permission
+  config:
+    defaultPreset: full-access-ask
+    presets:
+      full-access-ask:
+        sandbox: danger-full-access
+        approval: ask
+- insert:
+    - id: approval-hooks
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: !!js process.env.DSH_HOME + '/approval-hooks.json'

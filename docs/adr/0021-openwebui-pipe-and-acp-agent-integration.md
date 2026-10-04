@@ -10,9 +10,18 @@ open. The Pipe is `config/openwebui/agent_pipe.py`; the broker protocol is
 NDJSON per turn plus a permission POST (`agent-broker/cmd/agent-broker/
 interact.go`), with no reconnect: a closed stream cancels the turn. Edit,
 regenerate and branch are rejected. Runbook:
-[operations/agents.md](../operations/agents.md#interactive-agent-pipe-dsh).
+[operations/agents.md](../operations/agents.md#interactive-agent-pipe-and-acp).
 Pipe hooks were read in the v0.11.4 source (`functions.py`: `__oauth_token__`,
 `__event_call__`), not yet exercised in a browser.
+
+On 2026-10-04 opencode, pi and Hermes gained an ACP mode behind the same
+switch (`AGENT_PIPE_RUNTIMES`), keeping the native path for rollback:
+`opencode acp` (1.18.32), `pi-acp` 0.0.34 over `pi --mode rpc`, and
+`hermes acp` from the pinned upstream image, packaged with the adapter as
+`agent-hermes`. Each was exercised against its pinned artifact with a fake
+model (approve/deny where the runtime asks, session reattach, native
+sessions carried over for opencode and pi); gate 7 on the live model and in
+a browser is open.
 
 Extends [ADR 0014](0014-hermes-curated-catalog-and-worker-slots.md) with an
 agent interaction path that can display tool progress and ask for permission.

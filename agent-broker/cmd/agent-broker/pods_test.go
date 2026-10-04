@@ -106,3 +106,44 @@ func TestDshPodGetsWebPortAndWorkspace(t *testing.T) {
 		t.Fatalf("memory limit %v", mem)
 	}
 }
+
+func TestACPRuntimePods(t *testing.T) {
+	podFor := func(cfg PodsConfig, runtime string) (map[string]any, map[string]any) {
+		var pod map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&pod)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte("{}"))
+		}))
+		defer srv.Close()
+		cfg.Runtimes = []Runtime{{Name: "hermes", ModelID: "hermes-agent", Image: "hermes:1"}, {Name: "pi", ModelID: "pi-agent", Image: "pi:1"}}
+		b := NewPodsBackend(&kube{base: srv.URL, ns: "agents", client: srv.Client()}, cfg)
+		if err := b.createPod(context.Background(), User{ID: "abc", Name: "u"}, AgentRef{Runtime: runtime, ID: "abc"}, StartSpec{CatalogImage: "catalog"}); err != nil {
+			t.Fatal(err)
+		}
+		c := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+		env := map[string]any{}
+		for _, e := range c["env"].([]any) {
+			m := e.(map[string]any)
+			env[m["name"].(string)] = m["value"]
+		}
+		return c, env
+	}
+	acp := PodsConfig{ACP: map[string]bool{"hermes": true, "pi": true}}
+
+	c, env := podFor(acp, "hermes")
+	if fmt.Sprint(c["command"]) != "[node /opt/agent/server.mjs]" || env["AGENT_RUNTIME"] != "hermes" ||
+		env["AGENT_PROTOCOL"] != "acp" || env["HERMES_HOME"] != "/opt/data/home" {
+		t.Fatalf("hermes over ACP: %v %v", c["command"], env)
+	}
+	if _, env := podFor(acp, "pi"); env["AGENT_PROTOCOL"] != "acp" {
+		t.Fatalf("pi over ACP: %v", env)
+	}
+	c, env = podFor(PodsConfig{}, "hermes")
+	if fmt.Sprint(c["command"]) != "[/bin/sh -c umask 002 && exec /opt/hermes/.venv/bin/hermes gateway run]" || env["AGENT_PROTOCOL"] != nil {
+		t.Fatalf("native hermes: %v %v", c["command"], env)
+	}
+	if _, env := podFor(PodsConfig{}, "pi"); env["AGENT_PROTOCOL"] != nil {
+		t.Fatalf("native pi: %v", env)
+	}
+}

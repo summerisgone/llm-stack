@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# pi-acp's pi command (PI_ACP_PI_COMMAND, acp.mjs): pi with pi-mcp-adapter
+# loaded, as pi.mjs does through the SDK, because pi has no MCP client.
+set -eu
+here=$(dirname "$0")
+exec "$here/node_modules/.bin/pi" --extension "$here/node_modules/pi-mcp-adapter" "$@"

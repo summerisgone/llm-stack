@@ -136,6 +136,10 @@ type PodsConfig struct {
 	// DshWebHost is the public authority of the dsh web UI, trusted by dsh
 	// web; empty = no web UI (docs/adr/0020).
 	DshWebHost string
+	// ACP lists the runtimes whose agent runs over ACP behind agent-adapter
+	// (AGENT_PROTOCOL=acp, docs/adr/0021); dsh always does. Hermes then runs
+	// the adapter from its image instead of `hermes gateway run`.
+	ACP map[string]bool
 }
 
 // PodsBackend: one pod per active agent, mounting only that agent's RWO
@@ -444,8 +448,19 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 		// Hermes directly, without the image's s6 /init: that bootstrap
 		// needs root, and the catalog sync has already prepared the
 		// profile. umask 002 keeps personal files group-writable for the
-		// sync uid (it archives shadowed personal skills).
+		// sync uid (it archives shadowed personal skills); over ACP the
+		// adapter sets it before starting `hermes acp`.
 		command = []string{"/bin/sh", "-c", "umask 002 && exec /opt/hermes/.venv/bin/hermes gateway run"}
+		if b.cfg.ACP["hermes"] {
+			env = append(env,
+				map[string]any{"name": "AGENT_RUNTIME", "value": "hermes"},
+				map[string]any{"name": "AGENT_PROTOCOL", "value": "acp"},
+				map[string]any{"name": "AGENT_HOME", "value": "/opt/data/home"},
+				map[string]any{"name": "AGENT_PORT", "value": fmt.Sprint(AgentPort)},
+				map[string]any{"name": "AGENT_MODEL_NAME", "value": rt.ModelID},
+			)
+			command = []string{"node", "/opt/agent/server.mjs"}
+		}
 	} else {
 		// agent-adapter (the image's entrypoint) in front of pi / opencode / dsh.
 		env = append(env,
@@ -455,6 +470,9 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 			map[string]any{"name": "AGENT_MODEL_NAME", "value": rt.ModelID},
 			secretEnv("AGENT_INFERENCE_KEY", "INFERENCE_KEY", true),
 		)
+		if b.cfg.ACP[ref.Runtime] {
+			env = append(env, map[string]any{"name": "AGENT_PROTOCOL", "value": "acp"})
+		}
 	}
 	ports := []map[string]any{{"name": "api", "containerPort": AgentPort}}
 	memLimit := b.cfg.MemLimit

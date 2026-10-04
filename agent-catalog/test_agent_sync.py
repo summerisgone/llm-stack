@@ -189,7 +189,7 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(inserted[0]["config"]["url"],
                          "http://pat-service.airgap-ai-stack.svc.cluster.local:8080/mcp/web-search/")
         self.assertIn("process.env.AGENT_INFERENCE_KEY", inserted[0]["config"]["headers"]["Authorization"])
-        for name in ("acp.patch.yml", "web.patch.yml", "AGENTS.md"):
+        for name in ("acp.patch.yml", "web.patch.yml", "approval-hooks.json", "AGENTS.md"):
             self.assertTrue(os.path.exists(os.path.join(dsh_home, name)))
 
     def test_opencode_config_gets_skills_and_mcp(self):

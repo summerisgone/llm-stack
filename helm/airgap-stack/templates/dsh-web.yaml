@@ -63,6 +63,9 @@ spec:
     redirectURL: {{ printf "%s/oauth2/callback" $origin | quote }}
     logoutPath: /oauth2/logout
     forwardAccessToken: true
+    # Plain JWT cookies, as repowise: encrypted ones push the callback's
+    # Set-Cookie headers past the site proxy's 4k upstream header buffer.
+    disableTokenEncryption: true
     refreshToken: true
     cookieNames:
       accessToken: dsh-web-access-token
