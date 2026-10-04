@@ -56,10 +56,13 @@ func ledgerKind(path string) string {
 	return ""
 }
 
-// requestOutcome classifies a finished request. A failure to deliver the
-// body counts as cancelled when the client went away, otherwise as error.
+// requestOutcome classifies a finished request. A request that failed while
+// the client was gone, before or during the response, counts as cancelled;
+// any other failure as error.
 func requestOutcome(r *http.Request, rec *requestRecord, copyErr error) string {
 	switch {
+	case rec.status == 0 && r.Context().Err() != nil:
+		return "cancelled"
 	case rec.status == 0 || rec.status >= 500:
 		return "error"
 	case rec.status == http.StatusTooManyRequests:

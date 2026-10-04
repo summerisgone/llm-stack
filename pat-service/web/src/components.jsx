@@ -5,8 +5,9 @@ export function Icon({ children, className = '' }) {
 }
 
 export async function logout() {
-  await send(`${base}/auth/logout`)
-  window.location.assign(`${base}/`)
+  const res = await send(`${base}/auth/logout`)
+  const body = res.ok ? await res.json().catch(() => ({})) : {}
+  window.location.assign(body.logout_url || `${base}/`)
 }
 
 // Topbar is shared by the personal dashboard and the admin console. The

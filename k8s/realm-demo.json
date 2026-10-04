@@ -73,6 +73,9 @@
       "directAccessGrantsEnabled": false,
       "redirectUris": ["https://ai.example.com/platform/auth/callback"],
       "webOrigins": ["https://ai.example.com"],
+      "attributes": {
+        "post.logout.redirect.uris": "https://ai.example.com/platform/"
+      },
       "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
     },
     {

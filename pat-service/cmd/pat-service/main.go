@@ -39,6 +39,9 @@ import (
 const (
 	cookieName      = "pat_session"
 	loginCookieName = "pat_login"
+	// idTokenCookieName keeps the Keycloak ID token as id_token_hint for
+	// RP-initiated logout, so Keycloak ends its SSO session without asking.
+	idTokenCookieName = "pat_id_token"
 )
 
 // dashboardAssets is the production build of the dashboard. Keeping it in
@@ -638,6 +641,7 @@ func (a *app) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	var result struct {
 		AccessToken string `json:"access_token"`
+		IDToken     string `json:"id_token"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&result) != nil {
 		http.Error(w, "invalid SSO response", 502)
@@ -658,6 +662,9 @@ func (a *app) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session error", 500)
 		return
 	}
+	if result.IDToken != "" {
+		http.SetCookie(w, &http.Cookie{Name: idTokenCookieName, Value: result.IDToken, Path: "/", MaxAge: int(time.Until(time.Unix(cl.Expires, 0)).Seconds()), HttpOnly: true, Secure: a.cfg.secureCookies, SameSite: http.SameSiteLaxMode})
+	}
 	http.SetCookie(w, &http.Cookie{Name: loginCookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.cfg.secureCookies, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, a.cfg.urlPrefix+"/", http.StatusFound)
 }
@@ -667,8 +674,17 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-origin request", http.StatusForbidden)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.cfg.secureCookies, SameSite: http.SameSiteLaxMode})
-	w.WriteHeader(http.StatusNoContent)
+	// Clearing only our cookie is not a sign-out: Keycloak's SSO session
+	// would log the browser straight back in. The client navigates to the
+	// returned end-session URL, which lands back on the dashboard.
+	q := url.Values{"client_id": {a.cfg.clientID}, "post_logout_redirect_uri": {a.cfg.publicOrigin + a.cfg.urlPrefix + "/"}}
+	if c, err := r.Cookie(idTokenCookieName); err == nil && c.Value != "" {
+		q.Set("id_token_hint", c.Value)
+	}
+	for _, name := range []string{cookieName, idTokenCookieName} {
+		http.SetCookie(w, &http.Cookie{Name: name, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.cfg.secureCookies, SameSite: http.SameSiteLaxMode})
+	}
+	writeJSON(w, 200, map[string]string{"logout_url": a.cfg.issuer + "/protocol/openid-connect/logout?" + q.Encode()})
 }
 
 func (a *app) listTokens(w http.ResponseWriter, r *http.Request) {

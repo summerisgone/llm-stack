@@ -125,12 +125,25 @@ data:
   # market price to look up for it. These rates ($0.10/$2.475/$0.0495 per 1M
   # in/out/cached) are chargeback figures set by the team, not fetched from a
   # provider -- update this entry directly if that figure changes.
+  #
+  # bge-m3 (embeddings): $0.009738 per 1M input tokens; embeddings produce no
+  # output tokens.
+  #
+  # qwen-3.8-27b-ninfer is the same checkpoint on the ninfer engine (its own
+  # model name, ADR 0019), so it is priced as qwen-3.8-27b.
+  #
+  # qwen-3.8-flash-next (Strata, the default engine): $0.15/$0.47/$0.016 per
+  # 1M in/out/cache read, as given by the team. Requests sent as `default`
+  # are priced by the model name in the response, i.e. this entry.
   pricing.json: |
     {
       "currency": "USD",
       "models": {
         "_default": { "prompt_per_1k": 1.0, "cached_per_1k": 1.0, "completion_per_1k": 3.0 },
-        "qwen-3.8-27b": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 }
+        "qwen-3.8-27b": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 },
+        "qwen-3.8-27b-ninfer": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 },
+        "qwen-3.8-flash-next": { "prompt_per_1k": 0.00015, "cached_per_1k": 0.000016, "completion_per_1k": 0.00047 },
+        "bge-m3": { "prompt_per_1k": 0.000009738, "cached_per_1k": 0.000009738, "completion_per_1k": 0 }
       }
     }
 ---

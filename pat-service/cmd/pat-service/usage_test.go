@@ -61,6 +61,19 @@ func TestRecordUsageStreamingFeedsTokenAndCostCounters(t *testing.T) {
 	}
 }
 
+func TestPricingCostQwen38FlashNextMatchesConfiguredRate(t *testing.T) {
+	// k8s/base/applications.yaml's pat-service-pricing ConfigMap: $0.15 in,
+	// $0.47 out, $0.016 cache read per 1M tokens.
+	p := pricing{Models: map[string]modelPrice{
+		"qwen-3.8-flash-next": {PromptPer1K: 0.00015, CachedPer1K: 0.000016, CompletionPer1K: 0.00047},
+	}}
+	got := p.cost("qwen-3.8-flash-next", 2_000_000, 1_000_000, 1_000_000)
+	want := 0.15 + 0.016 + 0.47 // 1M uncached prompt, 1M cached, 1M output
+	if diff := got - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("cost = %v, want %v", got, want)
+	}
+}
+
 func TestPricingCostFallsBackToDefault(t *testing.T) {
 	p := pricing{Currency: "RUB", Models: map[string]modelPrice{
 		"_default": {PromptPer1K: 1, CachedPer1K: 1, CompletionPer1K: 3},

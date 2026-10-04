@@ -92,6 +92,7 @@ func TestRequestOutcome(t *testing.T) {
 		{live, 429, nil, "rejected"},
 		{live, 400, nil, "client_error"},
 		{gone, 200, context.Canceled, "cancelled"},
+		{gone, 0, context.Canceled, "cancelled"}, // client left before response headers
 		{live, 200, errors.New("upstream reset"), "error"},
 	} {
 		if got := requestOutcome(tc.r, &requestRecord{status: tc.status}, tc.err); got != tc.want {

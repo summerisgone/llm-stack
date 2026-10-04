@@ -75,23 +75,26 @@ for url in targets:
         code = status(url, token)
         check("blocked from Open WebUI: " + url, False, "answered HTTP %d" % code)
     except Exception as e:
-        check("blocked from Open WebUI: " + url, True, type(e).__name__)
+        check("blocked from Open WebUI: " + url, True, str(getattr(e, "reason", e)))
 sys.exit(1 if failed else 0)
 ' "$keycloak" "$private"
 
 # Network policy lets pat-service through, so the gateway's own check is
-# visible here: a realm token that is not pat-gateway must get 403.
+# visible here: an inference request with a realm token that is not
+# pat-gateway must get 403. (The gateway's generated /v1/models catalogue
+# route only checks the token signature; it serves no inference.)
 if ready "$gateway_namespace" ai-gateway-private; then
   printf '%s\n' "$directory_secret" | kubectl -n "$namespace" exec -i deployment/pat-service -- sh -c '
     read -r secret
     token=$(wget -qO- --post-data "grant_type=client_credentials&client_id=pat-directory&client_secret=$secret" "$1" | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
     [ -n "$token" ] || { echo "FAIL: no directory token"; exit 1; }
-    out=$(wget -S -O /dev/null --header "Authorization: Bearer $token" "$2" 2>&1 || true)
+    out=$(wget -S -O /dev/null --header "Authorization: Bearer $token" --header "Content-Type: application/json" \
+      --post-data "{\"model\":\"default\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" "$2" 2>&1 || true)
     if printf "%s" "$out" | grep -q " 403 "; then
-      echo "ok:   AI Gateway rejects a non-pat-gateway token (HTTP 403)"
+      echo "ok:   AI Gateway rejects inference with a non-pat-gateway token (HTTP 403)"
     else
       echo "FAIL: AI Gateway accepted or failed differently:"; printf "%s\n" "$out" | grep "HTTP/" ; exit 1
     fi
-  ' sh "$keycloak" "http://ai-gateway-private.$gateway_namespace.svc.cluster.local:8080/v1/models"
+  ' sh "$keycloak" "http://ai-gateway-private.$gateway_namespace.svc.cluster.local:8080/v1/chat/completions"
 fi
 printf '%s\n' 'Inference reaches models only through pat-service.'

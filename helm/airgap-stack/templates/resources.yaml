@@ -331,7 +331,10 @@ data:
       "currency": "USD",
       "models": {
         "_default": { "prompt_per_1k": 1.0, "cached_per_1k": 1.0, "completion_per_1k": 3.0 },
-        "qwen-3.8-27b": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 }
+        "qwen-3.8-27b": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 },
+        "qwen-3.8-27b-ninfer": { "prompt_per_1k": 0.0001, "cached_per_1k": 0.0000495, "completion_per_1k": 0.002475 },
+        "qwen-3.8-flash-next": { "prompt_per_1k": 0.00015, "cached_per_1k": 0.000016, "completion_per_1k": 0.00047 },
+        "bge-m3": { "prompt_per_1k": 0.000009738, "cached_per_1k": 0.000009738, "completion_per_1k": 0 }
       }
     }
 kind: ConfigMap

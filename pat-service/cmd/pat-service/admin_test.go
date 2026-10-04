@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -408,6 +409,47 @@ func TestPublicOrigin(t *testing.T) {
 		if got := publicOrigin(in); got != want {
 			t.Errorf("publicOrigin(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Logout must end the Keycloak SSO session too, or the next /auth/login
+// signs the browser straight back in.
+func TestLogoutEndsKeycloakSession(t *testing.T) {
+	kc := newFakeKeycloak(t)
+	a := adminTestApp(kc)
+	a.cfg.urlPrefix = "/platform"
+	r := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	r.Header.Set("Origin", "https://ai.example.com")
+	r.AddCookie(sessionCookie(t, a, liveSession("alice")))
+	r.AddCookie(&http.Cookie{Name: idTokenCookieName, Value: "id.token.value"})
+	rec := httptest.NewRecorder()
+	newMux(a).ServeHTTP(rec, r)
+	var body map[string]string
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &body) != nil {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	u, err := url.Parse(body["logout_url"])
+	if err != nil || u.Scheme+"://"+u.Host+u.Path != testIssuer+"/protocol/openid-connect/logout" {
+		t.Fatalf("logout_url = %q", body["logout_url"])
+	}
+	q := u.Query()
+	if q.Get("id_token_hint") != "id.token.value" || q.Get("client_id") != "pat-dashboard" ||
+		q.Get("post_logout_redirect_uri") != "https://ai.example.com/platform/" {
+		t.Errorf("query = %v", q)
+	}
+	cleared := map[string]bool{}
+	for _, c := range rec.Result().Cookies() {
+		cleared[c.Name] = c.MaxAge < 0
+	}
+	if !cleared[cookieName] || !cleared[idTokenCookieName] {
+		t.Errorf("cookies not cleared: %v", cleared)
+	}
+	cross := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	cross.Header.Set("Origin", "https://evil.example")
+	rec = httptest.NewRecorder()
+	newMux(a).ServeHTTP(rec, cross)
+	if rec.Code != 403 {
+		t.Errorf("cross-origin logout: %d", rec.Code)
 	}
 }
 
