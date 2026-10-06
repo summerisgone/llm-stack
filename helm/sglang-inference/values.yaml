@@ -26,6 +26,8 @@ inference:
   # Every pod of a pool listens on the same port (ADR 0019); no --api-key,
   # the NetworkPolicy in helm/airgap-stack restricts who reaches it.
   port: 8000
+  # GPUs per pod (--tp-size); keep resources' nvidia.com/gpu equal to it.
+  tensorParallelSize: 1
   # GPU-only profile validated on RTX 5090 with three admission slots and no
   # speculative decoding. See ADR 0010 and the 2026-09-08 tuning results.
   trustRemoteCode: true
@@ -36,6 +38,8 @@ inference:
   cudaGraphMaxBsDecode: 3
   maxMambaCacheSize: 12
   # mambaFullMemoryRatio: omitted - agents_nospec uses the sglang default
+  # speculative: omitted - no MTP here (agents_nospec). Set it to use the
+  # checkpoint's MTP layer: {algorithm, numSteps, eagleTopk, numDraftTokens}.
   mambaSsmDtype: bfloat16
   mambaRadixCacheStrategy: extra_buffer_lazy
   chunkedPrefillSize: 2048

@@ -783,6 +783,16 @@ spec:
             secretKeyRef:
               key: password
               name: keycloak-db-app
+        - name: KEYCLOAK_DEMO_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: KEYCLOAK_DEMO_USER_PASSWORD
+              name: airgap-runtime
+        - name: KEYCLOAK_ADMIN_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: KEYCLOAK_ADMIN_USER_PASSWORD
+              name: airgap-runtime
         - name: KC_BOOTSTRAP_ADMIN_USERNAME
           value: admin
         - name: KC_BOOTSTRAP_ADMIN_PASSWORD
@@ -1380,7 +1390,7 @@ spec:
           value: all
         - name: NVIDIA_DRIVER_CAPABILITIES
           value: compute,utility
-        image: llm-stack/vllm-qwen38-nvfp4:0.27.1
+        image: docker.io/library/python:3.12-slim@sha256:ddb0207ae1f0356c2b724d740769b0c5f5f51cc54a0525178f721825f78fe74c
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -1529,7 +1539,7 @@ spec:
     region: us-east-1
   configuration:
     name: minio-configuration
-  image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  image: docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
   imagePullPolicy: IfNotPresent
   pools:
   - name: pool-0
@@ -1711,6 +1721,9 @@ data:
           "directAccessGrantsEnabled": false,
           "redirectUris": ["{{ .Values.oidc.publicBaseURL }}/platform/auth/callback"],
           "webOrigins": ["{{ .Values.oidc.publicBaseURL }}"],
+          "attributes": {
+            "post.logout.redirect.uris": "{{ .Values.oidc.publicBaseURL }}/platform/"
+          },
           "defaultClientScopes": ["basic", "profile", "email", "roles", "groups"]
         },
         {
@@ -1847,8 +1860,8 @@ data:
           "lastName": "User",
           "email": "demo@ai.local",
           "groups": ["/demo-users"],
-          "realmRoles": ["ai-user"],
-          "credentials": [{ "type": "password", "value": "demo-password", "temporary": false }]
+          "realmRoles": ["ai-user", "default-roles-ai-stack"],
+          "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEMO_USER_PASSWORD}", "temporary": false }]
         },
         {
           "username": "admin",
@@ -1858,8 +1871,8 @@ data:
           "lastName": "User",
           "email": "admin@ai.local",
           "groups": ["/demo-users"],
-          "realmRoles": ["ai-user", "ai-admin"],
-          "credentials": [{ "type": "password", "value": "admin-demo-only", "temporary": false }]
+          "realmRoles": ["ai-user", "ai-admin", "default-roles-ai-stack"],
+          "credentials": [{ "type": "password", "value": "${KEYCLOAK_ADMIN_USER_PASSWORD}", "temporary": false }]
         }
       ]
     }

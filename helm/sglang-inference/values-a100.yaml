@@ -1,0 +1,46 @@
+# Overlay for 2x A100 40GB (sm80, no FP4): .env
+# SGLANG_EXTRA_ARGS=--values helm/sglang-inference/values-a100.yaml
+#
+# Sizing, per GPU at TP=2 (Qwen3.8-27B: 16 full-attention layers with
+# 4 KV heads x 256, 48 linear-attention layers):
+#   static pool   0.88 x ~39.4 GiB            ~34.7 GiB
+#   weights       W4A16, ~19.5 GB / 2         ~9.5 GiB
+#   mamba slots   128 x ~36 MB (SGLang keeps 4 per running request)
+#                                             ~4.6 GiB
+#   MTP           intermediate mamba-state cache, ~9.3 GB / 2 ~4.6 GiB
+#   KV cache      fp8_e4m3 (kvCacheDtype auto picks it for this
+#                 checkpoint), 16 x 2 x 2 heads x 256 x 1 B = 16 KiB/token
+#                 ~16 GiB                     ~1M tokens
+# Measured on 1x A100 80GB at TP=1, 0.90 (docs/install/k3s-split-gpu.md):
+# weights 17.65 GB, 128 mamba slots 9.4 GB, KV 1.43M tokens without MTP and
+# 935k with it.
+modelCache:
+  model: RedHatAI-Qwen3.8-27B-INT4
+
+inference:
+  tensorParallelSize: 2
+  contextLength: 180224
+  # 40 GB cards keep ~4.7 GiB each for activations, CUDA graphs and NCCL.
+  memFractionStatic: "0.88"
+  maxRunningRequests: 32
+  cudaGraphMaxBsDecode: 32
+  # SGLang caps maxRunningRequests at maxMambaCacheSize / 4.
+  maxMambaCacheSize: 128
+  # The checkpoint's MTP layer (model_mtp.safetensors). Measured: accept
+  # length ~2.96, +68% decode at 1 request, +26% at 8, even at 16, -5% at 32;
+  # costs ~35% of the KV pool.
+  speculative:
+    algorithm: NEXTN
+    numSteps: 3
+    eagleTopk: 1
+    numDraftTokens: 4
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 16Gi
+    nvidia.com/gpu: "2"
+  limits:
+    cpu: "16"
+    memory: 48Gi
+    nvidia.com/gpu: "2"

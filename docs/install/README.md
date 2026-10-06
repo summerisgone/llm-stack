@@ -4,7 +4,8 @@ How the installed stack works and is operated afterwards is in the
 [handbook](../handbook/README.md).
 
 This is the ordered runbook for standing the remote GPU profile up somewhere
-it has never run. Day-2 operations — tunnels, reboots, dashboards — are in
+it has never run. For native k3s with a CPU control host and a separate GPU
+worker, see [k3s-split-gpu.md](k3s-split-gpu.md). Day-2 operations — tunnels, reboots, dashboards — are in
 [docs/operations](../operations/README.md).
 
 ## What a site needs

@@ -47,6 +47,20 @@ d3cfb92742e30c8b46564665791dbe0a86ed64cfc02b1275081530793c0c9581  models/RadixAr
 e5d078b00e6c1223b32444db8c1001dc71d86ceef8ee706b5bf084c3a43a1f9c  models/RadixArk-Qwen3.8-27B-NVFP4/tokenizer_config.json
 7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13  models/RadixArk-Qwen3.8-27B-NVFP4/video_preprocessor_config.json
 ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003  models/RadixArk-Qwen3.8-27B-NVFP4/vocab.json
+# RedHatAI/Qwen3.8-27B-INT4 @ 91bd022d5b49442a868bc35008f6c21e1860edfa (SGLang on A100).
+# Hashed on the GPU worker 2026-10-06; .cache/huggingface is not part of the model.
+34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930  models/RedHatAI-Qwen3.8-27B-INT4/.gitattributes
+b732cc57c4ae7d2e17c11cbf7e75312146048f7105dd05cbda66460a0d97e681  models/RedHatAI-Qwen3.8-27B-INT4/README.md
+c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041  models/RedHatAI-Qwen3.8-27B-INT4/chat_template.jinja
+5498b42f9ea96d2669709c177e29122997ce14786a7530fe1ea1b340e535776c  models/RedHatAI-Qwen3.8-27B-INT4/config.json
+6ef70d6670f24f03a9041724c7663ef26bc1e678d10f79c93fe11c192ba14b7d  models/RedHatAI-Qwen3.8-27B-INT4/generation_config.json
+fd5c287e3a03f30b0e53fd5fe66ec90ab5fdd94807f7f8df699cca3ae9534910  models/RedHatAI-Qwen3.8-27B-INT4/model.safetensors
+4785ab547634568e4e2d5887da9dc9986e554c313e733a4a1ef2c2d6f02bf292  models/RedHatAI-Qwen3.8-27B-INT4/model.safetensors.index.json
+1d8268aa85ace093a561e3e7b63b9d390dac1cd55a90cd55b5ec509c3c9da9fe  models/RedHatAI-Qwen3.8-27B-INT4/model_mtp.safetensors
+bfbc24af59a3e73a9cd0653b8d4ae758dfaec4e3e6c15dfb1c6c8ee8d5683c85  models/RedHatAI-Qwen3.8-27B-INT4/processor_config.json
+bc61e7b4d3601cc6ab5feeacb2c9a6d711c22be10e29c9ad808591d29cb58027  models/RedHatAI-Qwen3.8-27B-INT4/recipe.yaml
+06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523  models/RedHatAI-Qwen3.8-27B-INT4/tokenizer.json
+5f7aa0d810000c4a0940b35c8f16e56c3439260fccc13a321826ebc3ccf2501f  models/RedHatAI-Qwen3.8-27B-INT4/tokenizer_config.json
 # ninfer v3 artifact, single file (helm/ninfer-inference). Hashed 2026-10-02.
 74d2c57145e6ff11d1d2faa79594477f9bc903a611af1fb20218189fbbb77d82  models/qwen3_8_27b_nvfp4.ninfer
 # Strata Qwen3.8-Flash-Next IQ3_S, prepared by Strata setup.py (deploy/strata/README.md). Hashed 2026-10-03.

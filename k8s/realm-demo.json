@@ -212,8 +212,8 @@
       "lastName": "User",
       "email": "demo@ai.local",
       "groups": ["/demo-users"],
-      "realmRoles": ["ai-user"],
-      "credentials": [{ "type": "password", "value": "demo-password", "temporary": false }]
+      "realmRoles": ["ai-user", "default-roles-ai-stack"],
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEMO_USER_PASSWORD}", "temporary": false }]
     },
     {
       "username": "admin",
@@ -223,8 +223,8 @@
       "lastName": "User",
       "email": "admin@ai.local",
       "groups": ["/demo-users"],
-      "realmRoles": ["ai-user", "ai-admin"],
-      "credentials": [{ "type": "password", "value": "admin-demo-only", "temporary": false }]
+      "realmRoles": ["ai-user", "ai-admin", "default-roles-ai-stack"],
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_ADMIN_USER_PASSWORD}", "temporary": false }]
     }
   ]
 }

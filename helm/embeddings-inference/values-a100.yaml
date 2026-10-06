@@ -1,0 +1,10 @@
+# Overlay for A100 (sm80): .env
+# EMBEDDINGS_EXTRA_ARGS=--values helm/embeddings-inference/values-a100.yaml
+# The default image.gpu is TEI's sm120 (Blackwell) build.
+image:
+  gpu: ghcr.io/huggingface/text-embeddings-inference:1.9.3@sha256:536efce2a0dc0acd0336d683ef1b81fcf900f76c8fb850e25a6d48a54a97df91
+inference:
+  # TEI counts every input of a batch against --max-concurrent-requests, so
+  # the CPU-mode 16 answers 429 to any batch above 16 items, below
+  # maxClientBatchSize (32). Measured: 16 items 200, 17 items 429.
+  maxConcurrentRequests: 64

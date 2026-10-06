@@ -125,7 +125,7 @@ tracked files in clear text. Rotating a credential means changing it in
 | Credential | Locations |
 | --- | --- |
 | Keycloak bootstrap admin | `k8s/base/applications.yaml` (`KC_BOOTSTRAP_ADMIN_*`); used by `scripts/provision-*-oidc` and `pat-smoke-test` via `KEYCLOAK_ADMIN_USER` / `KEYCLOAK_ADMIN_PASSWORD` |
-| Realm user `demo` | `k8s/realm-demo.json` — delete rather than rotate |
+| Realm users `demo` and `admin` | `.env` (`KEYCLOAK_DEMO_USER_PASSWORD`, `KEYCLOAK_ADMIN_USER_PASSWORD`), resolved by `k8s/realm-demo.json` placeholders on the first realm import only; rotate in Keycloak afterwards |
 | `open-webui` client secret | `k8s/base/applications.yaml` (`OAUTH_CLIENT_SECRET`) and `k8s/realm-demo.json` |
 | `pat-gateway` client secret | `.env` (`PAT_GATEWAY_CLIENT_SECRET`) and `k8s/realm-demo.json` — **known to be out of sync today**, see below |
 | `pat-directory` client secret | `.env` (`PAT_DIRECTORY_CLIENT_SECRET`), `k8s/realm-demo.json` and `helm/airgap-stack/values.yaml`; `make provision-pat-oidc` applies the `.env` value to Keycloak |

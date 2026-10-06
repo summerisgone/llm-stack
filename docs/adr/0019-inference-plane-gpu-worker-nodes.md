@@ -223,10 +223,9 @@ Implementation (2026-10-02):
   reused. Scripts and checksums come from the `model-cache` ConfigMap of
   `helm/airgap-stack`.
 - Image: `rclone/rclone`, pinned in `versions.lock.env` (`MODEL_CACHE_IMAGE`).
-  The MinIO server image (`MINIO_VERSION`) is no longer pullable from
-  docker.io or quay.io without authorization, so it could not carry `mc`;
-  the tenant itself survives only on its cached image, an open risk for
-  Stage 4.
+  The upstream MinIO server image is no longer pullable from docker.io or
+  quay.io without authorization, so it could not carry `mc`; the tenant now
+  runs the Pigsty-maintained build (`MINIO_IMAGE`).
 - The tenant's PVC is declared 10Gi but holds the weights (45 GiB); local-path
   does not enforce the size. Size it properly before Stage 4.
 

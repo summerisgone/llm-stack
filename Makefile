@@ -239,11 +239,15 @@ vllm-down:
 # run `make sglang-up` to apply. Requires the model in MinIO (scripts/models-upload).
 SGLANG_CHART = helm/sglang-inference
 SGLANG_RELEASE = sglang-inference
+# Site overrides on top of values.yaml, set in .env, e.g.
+# SGLANG_EXTRA_ARGS=--values helm/sglang-inference/values-a100.yaml
+SGLANG_EXTRA_ARGS ?=
 
 sglang-up:
 	$(HELM) upgrade --install $(SGLANG_RELEASE) $(SGLANG_CHART) \
 		--namespace $(K8S_NAMESPACE) \
 		--values $(SGLANG_CHART)/values.yaml \
+		$(SGLANG_EXTRA_ARGS) \
 		--set replicas=$(SGLANG_REPLICAS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \
@@ -299,6 +303,9 @@ strata-down:
 # has no notion of "another release's Deployment is Ready".
 EMBEDDINGS_CHART = helm/embeddings-inference
 EMBEDDINGS_RELEASE = embeddings-inference
+# Site overrides on top of values.yaml, set in .env, e.g.
+# EMBEDDINGS_EXTRA_ARGS=--values helm/embeddings-inference/values-a100.yaml
+EMBEDDINGS_EXTRA_ARGS ?=
 
 embeddings-up:
 	@accel=$$(awk '/^accelerator:/{print $$2; exit}' $(EMBEDDINGS_CHART)/values.yaml); \
@@ -312,6 +319,7 @@ embeddings-up:
 	$(HELM) upgrade --install $(EMBEDDINGS_RELEASE) $(EMBEDDINGS_CHART) \
 		--namespace $(K8S_NAMESPACE) \
 		--values $(EMBEDDINGS_CHART)/values.yaml \
+		$(EMBEDDINGS_EXTRA_ARGS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \
 		--wait --timeout 15m

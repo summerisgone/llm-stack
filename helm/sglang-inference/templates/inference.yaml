@@ -77,6 +77,7 @@ spec:
                 --model-path /model \
                 --served-model-name {{ .Values.inference.servedModelName | quote }} \
                 --host 0.0.0.0 \
+                --tp-size {{ .Values.inference.tensorParallelSize }} \
                 --port {{ .Values.inference.port }} \
                 {{- if .Values.inference.trustRemoteCode }}
                 --trust-remote-code \
@@ -98,6 +99,12 @@ spec:
                 --kv-cache-dtype {{ .Values.inference.kvCacheDtype | quote }} \
                 {{- with .Values.inference.mambaFullMemoryRatio }}
                 --mamba-full-memory-ratio {{ . | quote }} \
+                {{- end }}
+                {{- with .Values.inference.speculative }}
+                --speculative-algorithm {{ .algorithm | quote }} \
+                --speculative-num-steps {{ .numSteps | quote }} \
+                --speculative-eagle-topk {{ .eagleTopk | quote }} \
+                --speculative-num-draft-tokens {{ .numDraftTokens | quote }} \
                 {{- end }}
           env:
             - name: HF_HUB_OFFLINE

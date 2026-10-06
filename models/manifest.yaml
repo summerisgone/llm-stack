@@ -5,6 +5,12 @@ models:
   RadixArk-Qwen3.8-27B-NVFP4:
     path: models/RadixArk-Qwen3.8-27B-NVFP4
     sha256_manifest: models/checksums.txt
+  # W4A16 (compressed-tensors, Marlin) for GPUs without FP4: A100 (sm80).
+  RedHatAI-Qwen3.8-27B-INT4:
+    source: RedHatAI/Qwen3.8-27B-INT4
+    revision: 91bd022d5b49442a868bc35008f6c21e1860edfa
+    path: models/RedHatAI-Qwen3.8-27B-INT4
+    sha256_manifest: models/checksums.txt
   qwen3_8_27b_nvfp4.ninfer:
     path: models/qwen3_8_27b_nvfp4.ninfer
     sha256_manifest: models/checksums.txt

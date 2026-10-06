@@ -52,6 +52,18 @@ spec:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: password
+            # Realm users' passwords: ${...} placeholders in realm-demo.json,
+            # resolved by Keycloak at import.
+            - name: KEYCLOAK_DEMO_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: KEYCLOAK_DEMO_USER_PASSWORD
+            - name: KEYCLOAK_ADMIN_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: airgap-runtime
+                  key: KEYCLOAK_ADMIN_USER_PASSWORD
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
               value: admin
             - name: KC_BOOTSTRAP_ADMIN_PASSWORD
