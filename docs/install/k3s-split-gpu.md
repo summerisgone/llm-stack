@@ -356,24 +356,83 @@ numDraftTokens: 4}`; mean accept length 2.96. It costs KV: SGLang adds a
 9.3 GB intermediate mamba-state cache, and the KV pool drops from 1,431,737
 to 934,545 tokens (-35%).
 
-Prefill, `random-ids`, 256 output tokens (MTP makes no difference here):
+Prefill, one uncached request (`random-ids`, `--warmup-requests 0`, radix
+cache flushed before each run with `curl -X POST 127.0.0.1:8000/flush_cache`
+inside the pod), MTP on:
 
-| Input | Concurrency | TTFT mean | Prefill |
+| Input | TTFT | Prefill |
+| --- | --- | --- |
+| 32768 | 13 s | 2.5k tok/s |
+| 100000 | 59 s | 1.7k tok/s |
+| 150000 | 106 s | 1.4k tok/s |
+
+Long-context prefill is the weak point of this model on A100: a 150k prompt
+waits ~1.75 min for its first token.
+
+Measurement traps met on the way:
+
+- bench_serving's warmup request sends the first prompt once before the
+  measured run; with the radix cache on, the measured request then hits the
+  cache (`#cached-token: 165568` in the engine log, TTFT ~1 s). The first
+  long-context numbers taken here averaged one cached and one cold request
+  (mean 54 s, P99 105 s) and were wrong. `--seed` does not change
+  `random-ids` prompts.
+- `random-ids` prompts grow ~10% when SGLang retokenizes them: a
+  170000-token request arrives as ~186.5k and is rejected against the 180224
+  context (`The input (186562 tokens) is longer than the model's context
+  length`), which bench_serving still counts as successful with TTFT 0.
+
+`chunkedPrefillSize` 8192 instead of 2048: no change in ShareGPT decode
+(within 3% at every concurrency), the same long-context TTFT, more
+activation memory, and under 4 concurrent 150k prompts `/health` stopped
+answering within the probe's 5 s and the liveness probe restarted the engine
+mid-benchmark. The overlay keeps 2048.
+
+### vLLM on A100
+
+`helm/vllm-inference/values-a100.yaml`, selected with
+`VLLM_EXTRA_ARGS=--values helm/vllm-inference/values-a100.yaml` (and
+`VLLM_REPLICAS=1`, `SGLANG_REPLICAS=0`). The RTX 5090 image is a local
+build; the overlay uses its upstream base `vllm/vllm-openai@sha256:0a51...`
+(vLLM 0.27.1), whose kernels cover sm80. Same model, `maxModelLen` 180224,
+`maxNumSeqs` 32, MTP `{method: mtp, num_speculative_tokens: 3}`. The chart
+gained `inference.tensorParallelSize` (`--tensor-parallel-size`).
+
+`kvCacheDtype: auto` resolves to FP8 for this checkpoint, and the Triton
+backend rejects FP8 KV on sm80 (`native FP8 (fp8e4nv) requires SM89+`); the
+pod crash-loops until the KV dtype or the backend changes. Measured with
+`vllm bench serve` in the pod (ShareGPT, 512 output tokens; its ShareGPT
+sampling differs from SGLang's, so input totals differ):
+
+| | FlashInfer, fp8 KV (overlay) | Triton, bf16 KV | SGLang, MTP |
 | --- | --- | --- | --- |
-| 2048 | 1 | 0.59 s | |
-| 32768 | 8 | 54 s | ~2.3k tok/s |
-| 150000 | 1 | 54 s | ~2.6k tok/s |
-| 150000 | 4 | 82 s (P99 209 s) | ~2.7k tok/s |
+| KV pool | 1,353,088 tokens | 717,156 | 934,545 |
+| decode, 1 request | 54 tok/s | 104 | 121 |
+| decode, 8 requests | 354 | 344 | 620 |
+| decode, 32 requests | 764 | 860 | 951 |
+| MTP accept length | 2.55 | 2.55 | 2.96 |
+| cold prefill 100k / 150k | 51 s / 91 s | not measured | 59 s / 106 s |
 
-`random-ids` prompts grow ~10% when SGLang retokenizes them: a 170000-token
-request arrives as ~186.5k and is rejected against the 180224 context
-(`The input (186562 tokens) is longer than the model's context length`),
-which bench_serving still counts as successful with TTFT 0. Long prompts
-were therefore 150000.
+With FlashInfer and spec decode vLLM drops CUDA graphs to PIECEWISE, which
+is where its decode speed goes. vLLM prefills ~15% faster; SGLang decodes
+faster at every concurrency. SGLang stays the engine of record for this
+site; the vLLM overlay keeps FlashInfer for the larger KV pool.
 
-Prefill at ~2.6k tok/s is the bottleneck for long contexts; the
-`chunkedPrefillSize: 2048` inherited from the RTX 5090 profile is the first
-thing to raise.
+### Embeddings on A100
+
+`make embeddings-up` with `EMBEDDINGS_EXTRA_ARGS=--values
+helm/embeddings-inference/values-a100.yaml` in the host's `.env`. The
+overlay sets TEI's sm80 image (`EMBEDDINGS_GPU_IMAGE_SM80`; the default is
+the sm120 build) and `maxConcurrentRequests: 64`. `bge-m3` goes onto the
+volume the same way as the LLM (dense files only, the ones listed in
+`models/checksums.txt`, plus the `.bge-m3.sha256` marker). TEI shares the
+GPU with the engine outside scheduler accounting (~1.6 GB next to SGLang's
+75 GB at `memFractionStatic` 0.90).
+
+`EMBEDDINGS_SMOKE_ENABLED=true STACK_BASE_URL=<origin> ./scripts/embeddings-smoke-test`
+passes. With the base `maxConcurrentRequests: 16` it failed on the
+32-item batch: TEI counts every input against that limit, so batches above
+16 items get `429 Model is overloaded`.
 
 ## Open items
 
@@ -385,9 +444,10 @@ thing to raise.
 - The k3s API (6443) and the plain-HTTP edge listener (3091) are reachable
   from the internet; no host firewall is configured.
 - The llm-d / GAIE CRDs have no pinned source in the repo (step 7).
-- GPU embeddings (`make embeddings-up`) are not deployed: the TEI GPU image
-  in `helm/embeddings-inference/values.yaml` is the sm120 (Blackwell) build;
-  A100 needs TEI's sm80 image, and `bge-m3` is not yet in MinIO or on the
-  volume.
+- The base `helm/embeddings-inference` values pair `maxClientBatchSize: 32`
+  with `maxConcurrentRequests: 16`, which rejects batches above 16 items
+  (step 12); only the A100 overlay fixes it.
+- The engines' liveness probe (5 s timeout, 3 x 30 s) can restart SGLang
+  during several concurrent 150k prefills (step 12).
 - The device plugin image has no registry this site can pull from (step 10).
 - TP=2 on 2x A100 40GB is not yet run; the numbers in step 11 are TP=1.

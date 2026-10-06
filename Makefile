@@ -222,11 +222,15 @@ gpu-objects-up:
 # maxNumBatchedTokens, gpuMemoryUtilization, kvCacheDtype, prefixCaching.
 VLLM_CHART = helm/vllm-inference
 VLLM_RELEASE = vllm-inference
+# Site overrides on top of values.yaml, set in .env, e.g.
+# VLLM_EXTRA_ARGS=--values helm/vllm-inference/values-a100.yaml
+VLLM_EXTRA_ARGS ?=
 
 vllm-up:
 	$(HELM) upgrade --install $(VLLM_RELEASE) $(VLLM_CHART) \
 		--namespace $(K8S_NAMESPACE) \
 		--values $(VLLM_CHART)/values.yaml \
+		$(VLLM_EXTRA_ARGS) \
 		--set replicas=$(VLLM_REPLICAS) \
 		--take-ownership \
 		$(HELM_FORCE_CONFLICTS) \

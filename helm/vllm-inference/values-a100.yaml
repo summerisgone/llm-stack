@@ -1,0 +1,36 @@
+# Overlay for 2x A100 40GB (sm80, no FP4): .env
+# VLLM_EXTRA_ARGS=--values helm/vllm-inference/values-a100.yaml
+# Same model and targets as helm/sglang-inference/values-a100.yaml.
+# The upstream image the RTX 5090 build (deploy/vllm-qwen38-nvfp4/Dockerfile)
+# is based on: its CUDA kernels cover sm80, and its entrypoint is
+# `vllm serve` already.
+image: docker.io/vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967
+modelCache:
+  model: RedHatAI-Qwen3.8-27B-INT4
+
+inference:
+  tensorParallelSize: 2
+  maxModelLen: 180224
+  maxNumSeqs: 32
+  maxNumBatchedTokens: 8192
+  gpuMemoryUtilization: "0.90"
+  # Triton cannot store FP8 KV on sm80 ("native FP8 (fp8e4nv) requires
+  # SM89+"); FlashInfer can. Measured on 1x A100 80GB, TP=1, with MTP
+  # (docs/install/k3s-split-gpu.md): FLASHINFER + fp8 KV 1.35M tokens, decode
+  # 54 / 354 / 764 tok/s at 1 / 8 / 32 requests (CUDA graphs fall back to
+  # PIECEWISE with spec decode); TRITON_ATTN + kvCacheDtype bfloat16 717k
+  # tokens, 104 / 344 / 860 tok/s.
+  attentionBackend: FLASHINFER
+  speculativeConfig:
+    method: mtp
+    num_speculative_tokens: 3
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 16Gi
+    nvidia.com/gpu: "2"
+  limits:
+    cpu: "16"
+    memory: 48Gi
+    nvidia.com/gpu: "2"

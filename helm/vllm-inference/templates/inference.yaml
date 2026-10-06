@@ -89,6 +89,8 @@ spec:
             - {{ .Values.inference.maxNumBatchedTokens | quote }}
             - --gpu-memory-utilization
             - {{ .Values.inference.gpuMemoryUtilization | quote }}
+            - --tensor-parallel-size
+            - {{ .Values.inference.tensorParallelSize | quote }}
             - {{ ternary "--enable-prefix-caching" "--no-enable-prefix-caching" .Values.inference.prefixCaching }}
             - --mamba-cache-mode
             - {{ .Values.inference.mambaCacheMode | quote }}

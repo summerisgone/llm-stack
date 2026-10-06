@@ -23,6 +23,8 @@ modelCache:
   image: docker.io/rclone/rclone:1.71.1@sha256:d5971950c2b370fb04dd3292541b5bda6d9103143fd7e345aeb435a399388afc
 inference:
   servedModelName: qwen-3.8-27b
+  # GPUs per pod; keep resources' nvidia.com/gpu equal to it.
+  tensorParallelSize: 1
   maxModelLen: 131072
   maxNumSeqs: 2
   maxNumBatchedTokens: 8192
