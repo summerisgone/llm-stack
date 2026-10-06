@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+set -eu
+
+. "$(dirname "$0")/lib-endpoints.sh"
+export OPENWEBUI_SMOKE_URL="$webui"
+exec "${PYTHON:-python3}" "$(dirname "$0")/../tests/inference/pdf-reader/smoke.py" "$@"

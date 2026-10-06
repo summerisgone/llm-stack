@@ -153,6 +153,10 @@ services-smoke:
 inference-smoke:
 	./scripts/inference-smoke-test
 
+.PHONY: openwebui-pdf-smoke
+openwebui-pdf-smoke:
+	STACK_BASE_URL=$(STACK_BASE_URL) ./scripts/openwebui-pdf-smoke-test $(PDF_SMOKE_ARGS)
+
 # --- Remote single-GPU profile (Windows + WSL2 + k3d, RTX 5090) ------------
 #
 # ONE deploy path: `make stack-up`. It installs the prerequisites, applies the

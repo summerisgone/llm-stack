@@ -1,5 +1,11 @@
 # Inference tests
 
+`make openwebui-pdf-smoke` checks Open WebUI's PDF upload, actual text
+extraction, download and invalid-file handling without calling an LLM.
+Add `PDF_SMOKE_ARGS=--ocr` to require image-only scan recognition.
+See [PDF reader smoke](pdf-reader/README.md) for credentials, fixtures,
+cleanup and coverage limits.
+
 The local Mac profile (`k8s/overlays/local-mac`) is validated with
 `make pat-smoke` against the LM Studio LAN model. The remote single-GPU
 profile is exercised against the prepared k3d cluster: `make vllm-nvfp4-smoke`
