@@ -12,7 +12,7 @@ name: ninfer-qwen38
 # after. Also the NINFER_IMAGE value in versions.lock.env; keep the two in
 # step, same convention as SGLANG_IMAGE/helm/sglang-inference -- update both
 # together on a rebuild.
-image: ghcr.io/summerisgone/ninfer:ninfer-9e163eee4b8a
+image: ghcr.io/summerisgone/ninfer:ninfer-81c8ce093b2c
 replicas: 1
 runtimeClassName: nvidia
 # ADR 0019: GPU pods go to any labelled, tainted inference worker, never to
