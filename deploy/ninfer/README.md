@@ -133,56 +133,48 @@ ADR-0015's three-tier contract:
 | Tier | Status | Detail |
 |---|---|---|
 | 1 -- OpenAI `usage` | **Confirmed live, zero code changes** | `POST /v1/chat/completions` returns `usage.prompt_tokens`/`completion_tokens`/`prompt_tokens_details.cached_tokens`. pat-service's `recordUsage` is already engine-agnostic; ninfer's traffic feeds `patsvc_*_tokens_total` and cost accounting the same as vLLM/SGLang. |
-| 2 -- Prometheus scrape target | **Wired**, via a sidecar, not ninfer itself | ninfer has no `/metrics` route at all -- checked directly against `src/serve/*.cpp` and the endpoint table in upstream `docs/serving.md`, not assumed. `up{job="ninfer"}` comes from Prometheus scraping the exporter sidecar below, not ninfer's own port. |
-| 3 -- engine-native inference metrics | **Partially wired**, via the same sidecar, on ninfer's own metric names | See below. Not everything vLLM/SGLang's dashboards chart has an equivalent. |
+| 2 -- Prometheus scrape target | **Wired**, natively | `GET /metrics` on the API port (`:18080`), added upstream in `abb7f14f` (2026-10-05) and included in `NINFER_UPSTREAM_REF`. It sits behind the same `--api-key` as inference. |
+| 3 -- engine-native inference metrics | **Wired**, on ninfer's own metric names | See below. |
 
-### The adapter: `jsonl_exporter.py`
+### Scrape and auth
 
-ninfer's only structured signal is `--request-log-jsonl`
-(`ninfer_serve_request_log` schema v21: `server_start`, `request_start`,
-`request_rejected`, `request_done`, `request_error`, `throughput` events --
-confirmed against upstream `src/serve/request_log.h`/`.cpp`). There is no
-`--metrics`-style flag to enable a native exposition; this is a fixed gap in
-the current ninfer binary, not a missing config flag.
-
-`helm/ninfer-inference/files/jsonl_exporter.py` runs as a second container in
-the same pod as `ninfer-serve` (sharing an `emptyDir` at `/var/log/ninfer` --
-it needs pod-local file access, so it is a true sidecar container, not a
-separate workload the way `gpu-exporter` is), tails the JSONL file,
-and re-exposes it as Prometheus text format on `:9400/metrics`. Prometheus
-scrapes that port under `job: ninfer`
+Prometheus scrapes `ninfer-qwen38:18080/metrics` under `job: ninfer`
 (`k8s/overlays/remote-wsl-vllm-nvfp4/prometheus-config-patch.yaml`), which
-satisfies Tier 2's minimum bar (`up{job="ninfer"}`) from the same scrape as
-Tier 3 -- a separate blackbox-exporter probe of `/health` was judged
-redundant and skipped.
+gives Tier 2's `up{job="ninfer"}` from the same scrape as Tier 3. ninfer has
+no flag to leave `/metrics` unauthenticated, so the job sends
+`Authorization: Bearer` from `credentials_file`: the `ninfer-api-key` Secret
+(`NINFER_API_KEY` in `.env`, created by `make helm-up`) mounted into the
+Prometheus pod at `/etc/prometheus-secrets/ninfer` (`optional: true`, so
+Prometheus starts without it). Prometheus does not expand env vars in scrape
+auth, so the file mount is the only way in. The chart's NetworkPolicy admits
+Prometheus on `:18080`. With that key Prometheus could also send inference
+requests.
 
-What it exposes, and what it deliberately does not claim:
+### What the dashboards use
 
-- `ninfer_request_ttft_seconds{_bucket,_sum,_count}` -- real histogram, from
-  `request_done.timings_seconds.ttft`. Feeds a TTFT p50/p95 panel like
-  vLLM/SGLang's.
-- `ninfer_request_decode_seconds{_bucket,_sum,_count}` -- from
-  `request_done.timings_seconds.decode`. **This is the whole request's
-  decode-phase duration, not a per-token figure.** ninfer has no native
-  per-token (inter-token-latency/TPOT) timing field, unlike
-  `vllm:inter_token_latency_seconds`. Do not chart this as if it were TPOT.
-- `ninfer_{prompt,generation,prefix_cache_hit_tokens}_total` -- counters, from
-  `request_done.result.*`.
-- `ninfer_num_requests_{running,waiting,prefilling,decode_ready}` -- gauges,
-  from `throughput.scheduler.*` (emitted every `--log-stats-interval-ms`,
-  default 5s).
-- `ninfer_kv_cache_{device_main,device_backend}_pages` /
-  `ninfer_kv_cache_host_bytes` -- gauges, from
-  `throughput.context_cache.occupancy.*`. **Raw occupied-unit counts, not a
-  percentage.** This pilot has not independently confirmed that
-  `server_start`'s `memory.kv_capacity_page_groups` and `throughput`'s
-  `device_main_kv_pages` share the same page-group unit, so no
-  `kv_cache_usage_perc`-equivalent ratio is computed or charted.
+Upstream's metric table is in ninfer's `docs/serving.md` ("Live metrics").
+`config/grafana/dashboards/ninfer.json` and the ninfer series in
+`fair-share.json` use:
 
-Not built: nothing forces a match against the vLLM/SGLang metric names in
-ADR-0015's Tier 3 table -- `config/grafana/dashboards/ninfer.json` uses
-ninfer's own metric names throughout, and does not touch `vllm.json`/
-`fair-share.json` (ADR-0015 keeps those a closed contract).
+- `ninfer_time_to_first_token_seconds` -- histogram, including preparation
+  and queueing.
+- `ninfer_request_duration_seconds`, `ninfer_request_queue_seconds` --
+  histograms of settled requests.
+- Per-token latency (fair-share "TPOT") -- ninfer has no per-token histogram,
+  so it is an average: `(request_duration_sum - ttft_sum) /
+  ninfer_decode_tokens_total` (decode tokens exclude the first one).
+- `ninfer_{prompt,prompt_tokens_cached,generation}_tokens_total` -- counters,
+  updated as tokens commit, not at request completion.
+- `ninfer_requests_{running,waiting,prefilling,decode_ready,paused}` --
+  gauges.
+- `ninfer_device_kv_used_pages / ninfer_device_kv_capacity_pages` and
+  `ninfer_host_context_used_bytes / ninfer_host_context_capacity_bytes` --
+  KV occupancy as a ratio.
+- `ninfer_requests_total{outcome}` (`completed`, `cancelled`, `failed`,
+  `rejected`), `ninfer_response_failures_total`, `ninfer_engine_ready`.
+
+Counters reset when the server restarts. Nothing maps these onto vLLM/SGLang
+names (ADR-0015 keeps `vllm.json` a closed contract).
 
 ## Known risks
 
@@ -288,10 +280,10 @@ not one:
 - Even a recognized value would not make EPP's scoring meaningful for
   ninfer: `router-nvfp4-values.yaml`'s `metrics-data-source` plugin polls
   the live engine's `/metrics` to feed `queue-scorer`,
-  `kv-cache-utilization-scorer`, and `utilization-detector`. ninfer has no
-  `/metrics` route at all (see `deploy/ninfer/README.md`'s Tier 2 section) --
-  EPP would have zero real telemetry to score or queue against it, not just
-  an unrecognized engine-type string.
+  `kv-cache-utilization-scorer`, and `utilization-detector`. ninfer's
+  `/metrics` uses its own `ninfer_*` names (and needs its API key), none of
+  which the extractor knows -- EPP would have no telemetry it can read to
+  score or queue against it, not just an unrecognized engine-type string.
 
 Until llm-d's EPP itself grows a ninfer-compatible metrics path, ninfer's
 traffic (even while `live: true`) does not get ADR-0008/ADR-0012's

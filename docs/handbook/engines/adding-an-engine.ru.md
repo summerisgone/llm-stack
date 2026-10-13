@@ -110,15 +110,15 @@ Job-ы сбора лежат в
 
 ## ninfer
 
-- Чарт `helm/ninfer-inference` (движок плюс sidecar `jsonl_exporter.py`),
+- Чарт `helm/ninfer-inference`,
   образ `NINFER_IMAGE`, собранный из `NINFER_UPSTREAM_REF`, файл модели
   `qwen3_8_27b_nvfp4.ninfer` из MinIO через кэш моделей на ноде
   (собственный сконвертированный формат, не чекпойнт vLLM).
 - API-ключ: `NINFER_API_KEY` в `.env` -> Secret `ninfer-api-key` (создаётся
-  `make helm-up`), его используют и сервер, и шлюз.
-- Метрики: своих `/metrics` нет; sidecar превращает лог запросов в серии
-  `ninfer_*` на `:9400` (job Prometheus `ninfer`, дашборд `ninfer.json`).
-  Уровень 3 частичный: нет задержки на токен, KV в виде сырых страниц.
+  `make helm-up`), его используют сервер, шлюз и Prometheus.
+- Метрики: собственный `/metrics` с сериями `ninfer_*` на порту API
+  `:18080`, за API-ключом (job Prometheus `ninfer`, дашборд `ninfer.json`).
+  Гистограммы на токен нет: TPOT считается как среднее.
 - Сильные стороны, измеренные в пилоте: MTP speculative decoding с
   маленькой draft-головой и префиксный кэш, который держался при длинных
   параллельных сессиях агентов. Подробности и риски:

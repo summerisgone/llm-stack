@@ -42,21 +42,20 @@ data:
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_node_name]
             target_label: node
-      # ninfer pilot (docs/adr/0015). ninfer itself has no /metrics; this
-      # scrapes the jsonl_exporter sidecar (helm/ninfer-inference) that tails
-      # --request-log-jsonl instead. Naming the job "ninfer" gives
-      # up{job="ninfer"} once this target is scraped successfully -- ADR-0015
-      # Tier 2's stated minimum bar, satisfied by the same scrape as Tier 3,
-      # no separate blackbox-exporter probe needed.
+      # ninfer pilot (docs/adr/0015): ninfer-serve's native /metrics on its
+      # API port, behind the same --api-key as inference (the ninfer-api-key
+      # Secret, mounted into this pod).
       - job_name: ninfer
         metrics_path: /metrics
+        authorization:
+          credentials_file: /etc/prometheus-secrets/ninfer/apiKey
         kubernetes_sd_configs:
           - role: pod
             namespaces:
               names: [airgap-ai-stack]
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_number]
-            regex: ninfer-qwen38;9400
+            regex: ninfer-qwen38;18080
             action: keep
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace

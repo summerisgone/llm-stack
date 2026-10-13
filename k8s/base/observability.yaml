@@ -240,6 +240,13 @@ spec:
               readOnly: true
             - name: data
               mountPath: /prometheus
+            # ninfer's /metrics sits behind its --api-key (deploy/ninfer/README.md).
+            # Prometheus has no env expansion in scrape auth, only
+            # credentials_file. Optional: the Secret exists only when
+            # NINFER_API_KEY is set in .env.
+            - name: ninfer-api-key
+              mountPath: /etc/prometheus-secrets/ninfer
+              readOnly: true
       volumes:
         - name: config
           configMap:
@@ -247,3 +254,7 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: prometheus-data
+        - name: ninfer-api-key
+          secret:
+            secretName: ninfer-api-key
+            optional: true

@@ -22,12 +22,11 @@ spec:
       ports:
         - port: {{ .Values.inference.port }}
           protocol: TCP
-    {{- if .Values.metricsExporter.enabled }}
+    # ninfer-serve's native /metrics (same port, behind --api-key).
     - from:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: prometheus
       ports:
-        - port: {{ .Values.metricsExporter.port }}
+        - port: {{ .Values.inference.port }}
           protocol: TCP
-    {{- end }}

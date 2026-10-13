@@ -72,17 +72,6 @@ inference:
   spec: mtp
   draftTokens: 3
   lmHeadDraft: true
-  requestLogPath: /var/log/ninfer/requests.jsonl
-
-# Tier 2/3 sidecar: tails inference.requestLogPath and re-exposes it as
-# Prometheus text format on :9400/metrics (helm/ninfer-inference/files/jsonl_exporter.py).
-# ninfer has no native /metrics route -- see docs/adr/0015-third-party-engine-metrics-contract.md
-# and deploy/ninfer/README.md. Plain python3 image: the exporter only reads a
-# shared emptyDir file, it needs no GPU access and no ninfer-specific runtime.
-metricsExporter:
-  enabled: true
-  image: python:3.12-slim
-  port: 9400
 
 resources:
   requests:

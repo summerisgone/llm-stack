@@ -153,8 +153,8 @@ and Prometheus), ninfer at
 `helm/airgap-stack/values.yaml` — unlike llama.cpp, ninfer is always an
 in-cluster Deployment, never a host-run container; see
 `deploy/ninfer/README.md` Risk 1). Prometheus scrapes vLLM, SGLang and the
-llm-d EPP directly, plus a sidecar that re-exposes ninfer's JSONL request log
-as Prometheus text (ninfer has no native `/metrics`) under `job: ninfer`, all
+llm-d EPP directly, plus ninfer's native `/metrics` (with its API key) under
+`job: ninfer`, all
 with `namespace=airgap-ai-stack` attached
 (`k8s/overlays/remote-wsl-vllm-nvfp4/prometheus-config-patch.yaml`).
 

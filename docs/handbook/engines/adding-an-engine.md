@@ -109,15 +109,15 @@ targets with `namespace=airgap-ai-stack`); dashboards in
 
 ## ninfer
 
-- Chart `helm/ninfer-inference` (engine plus a `jsonl_exporter.py` sidecar),
+- Chart `helm/ninfer-inference`,
   image `NINFER_IMAGE` built from `NINFER_UPSTREAM_REF`, model file
   `qwen3_8_27b_nvfp4.ninfer` from MinIO through the node model cache (its
   own converted format, not the vLLM checkpoint).
 - API key: `NINFER_API_KEY` in `.env` -> Secret `ninfer-api-key` (created by
-  `make helm-up`), used by both the server and the gateway.
-- Metrics: no native `/metrics`; the sidecar turns the request log into
-  `ninfer_*` series on `:9400` (Prometheus job `ninfer`, dashboard
-  `ninfer.json`). Tier 3 is partial: no per-token latency, KV as raw pages.
+  `make helm-up`), used by the server, the gateway and Prometheus.
+- Metrics: native `/metrics` with `ninfer_*` series on the API port `:18080`,
+  behind the API key (Prometheus job `ninfer`, dashboard `ninfer.json`). No
+  per-token histogram: TPOT is derived as an average.
 - Strengths measured in the pilot: MTP speculative decoding with a small
   draft head and a prefix cache that held under long concurrent agent
   sessions. Details and risks: [deploy/ninfer](../../../deploy/ninfer/README.md).

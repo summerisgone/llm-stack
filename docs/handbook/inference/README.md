@@ -80,7 +80,7 @@ Engine details, switching and adding engines: [engines](../engines/README.md).
 
 | Traffic | Why | Consequence |
 | --- | --- | --- |
-| `qwen-3.8-27b-ninfer` | ninfer has no `/metrics` EPP can read ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | its own rule points straight at ninfer: no bands, no fairness, only the per-user rate limit |
+| `qwen-3.8-27b-ninfer` | ninfer's `/metrics` has no names EPP can read ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | its own rule points straight at ninfer: no bands, no fairness, only the per-user rate limit |
 | `llamacpp-local`, `external-api` (when enabled) | their own model names and route rules ([ADR 0006](../../adr/0006-pluggable-inference-backends.md)) | same: no queue in front of them |
 | `bge-m3` embeddings | separate route `embeddings`, own rate limit | not queued with chat |
 
