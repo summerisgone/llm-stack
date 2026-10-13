@@ -10,11 +10,16 @@
   value: openai
 - name: REPOWISE_MODEL
   value: {{ .Values.llm.model | quote }}
-# Qwen thinks by default and spends the whole max_tokens budget on it
-# (get_answer: 1024/1024 output tokens, empty answer). "off" makes repowise
-# send chat_template_kwargs.enable_thinking=false.
+# Qwen thinks by default and spends get_answer's default 1024-token budget
+# on it (empty answer). "off" (enable_thinking=false) is accepted only for
+# model names containing "qwen", not for `default`, so thinking stays on and
+# the budget and timeout are raised instead.
 - name: REPOWISE_REASONING
-  value: "off"
+  value: "auto"
+- name: REPOWISE_SYNTHESIS_MAX_TOKENS
+  value: "8192"
+- name: REPOWISE_ANSWER_TIMEOUT_S
+  value: "300"
 - name: OPENAI_BASE_URL
   value: {{ .Values.llm.baseURL | quote }}
 - name: OPENAI_API_KEY

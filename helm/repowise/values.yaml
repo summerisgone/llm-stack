@@ -59,7 +59,7 @@ syncIntervalSeconds: 900
 # PAT (Secret repowise, key OPENAI_API_KEY).
 llm:
   baseURL: http://pat-service.airgap-ai-stack.svc.cluster.local:8080/v1
-  model: qwen-3.8-27b
+  model: default
   embeddingModel: bge-m3
   # bge-m3 is fixed at 1024; declared, never sent as `dimensions`.
   embeddingDims: 1024

@@ -34,9 +34,12 @@ One Deployment `repowise` (release `helm/repowise`) with a 20 Gi PVC:
 
 Its LLM and embeddings calls go through pat-service `/v1` with a service
 PAT (user `svc-repowise`), so they are rate-limited, queued and traced like
-any user: `qwen-3.8-27b` for prose and `get_answer`, `bge-m3` for vectors.
-Thinking is switched off (`REPOWISE_REASONING=off`), otherwise answers came
-back empty.
+any user: `default` (the live engine) for prose and `get_answer`, `bge-m3`
+for vectors. Thinking stays on (`REPOWISE_REASONING=auto`: repowise accepts
+`off` only for model names containing "qwen"), so `get_answer` gets 8192
+tokens and 300 s (`REPOWISE_SYNTHESIS_MAX_TOKENS`,
+`REPOWISE_ANSWER_TIMEOUT_S`); at the default 1024 the answer comes back
+empty.
 
 ## Preconditions
 
