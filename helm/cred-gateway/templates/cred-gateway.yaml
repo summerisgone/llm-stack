@@ -1,0 +1,118 @@
+# Its OpenBao role (scripts/openbao-bootstrap) binds this ServiceAccount to
+# read-only access on secret/data/users/+/github.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cred-gateway
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cred-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cred-gateway
+spec:
+  selector:
+    app.kubernetes.io/name: cred-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cred-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cred-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cred-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cred-gateway
+    spec:
+      serviceAccountName: cred-gateway
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cred-gateway
+          image: {{ required "image (CRED_GATEWAY_IMAGE)" .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BAO_ADDR
+              value: http://openbao.{{ .Release.Namespace }}.svc.cluster.local:8200
+            - name: DENY_PUSH_REFS
+              value: {{ .Values.denyPushRefs | quote }}
+            - name: CONNECTIONS_URL
+              value: {{ .Values.connectionsURL | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          securityContext:
+            runAsUser: 10003
+            runAsGroup: 10003
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+---
+# Reachable from pat-service only, which is why the gateway trusts
+# X-User-Id. Egress: OpenBao, DNS, and HTTPS outside the cluster's private
+# ranges (connector hosts; NetworkPolicy cannot name them).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cred-gateway
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cred-gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.stackNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pat-service
+      ports:
+        - port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+      ports:
+        - port: 8200
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - port: 443

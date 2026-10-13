@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cred-gateway
+description: Injects per-user third-party credentials from OpenBao into allowlisted agent requests; reached only through pat-service /cred/ (docs/adr/0024)
+version: 0.1.0
+type: application

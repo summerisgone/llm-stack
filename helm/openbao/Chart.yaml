@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openbao
+description: OpenBao holding per-user third-party credentials for agents; read only by credential consumers (docs/adr/0024)
+version: 0.1.0
+appVersion: "2.7.1"
+type: application

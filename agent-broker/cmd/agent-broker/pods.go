@@ -140,6 +140,9 @@ type PodsConfig struct {
 	// (AGENT_PROTOCOL=acp, docs/adr/0021); dsh always does. Hermes then runs
 	// the adapter from its image instead of `hermes gateway run`.
 	ACP map[string]bool
+	// CredProxy is pat-service's agents-only /cred/ listener
+	// (docs/adr/0024 decision 4); empty = no git routing for agents.
+	CredProxy string
 }
 
 // PodsBackend: one pod per active agent, mounting only that agent's RWO
@@ -431,7 +434,10 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 		secretEnv("API_SERVER_KEY", "API_SERVER_KEY", false),
 	}
 	var command []string
+	// The env var holding the agent's PAT; gitEnv references it.
+	keyVar := "AGENT_INFERENCE_KEY"
 	if ref.Runtime == "hermes" {
+		keyVar = "HERMES_INFERENCE_KEY"
 		env = append(env,
 			map[string]any{"name": "HERMES_HOME", "value": "/opt/data/home"},
 			map[string]any{"name": "API_SERVER_ENABLED", "value": "true"},
@@ -484,6 +490,9 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 		)
 		ports = append(ports, map[string]any{"name": "web", "containerPort": DshWebPort})
 		memLimit = b.cfg.DshMemLimit
+	}
+	if b.cfg.CredProxy != "" {
+		env = append(env, gitEnv(b.cfg.CredProxy, keyVar)...)
 	}
 	for k, v := range b.cfg.ExtraAgentEnv {
 		env = append(env, map[string]any{"name": k, "value": v})
@@ -562,6 +571,28 @@ func (b *PodsBackend) createPod(ctx context.Context, u User, ref AgentRef, spec 
 		"spec":     podSpec,
 	}
 	return b.k.do(ctx, http.MethodPost, b.k.path("pods", ""), "application/json", pod, nil)
+}
+
+// gitEnv routes GitHub remotes through the credential gateway (docs/adr/0024
+// decision 4). Git reads GIT_CONFIG_COUNT/KEY_n/VALUE_n as config, so this
+// survives HOME being an emptyDir and leaves no token in any .git/config.
+// The agent sends its PAT (Kubernetes expands $(keyVar)); the gateway adds
+// the GitHub credential the agent never holds.
+func gitEnv(proxy, keyVar string) []map[string]any {
+	gw := strings.TrimRight(proxy, "/") + "/cred/github/"
+	pairs := [][2]string{
+		{"url." + gw + ".insteadOf", "https://github.com/"},
+		{"url." + gw + ".insteadOf", "git@github.com:"},
+		{"url." + gw + ".insteadOf", "ssh://git@github.com/"},
+		{"http." + gw + ".extraHeader", "Authorization: Bearer $(" + keyVar + ")"},
+	}
+	env := []map[string]any{{"name": "GIT_CONFIG_COUNT", "value": fmt.Sprint(len(pairs))}}
+	for i, p := range pairs {
+		env = append(env,
+			map[string]any{"name": fmt.Sprintf("GIT_CONFIG_KEY_%d", i), "value": p[0]},
+			map[string]any{"name": fmt.Sprintf("GIT_CONFIG_VALUE_%d", i), "value": p[1]})
+	}
+	return env
 }
 
 func (b *PodsBackend) Stop(ctx context.Context, ref AgentRef) error {

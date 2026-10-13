@@ -1,0 +1,157 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao
+  namespace: {{ .Release.Namespace }}
+---
+# Kubernetes auth: OpenBao reviews the callers' ServiceAccount tokens with
+# its own.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openbao-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: openbao
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-config
+  namespace: {{ .Release.Namespace }}
+data:
+  config.hcl: |
+    ui = false
+    disable_mlock = true
+    listener "tcp" {
+      address = "0.0.0.0:8200"
+      cluster_address = "0.0.0.0:8201"
+      # In-cluster only, behind NetworkPolicy; no route references it.
+      tls_disable = true
+    }
+    storage "raft" {
+      path = "/bao/data"
+      node_id = "openbao-0"
+    }
+    # Static key auto-unseal (docs/adr/0024 Consequences): the key lives in
+    # Secret openbao-seal, not on the PVC, so a stolen volume or backup
+    # without it is useless.
+    seal "static" {
+      current_key_id = "1"
+      current_key = "file:///bao/seal/key"
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: openbao
+spec:
+  selector:
+    app.kubernetes.io/name: openbao
+  ports:
+    - name: http
+      port: 8200
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: openbao
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: openbao
+spec:
+  serviceName: openbao
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openbao
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openbao
+    spec:
+      serviceAccountName: openbao
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: openbao
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [bao, server, -config=/bao/config/config.hcl]
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: BAO_API_ADDR
+              value: http://openbao.{{ .Release.Namespace }}.svc.cluster.local:8200
+            - name: BAO_CLUSTER_ADDR
+              value: http://$(POD_IP):8201
+            # For `kubectl exec ... bao` (scripts/openbao-bootstrap).
+            - name: BAO_ADDR
+              value: http://127.0.0.1:8200
+          ports:
+            - name: http
+              containerPort: 8200
+            - name: cluster
+              containerPort: 8201
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health
+              port: http
+            periodSeconds: 10
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /bao/config
+              readOnly: true
+            - name: seal
+              mountPath: /bao/seal
+              readOnly: true
+            - name: data
+              mountPath: /bao/data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: openbao-config
+        - name: seal
+          secret:
+            secretName: openbao-seal
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.storage.className }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.size }}

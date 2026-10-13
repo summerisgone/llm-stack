@@ -147,3 +147,37 @@ func TestACPRuntimePods(t *testing.T) {
 		t.Fatalf("native pi: %v", env)
 	}
 }
+
+func TestGitRoutedThroughCredProxy(t *testing.T) {
+	for rt, key := range map[string]string{"hermes": "HERMES_INFERENCE_KEY", "pi": "AGENT_INFERENCE_KEY"} {
+		var pod map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&pod)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte("{}"))
+		}))
+		b := NewPodsBackend(&kube{base: srv.URL, ns: "agents", client: srv.Client()},
+			PodsConfig{Runtimes: []Runtime{{Name: rt, Image: rt}}, CredProxy: "http://pat:8082/"})
+		if err := b.createPod(context.Background(), User{ID: "abc", Name: "u"}, AgentRef{Runtime: rt, ID: "abc"}, StartSpec{CatalogImage: "catalog"}); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		c := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+		env := map[string]string{}
+		for _, e := range c["env"].([]any) {
+			m := e.(map[string]any)
+			name := m["name"].(string)
+			// Kubernetes expands $(VAR) only for variables defined earlier.
+			if name == "GIT_CONFIG_VALUE_3" {
+				if _, ok := env[key]; !ok {
+					t.Fatalf("%s: %s not defined before the extraHeader", rt, key)
+				}
+			}
+			env[name], _ = m["value"].(string)
+		}
+		if env["GIT_CONFIG_COUNT"] != "4" || env["GIT_CONFIG_KEY_0"] != "url.http://pat:8082/cred/github/.insteadOf" ||
+			env["GIT_CONFIG_VALUE_0"] != "https://github.com/" || env["GIT_CONFIG_VALUE_3"] != "Authorization: Bearer $("+key+")" {
+			t.Fatalf("%s: env %v", rt, env)
+		}
+	}
+}

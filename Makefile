@@ -30,7 +30,7 @@ ENGINE_DEPLOYMENT_sglang = sglang-qwen38
 ENGINE_DEPLOYMENT_ninfer = ninfer-qwen38
 ENGINE_DEPLOYMENT_strata = strata-flash-next
 
-.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke inference-bypass-test preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down strata-up strata-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test openwebui-agent-pipe websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc
+.PHONY: up down logs ps smoke services-smoke inference-smoke pat-smoke inference-bypass-test preflight verify config gateway-up operators-up provision-grafana-oidc provision-pat-oidc provision-realm-security provision-openwebui-offline-access pat-image vllm-nvfp4-config vllm-nvfp4-smoke llmd-nvfp4-smoke smoke-nogpu stack-up nvfp4-up nvfp4-down gpu-objects-up gpu-objects-config vllm-up vllm-down sglang-up sglang-down ninfer-up ninfer-down strata-up strata-down embeddings-up embeddings-down embeddings-smoke llmd-up llmd-down engines-up render-check device-plugin-load device-plugin-up device-plugin-config device-plugin-status helm-render helm-env-values helm-up helm-down helm-diff monitoring-up agent-catalog agent-broker-image agent-adapter-images agents-k3d-load agents-up agents-down agents-smoke agents-test openwebui-agent-pipe websearch-up websearch-down websearch-smoke web-search-mcp-test repowise-up repowise-down provision-repowise-oidc provision-dsh-oidc credentials-up credentials-down cred-gateway-test cred-gateway-image openwebui-secret-filter
 
 pat-image:
 	docker buildx build --platform linux/amd64 --tag airgap-ai-stack/pat-service:local --load pat-service
@@ -402,6 +402,46 @@ repowise-down:
 
 provision-repowise-oidc:
 	./scripts/provision-repowise-oidc
+
+# Per-user third-party credentials for agents (docs/adr/0024): OpenBao with a
+# static seal key generated once into Secret openbao-seal, its bootstrap
+# (KV, audit, Kubernetes auth, consumer roles), then cred-gateway. pat-service
+# and the broker already point at both; they work once this has run.
+CREDENTIALS_NAMESPACE = credentials
+
+credentials-up:
+	@[ -n "$(STACK_ORIGIN)" ] || { echo "credentials-up: STACK_BASE_URL must be set in .env" >&2; exit 1; }
+	$(KUBECTL) create namespace $(CREDENTIALS_NAMESPACE) --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	@$(KUBECTL) -n $(CREDENTIALS_NAMESPACE) get secret openbao-seal >/dev/null 2>&1 || \
+		head -c 32 /dev/urandom | $(KUBECTL) -n $(CREDENTIALS_NAMESPACE) create secret generic openbao-seal --from-file=key=/dev/stdin
+	$(HELM) upgrade --install openbao helm/openbao \
+		--namespace $(CREDENTIALS_NAMESPACE) \
+		--set image=$(OPENBAO_IMAGE) \
+		--set stackNamespace=$(K8S_NAMESPACE)
+	CREDENTIALS_NAMESPACE=$(CREDENTIALS_NAMESPACE) K8S_NAMESPACE=$(K8S_NAMESPACE) KUBECTL="$(KUBECTL)" ./scripts/openbao-bootstrap
+	$(HELM) upgrade --install cred-gateway helm/cred-gateway \
+		--namespace $(CREDENTIALS_NAMESPACE) \
+		--set image=$(CRED_GATEWAY_IMAGE) \
+		--set stackNamespace=$(K8S_NAMESPACE) \
+		--set connectionsURL=$(STACK_ORIGIN)/platform \
+		--wait --timeout 5m
+
+# Keeps the PVC, the seal key and openbao-init: credentials-up restores the
+# stored connections.
+credentials-down:
+	$(HELM) uninstall cred-gateway --namespace $(CREDENTIALS_NAMESPACE) --ignore-not-found
+	$(HELM) uninstall openbao --namespace $(CREDENTIALS_NAMESPACE) --ignore-not-found
+
+# Global Filter masking credentials in chats (docs/adr/0024 decision 8).
+# Needs OPENWEBUI_API_KEY (an admin's key).
+openwebui-secret-filter:
+	STACK_BASE_URL=$(STACK_BASE_URL) ./scripts/openwebui-secret-filter
+
+cred-gateway-test:
+	cd cred-gateway && go vet ./... && go test ./...
+
+cred-gateway-image:
+	docker buildx build --load $(AGENTS_BUILD_FLAGS) --tag $(CRED_GATEWAY_IMAGE) cred-gateway
 
 # docs/adr/0020: Keycloak client dsh-web for the dsh web UI host; a no-op
 # while DSH_PUBLIC_ORIGIN is empty.

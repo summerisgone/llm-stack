@@ -143,6 +143,65 @@ function AgentKeyPanel({ current, onIssued, setNotice }) {
   </div>
 }
 
+// ConnectionsPanel stores third-party credentials for agents (docs/adr/0024).
+// The value goes to OpenBao and is never shown again; agents use it only
+// through the credential gateway, so it does not reach their context.
+function ConnectionsPanel({ setNotice }) {
+  const [connections, setConnections] = useState(null)
+  const [drafts, setDrafts] = useState({})
+  const [busy, setBusy] = useState('')
+
+  async function load() {
+    const response = await fetch(`${base}/api/connections`)
+    setConnections(response.ok ? await response.json() : [])
+  }
+  useEffect(() => { load() }, [])
+
+  async function save(event, connector) {
+    event.preventDefault()
+    setBusy(connector)
+    setNotice(null)
+    try {
+      const response = await send(`${base}/api/connections/${connector}`, { method: 'PUT', json: { token: drafts[connector] || '' } })
+      if (!response.ok) throw new Error((await response.text()).trim() || 'Could not save connection')
+      setDrafts({ ...drafts, [connector]: '' })
+      setNotice({ kind: 'success', text: 'Connection saved. Your agents can use it right away.' })
+      await load()
+    } catch (error) {
+      setNotice({ kind: 'error', text: error.message })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function disconnect(connector) {
+    if (!window.confirm('Disconnect? Agents lose access immediately. Revoke the token at the provider too.')) return
+    setBusy(connector)
+    try {
+      const response = await send(`${base}/api/connections/${connector}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error('Could not disconnect')
+      await load()
+    } catch (error) {
+      setNotice({ kind: 'error', text: error.message })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (connections === null || connections.length === 0) return null
+  return <div className="panel agent-panel">
+    <div className="panel-heading"><div><p className="eyebrow">AGENTS</p><h2>Connections</h2></div></div>
+    <p className="muted">Credentials your agents use through the credential gateway. They are stored write-only: nobody, you included, can read them back, and agents never see them. Pushes to <code>main</code>/<code>master</code> are refused; agents push branches.</p>
+    {connections.map((c) => <form key={c.connector} onSubmit={(event) => save(event, c.connector)}>
+      <p><strong>{c.label}</strong> {c.connected ? <>connected, updated {date(c.updated_at)}</> : 'not connected'}</p>
+      {c.connector === 'github' && <p className="muted">Fine-grained personal access token limited to the repositories agents may work on, with Contents and Pull requests set to read and write.</p>}
+      <input type="password" autoComplete="off" placeholder={c.connected ? 'Replace token' : 'Paste token'} value={drafts[c.connector] || ''} onChange={(event) => setDrafts({ ...drafts, [c.connector]: event.target.value })} />
+      <button className="primary" disabled={busy === c.connector || !drafts[c.connector]}>{c.connected ? 'Replace' : 'Connect'} <Icon>→</Icon></button>
+      {c.connected && <button type="button" className="revoke" onClick={() => disconnect(c.connector)} disabled={busy === c.connector}>Disconnect</button>}
+    </form>)}
+  </div>
+}
+
 function App({ capabilities }) {
   const [tokens, setTokens] = useState([])
   const [tokensCurrency, setTokensCurrency] = useState('')
@@ -300,6 +359,7 @@ function App({ capabilities }) {
     </section>
 
     <AgentKeyPanel current={agentToken} onIssued={load} setNotice={setNotice} />
+    <ConnectionsPanel setNotice={setNotice} />
 
     <section className="workspace usage-section">
       <LimitWidget limit={limit} />

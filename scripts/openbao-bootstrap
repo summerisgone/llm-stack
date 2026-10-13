@@ -1,0 +1,79 @@
+#!/usr/bin/env sh
+set -eu
+
+# Initializes OpenBao on first run and (re)applies its configuration
+# (docs/adr/0024 decision 1): KV v2 at secret/, file audit to stdout,
+# Kubernetes auth, and one role per credential consumer. Idempotent; run by
+# `make credentials-up`.
+#
+# The root token and recovery keys are kept in Secret openbao-init. With the
+# static seal key in openbao-seal a cluster admin can read everything anyway
+# (docs/adr/0024 Consequences); users and admins get no read policy on
+# secret/data/users/*.
+
+ns=${CREDENTIALS_NAMESPACE:-credentials}
+stack_ns=${K8S_NAMESPACE:-airgap-ai-stack}
+kubectl=${KUBECTL:-kubectl}
+pod=openbao-0
+
+bao() {
+  $kubectl -n "$ns" exec -i "$pod" -c openbao -- env BAO_TOKEN="${BAO_TOKEN:-}" bao "$@"
+}
+
+$kubectl -n "$ns" wait --for=jsonpath='{.status.phase}'=Running "pod/$pod" --timeout=180s >/dev/null
+i=0
+# `bao status` exits 2 while sealed; the JSON is what counts.
+until bao status -format=json 2>/dev/null | grep -q '"initialized"'; do
+  i=$((i + 1))
+  [ "$i" -lt 30 ] || { printf '%s\n' "openbao-bootstrap: OpenBao is not answering" >&2; exit 1; }
+  sleep 2
+done
+
+if bao status -format=json 2>/dev/null | grep -q '"initialized": false'; then
+  init=$(bao operator init -format=json)
+  root=$(printf '%s' "$init" | sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p')
+  [ -n "$root" ] || { printf '%s\n' "openbao-bootstrap: init returned no root token" >&2; exit 1; }
+  printf '%s' "$init" | $kubectl -n "$ns" create secret generic openbao-init \
+    --from-literal=root_token="$root" --from-file=init.json=/dev/stdin \
+    --dry-run=client -o yaml | $kubectl apply -f - >/dev/null
+  printf '%s\n' "Initialized OpenBao; root token and recovery keys are in Secret $ns/openbao-init."
+fi
+
+BAO_TOKEN=$($kubectl -n "$ns" get secret openbao-init -o jsonpath='{.data.root_token}' | base64 -d)
+export BAO_TOKEN
+
+i=0
+until bao status -format=json 2>/dev/null | grep -q '"sealed": false'; do
+  i=$((i + 1))
+  [ "$i" -lt 30 ] || { printf '%s\n' "openbao-bootstrap: OpenBao stays sealed" >&2; exit 1; }
+  sleep 2
+done
+
+bao secrets list -format=json | grep -q '"secret/"' || bao secrets enable -path=secret -version=2 kv >/dev/null
+# File audit to stdout: requests are logged with HMAC'd values, never
+# plaintext secrets.
+bao audit list -format=json 2>/dev/null | grep -q '"stdout/"' || bao audit enable -path=stdout file file_path=stdout >/dev/null
+bao auth list -format=json | grep -q '"kubernetes/"' || bao auth enable kubernetes >/dev/null
+# In-pod defaults: the API at kubernetes.default.svc, OpenBao's own
+# ServiceAccount token as TokenReview reviewer (openbao-auth-delegator).
+bao write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc >/dev/null
+
+# pat-service's Connections page: create, replace and delete a credential and
+# read its metadata (connected, when); never its value.
+printf '%s\n' \
+  'path "secret/data/users/*" { capabilities = ["create", "update"] }' \
+  'path "secret/metadata/users/*" { capabilities = ["read", "delete"] }' \
+  | bao policy write connections-writer - >/dev/null
+# cred-gateway: read the github connector of any user, nothing else.
+printf '%s\n' \
+  'path "secret/data/users/+/github" { capabilities = ["read"] }' \
+  | bao policy write github-consumer - >/dev/null
+
+bao write auth/kubernetes/role/pat-service \
+  bound_service_account_names=pat-service bound_service_account_namespaces="$stack_ns" \
+  token_policies=connections-writer token_ttl=1h token_max_ttl=1h >/dev/null
+bao write auth/kubernetes/role/cred-gateway \
+  bound_service_account_names=cred-gateway bound_service_account_namespaces="$ns" \
+  token_policies=github-consumer token_ttl=1h token_max_ttl=1h >/dev/null
+
+printf '%s\n' "OpenBao configured: secret/ (kv-v2), audit, kubernetes auth, roles pat-service and cred-gateway."

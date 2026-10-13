@@ -1,0 +1,24 @@
+# docs/adr/0024 decision 3. Installed by `make credentials-up` after OpenBao.
+
+# CRED_GATEWAY_IMAGE in versions.lock.env is the source of truth; make passes
+# it with --set.
+image: ghcr.io/summerisgone/cred-gateway:latest
+
+# Namespace of pat-service, the only caller.
+stackNamespace: airgap-ai-stack
+
+# Refs a push through the gateway may not update (decision 7 stand-in until
+# the permission round trip exists).
+denyPushRefs: refs/heads/main,refs/heads/master
+
+# Public URL of the pat-service dashboard, shown when a user has no
+# connection. Set from STACK_BASE_URL by make.
+connectionsURL: /platform
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
