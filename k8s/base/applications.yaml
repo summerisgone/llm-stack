@@ -512,7 +512,7 @@ spec:
       # evaluated solely from its Keycloak roles.
       initContainers:
         - name: sso-role-bootstrap
-          image: ghcr.io/open-webui/open-webui:v0.11.4
+          image: ghcr.io/open-webui/open-webui:v0.12.0
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -556,7 +556,7 @@ spec:
               mountPath: /app/backend/data
       containers:
         - name: openwebui
-          image: ghcr.io/open-webui/open-webui:v0.11.4
+          image: ghcr.io/open-webui/open-webui:v0.12.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
