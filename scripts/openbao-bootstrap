@@ -2,7 +2,7 @@
 set -eu
 
 # Initializes OpenBao on first run and (re)applies its configuration
-# (docs/adr/0024 decision 1): KV v2 at secret/, file audit to stdout,
+# (docs/adr/0024 decision 1): KV v2 at secret/ (audit is in the chart config),
 # Kubernetes auth, and one role per credential consumer. Idempotent; run by
 # `make credentials-up`.
 #
@@ -50,9 +50,6 @@ until bao status -format=json 2>/dev/null | grep -q '"sealed": false'; do
 done
 
 bao secrets list -format=json | grep -q '"secret/"' || bao secrets enable -path=secret -version=2 kv >/dev/null
-# File audit to stdout: requests are logged with HMAC'd values, never
-# plaintext secrets.
-bao audit list -format=json 2>/dev/null | grep -q '"stdout/"' || bao audit enable -path=stdout file file_path=stdout >/dev/null
 bao auth list -format=json | grep -q '"kubernetes/"' || bao auth enable kubernetes >/dev/null
 # In-pod defaults: the API at kubernetes.default.svc, OpenBao's own
 # ServiceAccount token as TokenReview reviewer (openbao-auth-delegator).
@@ -76,4 +73,4 @@ bao write auth/kubernetes/role/cred-gateway \
   bound_service_account_names=cred-gateway bound_service_account_namespaces="$ns" \
   token_policies=github-consumer token_ttl=1h token_max_ttl=1h >/dev/null
 
-printf '%s\n' "OpenBao configured: secret/ (kv-v2), audit, kubernetes auth, roles pat-service and cred-gateway."
+printf '%s\n' "OpenBao configured: secret/ (kv-v2), kubernetes auth, roles pat-service and cred-gateway."

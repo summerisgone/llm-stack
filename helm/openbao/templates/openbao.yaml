@@ -20,33 +20,6 @@ subjects:
     namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: openbao-config
-  namespace: {{ .Release.Namespace }}
-data:
-  config.hcl: |
-    ui = false
-    disable_mlock = true
-    listener "tcp" {
-      address = "0.0.0.0:8200"
-      cluster_address = "0.0.0.0:8201"
-      # In-cluster only, behind NetworkPolicy; no route references it.
-      tls_disable = true
-    }
-    storage "raft" {
-      path = "/bao/data"
-      node_id = "openbao-0"
-    }
-    # Static key auto-unseal (docs/adr/0024 Consequences): the key lives in
-    # Secret openbao-seal, not on the PVC, so a stolen volume or backup
-    # without it is useless.
-    seal "static" {
-      current_key_id = "1"
-      current_key = "file:///bao/seal/key"
-    }
----
-apiVersion: v1
 kind: Service
 metadata:
   name: openbao
@@ -78,6 +51,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: openbao
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 16 }}
     spec:
       serviceAccountName: openbao
       enableServiceLinks: false
