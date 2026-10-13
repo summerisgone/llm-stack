@@ -30,7 +30,7 @@ replicas and the one command that applies them;
 | --- | --- | --- | --- | --- | --- |
 | vLLM 0.27.1 | `qwen-3.8-27b` | `helm/vllm-inference`, `make vllm-up` | yes | native `/metrics` (`vllm:*`) | default |
 | SGLang 0.5.19 | `qwen-3.8-27b` | `helm/sglang-inference`, `make sglang-up` | yes | native `/metrics` (`sglang:*`) | first-class alternative |
-| ninfer | `qwen-3.8-27b-ninfer` | `helm/ninfer-inference`, `make ninfer-up` | no, direct route | JSONL log re-exported by a sidecar (`ninfer_*`) | pilot |
+| ninfer | `qwen-3.8-27b-ninfer` | `helm/ninfer-inference`, `make ninfer-up` | no, direct route | native `/metrics` behind the API key (`ninfer_*`) | pilot |
 | Strata (Qwen3.8-Flash-Next IQ3_S) | `qwen-3.8-flash-next` | host Docker, `deploy/strata/run`; route `inference.externalApi` | no, direct route | none in Prometheus (own JSON `/metrics` on the host) | on, host-run |
 | Strata in the cluster | `qwen-3.8-flash-next` | `helm/strata-inference`, `make strata-up` | no, direct route | JSON `/metrics` re-exported by a sidecar (`strata_*`) | off: too little RAM on this node |
 | llama.cpp | `llamacpp-local` | host Docker, `deploy/llamacpp` | no | none | optional, off |

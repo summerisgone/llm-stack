@@ -62,7 +62,7 @@ Scrape jobs of the application Prometheus
 | --- | --- | --- | --- |
 | `vllm-qwen38-nvfp4` | `:8000/metrics` | `vllm:` | engine queue, KV use, TTFT, throughput, prefix hits |
 | `sglang-qwen38` | `:8000/metrics` | `sglang:` | same for SGLang |
-| `ninfer` | sidecar `:9400` | `ninfer_` | ninfer request log re-exported |
+| `ninfer` | `:18080` (API key) | `ninfer_` | ninfer engine metrics |
 | `embeddings-bge-m3` | `:80` | text-embeddings-inference metrics | embeddings server |
 | `llmd-epp` | EPP `:9090` | `llm_d_epp_` (and deprecated `inference_extension_`) | queues per band, saturation, per-user TTFT, ready and stale endpoints |
 | `pat-service` | `:9090` | `patsvc_` | per-user requests by band, tokens, cost, sessions, MCP calls |

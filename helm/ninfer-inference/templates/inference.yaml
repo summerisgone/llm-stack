@@ -12,25 +12,7 @@ spec:
     - name: http
       port: {{ .Values.inference.port }}
       targetPort: http
-    {{- if .Values.metricsExporter.enabled }}
-    - name: metrics
-      port: {{ .Values.metricsExporter.port }}
-      targetPort: metrics
-    {{- end }}
 ---
-{{- if .Values.metricsExporter.enabled }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Values.name }}-metrics-exporter
-  namespace: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/name: {{ .Values.name }}
-data:
-  jsonl_exporter.py: |
-{{ .Files.Get "files/jsonl_exporter.py" | indent 4 }}
----
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -107,8 +89,6 @@ spec:
             {{- if .Values.inference.lmHeadDraft }}
             - "--lm-head-draft"
             {{- end }}
-            - "--request-log-jsonl"
-            - {{ .Values.inference.requestLogPath | quote }}
             - "--api-key"
             - "$(NINFER_API_KEY)"
           env:
@@ -150,54 +130,6 @@ spec:
               mountPath: /model/{{ .Values.modelFile }}
               subPath: {{ .Values.modelCache.model }}
               readOnly: true
-            - name: request-log
-              mountPath: {{ dir .Values.inference.requestLogPath }}
-        {{- if .Values.metricsExporter.enabled }}
-        # Tier 2/3 adapter (docs/adr/0015): ninfer has no native /metrics, so
-        # this reads the JSONL file the container above writes via
-        # --request-log-jsonl (shared emptyDir, not a network call) and
-        # re-exposes it as Prometheus text format. Plain python3 image, no
-        # GPU request -- it never touches the model or the device.
-        - name: metrics-exporter
-          image: {{ .Values.metricsExporter.image | quote }}
-          imagePullPolicy: IfNotPresent
-          command: ["python3", "/opt/jsonl_exporter.py"]
-          env:
-            - name: NINFER_REQUEST_LOG
-              value: {{ .Values.inference.requestLogPath | quote }}
-            - name: NINFER_EXPORTER_PORT
-              value: {{ .Values.metricsExporter.port | quote }}
-          ports:
-            - name: metrics
-              containerPort: {{ .Values.metricsExporter.port }}
-          livenessProbe:
-            httpGet:
-              path: /metrics
-              port: metrics
-            initialDelaySeconds: 10
-            periodSeconds: 15
-          readinessProbe:
-            httpGet:
-              path: /metrics
-              port: metrics
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: "50m"
-              memory: 64Mi
-            limits:
-              cpu: "250m"
-              memory: 256Mi
-          volumeMounts:
-            - name: request-log
-              mountPath: {{ dir .Values.inference.requestLogPath }}
-              readOnly: true
-            - name: exporter-script
-              mountPath: /opt/jsonl_exporter.py
-              subPath: jsonl_exporter.py
-              readOnly: true
-        {{- end }}
       volumes:
         - name: model
           hostPath:
@@ -206,10 +138,3 @@ spec:
         - name: model-cache-scripts
           configMap:
             name: model-cache
-        - name: request-log
-          emptyDir: {}
-        {{- if .Values.metricsExporter.enabled }}
-        - name: exporter-script
-          configMap:
-            name: {{ .Values.name }}-metrics-exporter
-        {{- end }}

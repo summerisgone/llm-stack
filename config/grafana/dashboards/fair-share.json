@@ -558,7 +558,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "((sum(increase(sglang:time_to_first_token_seconds_sum[$__range])) or vector(0)) + (sum(increase(ninfer_request_ttft_seconds_sum[$__range])) or vector(0))) / ((sum(increase(sglang:time_to_first_token_seconds_count[$__range])) or vector(0)) + (sum(increase(ninfer_request_ttft_seconds_count[$__range])) or vector(0)))",
+          "expr": "((sum(increase(sglang:time_to_first_token_seconds_sum[$__range])) or vector(0)) + (sum(increase(ninfer_time_to_first_token_seconds_sum[$__range])) or vector(0))) / ((sum(increase(sglang:time_to_first_token_seconds_count[$__range])) or vector(0)) + (sum(increase(ninfer_time_to_first_token_seconds_count[$__range])) or vector(0)))",
           "legendFormat": "avg TTFT",
           "refId": "A"
         }
@@ -667,7 +667,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.5, sum by(le) (rate(ninfer_request_ttft_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by(le) (rate(ninfer_time_to_first_token_seconds_bucket[$__rate_interval])))",
           "legendFormat": "ninfer p50",
           "refId": "C"
         },
@@ -676,7 +676,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by(le) (rate(ninfer_request_ttft_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by(le) (rate(ninfer_time_to_first_token_seconds_bucket[$__rate_interval])))",
           "legendFormat": "ninfer p95",
           "refId": "D"
         }
@@ -689,7 +689,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "System-wide average time per output token (inter-token latency) across all requests, all users, all models. ninfer has no per-token metric: derived as decode seconds / (completion tokens - requests).",
+      "description": "System-wide average time per output token (inter-token latency) across all requests, all users, all models. ninfer has no per-token metric: derived as (request duration - TTFT) / decode tokens.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -735,7 +735,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "((sum(increase(sglang:inter_token_latency_seconds_sum[$__range])) or vector(0)) + (sum(increase(ninfer_request_decode_seconds_sum[$__range])) or vector(0))) / ((sum(increase(sglang:inter_token_latency_seconds_count[$__range])) or vector(0)) + (sum(increase(ninfer_generation_tokens_total[$__range])) - sum(increase(ninfer_request_decode_seconds_count[$__range])) or vector(0)))",
+          "expr": "((sum(increase(sglang:inter_token_latency_seconds_sum[$__range])) or vector(0)) + (sum(increase(ninfer_request_duration_seconds_sum[$__range])) - sum(increase(ninfer_time_to_first_token_seconds_sum[$__range])) or vector(0))) / ((sum(increase(sglang:inter_token_latency_seconds_count[$__range])) or vector(0)) + (sum(increase(ninfer_decode_tokens_total[$__range])) or vector(0)))",
           "legendFormat": "avg TPOT",
           "refId": "A"
         }
@@ -748,7 +748,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "p50 / p95 time per output token (inter-token latency) across the whole system (all users, all models). ninfer has no per-token histogram, so its series is an average: decode seconds / (completion tokens - requests).",
+      "description": "p50 / p95 time per output token (inter-token latency) across the whole system (all users, all models). ninfer has no per-token histogram, so its series is an average: (request duration - TTFT) / decode tokens.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -844,7 +844,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(ninfer_request_decode_seconds_sum[$__rate_interval])) / (sum(rate(ninfer_generation_tokens_total[$__rate_interval])) - sum(rate(ninfer_request_decode_seconds_count[$__rate_interval])))",
+          "expr": "(sum(rate(ninfer_request_duration_seconds_sum[$__rate_interval])) - sum(rate(ninfer_time_to_first_token_seconds_sum[$__rate_interval]))) / sum(rate(ninfer_decode_tokens_total[$__rate_interval]))",
           "legendFormat": "ninfer avg (derived)",
           "refId": "C"
         }
@@ -857,7 +857,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Output (generation) tokens per second across the whole system, all users, all models. ninfer counts tokens when a request completes, so its contribution arrives in steps.",
+      "description": "Output (generation) tokens per second across the whole system, all users, all models.",
       "fieldConfig": {
         "defaults": {
           "color": {

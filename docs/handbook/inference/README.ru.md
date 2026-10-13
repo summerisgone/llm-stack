@@ -80,7 +80,7 @@ pat-service никогда не придерживает запрос; см.
 
 | Трафик | Почему | Следствие |
 | --- | --- | --- |
-| `qwen-3.8-27b-ninfer` | у ninfer нет `/metrics`, которые мог бы читать EPP ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | своё правило указывает прямо на ninfer: ни полос, ни справедливости, только rate limit на пользователя |
+| `qwen-3.8-27b-ninfer` | в `/metrics` ninfer нет метрик, которые мог бы читать EPP ([ADR 0015](../../adr/0015-third-party-engine-metrics-contract.md)) | своё правило указывает прямо на ninfer: ни полос, ни справедливости, только rate limit на пользователя |
 | `llamacpp-local`, `external-api` (если включены) | свои имена моделей и правила маршрута ([ADR 0006](../../adr/0006-pluggable-inference-backends.md)) | то же: очереди перед ними нет |
 | эмбеддинги `bge-m3` | отдельный маршрут `embeddings`, свой rate limit | в общую очередь с чатом не попадают |
 

@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "ninfer pilot -- docs/adr/0015-third-party-engine-metrics-contract.md. Tier 2/3 data comes from the jsonl_exporter sidecar (helm/ninfer-inference), not a native /metrics endpoint -- ninfer has none.",
+  "description": "ninfer pilot -- docs/adr/0015-third-party-engine-metrics-contract.md. Data comes from ninfer-serve's native /metrics (same port as the API, behind --api-key).",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -28,7 +28,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Prometheus scrape state of the \"ninfer\" job (jsonl_exporter sidecar, docs/adr/0015 Tier 2 minimum bar).",
+      "description": "Prometheus scrape state of the \"ninfer\" job (native /metrics, docs/adr/0015 Tier 2 minimum bar).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -113,7 +113,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "1 once the jsonl_exporter sidecar has found --request-log-jsonl and is tailing it.",
+      "description": "ninfer_engine_ready: 0 after an Engine failure, while /metrics itself stays readable.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -183,14 +183,14 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "ninfer_exporter_tailing",
+          "expr": "ninfer_engine_ready",
           "instant": true,
           "legendFormat": "__auto",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Exporter tailing request log",
+      "title": "Engine ready",
       "type": "stat"
     },
     {
@@ -198,7 +198,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Completed vs. errored vs. admission-rejected requests per second.",
+      "description": "Generation attempts per second by terminal outcome (completed / cancelled / failed / rejected), plus response failures after settlement.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -282,12 +282,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(ninfer_requests_done_total[$__rate_interval])",
+          "expr": "sum by (outcome) (rate(ninfer_requests_total[$__rate_interval]))",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
           "instant": false,
-          "legendFormat": "done/s",
+          "legendFormat": "{{outcome}}/s",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -299,35 +299,18 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(ninfer_requests_error_total[$__rate_interval])",
+          "expr": "rate(ninfer_response_failures_total[$__rate_interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
           "instant": false,
-          "legendFormat": "error/s",
+          "legendFormat": "response failures/s",
           "range": true,
           "refId": "B",
           "useBackend": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "disableTextWrap": false,
-          "editorMode": "code",
-          "expr": "rate(ninfer_requests_rejected_total[$__rate_interval])",
-          "fullMetaSearch": false,
-          "hide": false,
-          "includeNullMetadata": false,
-          "instant": false,
-          "legendFormat": "rejected/s",
-          "range": true,
-          "refId": "C",
-          "useBackend": false
         }
       ],
-      "title": "Requests done / error / rejected",
+      "title": "Requests by outcome",
       "type": "timeseries"
     },
     {
@@ -335,7 +318,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Time to first token, from request_done.timings_seconds.ttft (docs/adr/0015 Tier 3: TTFT histogram).",
+      "description": "Time to first token, including preparation and queueing (docs/adr/0015 Tier 3: TTFT histogram).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -419,7 +402,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(ninfer_request_ttft_seconds_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(ninfer_time_to_first_token_seconds_bucket[$__rate_interval])) by (le))",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
@@ -436,7 +419,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(ninfer_request_ttft_seconds_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(ninfer_time_to_first_token_seconds_bucket[$__rate_interval])) by (le))",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
@@ -455,7 +438,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Whole-request decode-phase duration, from request_done.timings_seconds.decode. Not per-token -- ninfer has no native inter-token-latency (TPOT) field, unlike vLLM/SGLang.",
+      "description": "Whole-request duration p50/p95 and initial Engine queue wait p95. ninfer has no per-token histogram; the per-token average is on the fair-share dashboard's TPOT panels.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -539,12 +522,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(ninfer_request_decode_seconds_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(ninfer_request_duration_seconds_bucket[$__rate_interval])) by (le))",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
           "instant": false,
-          "legendFormat": "p50",
+          "legendFormat": "duration p50",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -556,18 +539,35 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(ninfer_request_decode_seconds_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(ninfer_request_duration_seconds_bucket[$__rate_interval])) by (le))",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
           "instant": false,
-          "legendFormat": "p95",
+          "legendFormat": "duration p95",
           "range": true,
           "refId": "B",
           "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(ninfer_request_queue_seconds_bucket[$__rate_interval])) by (le))",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": false,
+          "instant": false,
+          "legendFormat": "queue p95",
+          "range": true,
+          "refId": "C",
+          "useBackend": false
         }
       ],
-      "title": "Decode-phase duration p50 / p95",
+      "title": "Request duration / queue wait",
       "type": "timeseries"
     },
     {
@@ -575,7 +575,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Prompt vs. generated tokens/sec, plus prefix-cache-hit prompt tokens/sec.",
+      "description": "Prompt vs. generated tokens/sec, plus prompt tokens reused from cached checkpoints.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -693,7 +693,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(ninfer_prefix_cache_hit_tokens_total[$__rate_interval])",
+          "expr": "rate(ninfer_prompt_tokens_cached_total[$__rate_interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
@@ -712,7 +712,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "In-flight/queued request counts (throughput.scheduler.*). \"waiting\" rising while \"running\" stays flat is Risk 2's cold-prefill head-of-line signature -- see deploy/ninfer/README.md.",
+      "description": "In-flight/queued request counts. \"waiting\" rising while \"running\" stays flat is Risk 2's cold-prefill head-of-line signature -- see deploy/ninfer/README.md.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -796,7 +796,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "ninfer_num_requests_running",
+          "expr": "ninfer_requests_running",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
@@ -813,7 +813,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "ninfer_num_requests_waiting",
+          "expr": "ninfer_requests_waiting",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
@@ -830,7 +830,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "ninfer_num_requests_prefilling",
+          "expr": "ninfer_requests_prefilling",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
@@ -847,7 +847,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "ninfer_num_requests_decode_ready",
+          "expr": "ninfer_requests_decode_ready",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
@@ -855,6 +855,23 @@
           "legendFormat": "decode_ready",
           "range": true,
           "refId": "D",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "ninfer_requests_paused",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": false,
+          "instant": false,
+          "legendFormat": "paused",
+          "range": true,
+          "refId": "E",
           "useBackend": false
         }
       ],
@@ -866,7 +883,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Raw occupied Device/Host KV units (context_cache.occupancy.*). Not a percentage: page-group capacity units are not independently confirmed against this count -- see jsonl_exporter.py.",
+      "description": "Device Main KV pages and Host context backing, used / capacity. Retained prefix-cache history also occupies these pools.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -919,7 +936,7 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "percentunit"
         },
         "overrides": []
       },
@@ -950,12 +967,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "ninfer_kv_cache_device_main_pages",
+          "expr": "ninfer_device_kv_used_pages / ninfer_device_kv_capacity_pages",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
           "instant": false,
-          "legendFormat": "device main-KV pages",
+          "legendFormat": "device main KV",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -967,35 +984,18 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "ninfer_kv_cache_device_backend_pages",
+          "expr": "ninfer_host_context_used_bytes / ninfer_host_context_capacity_bytes",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": false,
           "instant": false,
-          "legendFormat": "device backend(draft)-KV pages",
+          "legendFormat": "host context",
           "range": true,
           "refId": "B",
           "useBackend": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "disableTextWrap": false,
-          "editorMode": "code",
-          "expr": "ninfer_kv_cache_host_bytes",
-          "fullMetaSearch": false,
-          "hide": false,
-          "includeNullMetadata": false,
-          "instant": false,
-          "legendFormat": "host-resident KV bytes",
-          "range": true,
-          "refId": "C",
-          "useBackend": false
         }
       ],
-      "title": "KV cache occupancy (pages / bytes)",
+      "title": "KV cache occupancy",
       "type": "timeseries"
     }
   ],

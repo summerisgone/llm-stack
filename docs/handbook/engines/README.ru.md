@@ -30,7 +30,7 @@ OpenAI-совместимые API - тоже отдельные имена мо�
 | --- | --- | --- | --- | --- | --- |
 | vLLM 0.27.1 | `qwen-3.8-27b` | `helm/vllm-inference`, `make vllm-up` | да | нативные `/metrics` (`vllm:*`) | по умолчанию |
 | SGLang 0.5.19 | `qwen-3.8-27b` | `helm/sglang-inference`, `make sglang-up` | да | нативные `/metrics` (`sglang:*`) | альтернатива первого класса |
-| ninfer | `qwen-3.8-27b-ninfer` | `helm/ninfer-inference`, `make ninfer-up` | нет, прямой маршрут | JSONL-лог, переэкспортированный sidecar-ом (`ninfer_*`) | пилот |
+| ninfer | `qwen-3.8-27b-ninfer` | `helm/ninfer-inference`, `make ninfer-up` | нет, прямой маршрут | собственный `/metrics` за API-ключом (`ninfer_*`) | пилот |
 | Strata (Qwen3.8-Flash-Next IQ3_S) | `qwen-3.8-flash-next` | Docker на хосте, `deploy/strata/run`; маршрут `inference.externalApi` | нет, прямой маршрут | нет в Prometheus (свой JSON `/metrics` на хосте) | включён, на хосте |
 | Strata в кластере | `qwen-3.8-flash-next` | `helm/strata-inference`, `make strata-up` | нет, прямой маршрут | JSON `/metrics`, переэкспортированный sidecar-ом (`strata_*`) | выключен: мало RAM на этой ноде |
 | llama.cpp | `llamacpp-local` | Docker на хосте, `deploy/llamacpp` | нет | нет | опционально, выключен |
