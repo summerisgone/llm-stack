@@ -136,6 +136,7 @@ func main() {
 			DshMemLimit:  env("DSH_MEMORY_LIMIT", "2Gi"),
 			DshWebHost:   dshAuthority,
 			ACP:          pipe,
+			CredProxy:    os.Getenv("CRED_PROXY_URL"),
 		})
 	default:
 		slog.Error("unsupported AGENT_BACKEND", "backend", b)

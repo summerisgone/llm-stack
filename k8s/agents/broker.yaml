@@ -32,6 +32,10 @@ data:
   OIDC_ISSUER: http://sso.ai.localhost:8080/realms/ai-stack
   OIDC_JWKS_URL: http://keycloak.airgap-ai-stack.svc.cluster.local:8080/realms/ai-stack/protocol/openid-connect/certs
   ALLOWED_ROLES: ai-user,ai-admin
+  # pat-service's agents-only credential proxy (docs/adr/0024 decision 4):
+  # agents' GitHub remotes go through it to cred-gateway. Without
+  # `make credentials-up` git to GitHub fails as before.
+  CRED_PROXY_URL: http://pat-service.airgap-ai-stack.svc.cluster.local:8082
 ---
 apiVersion: apps/v1
 kind: Deployment

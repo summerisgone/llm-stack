@@ -24,6 +24,21 @@ data:
             # Envoy transport spans contain no LLM input/output. Keep the
             # external processor's ai-gateway-genai observations instead.
             - 'resource.attributes["service.name"] == "ai-gateway-private"'
+      # docs/adr/0024 decision 8: mask credentials in span attributes, where
+      # AI Gateway puts prompts and outputs (llm.*_messages.*), before
+      # Langfuse stores them. allow_all_keys: without it the processor drops
+      # every attribute. Span events are not covered.
+      redaction:
+        allow_all_keys: true
+        blocked_values:
+          - 'gh[pousr]_[A-Za-z0-9]{20,}'
+          - 'github_pat_[A-Za-z0-9_]{20,}'
+          - 'glpat-[A-Za-z0-9_-]{20,}'
+          - 'sk-[A-Za-z0-9_-]{20,}'
+          - 'xox[abpr]-[A-Za-z0-9-]{10,}'
+          - 'AKIA[0-9A-Z]{16}'
+          - '-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]*-----END [A-Z ]*PRIVATE KEY-----'
+        summary: info
       batch:
     exporters:
       debug:
@@ -48,7 +63,7 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, filter/langfuse, batch]
+          processors: [memory_limiter, filter/langfuse, redaction, batch]
           exporters: [debug, otlphttp/langfuse]
         metrics:
           receivers: [otlp]

@@ -181,6 +181,11 @@ type config struct {
 	privateInferenceAddr string
 	privateClients       map[string]bool
 	coverageSince        *time.Time
+	// Credential proxy (connections.go, docs/adr/0024 decision 3): the
+	// agents-only listener for /cred/ (empty disables it) and the
+	// cred-gateway it forwards to.
+	credProxyAddr  string
+	credGatewayURL string
 }
 
 type app struct {
@@ -197,6 +202,8 @@ type app struct {
 	mcpLimiter windowCounter
 	// directory is nil when no directory client is configured.
 	directory *directory
+	// bao is nil when BAO_ADDR is unset: Connections answer 503.
+	bao *baoWriter
 }
 
 type session struct {
@@ -285,6 +292,7 @@ func main() {
 		pricing:    loadPricing(cfg.pricingFile),
 		agents:     newAgentKube(cfg.agentsNamespace),
 		mcpLimiter: qosStore,
+		bao:        newBaoWriter(),
 	}
 	a.directory = newDirectory(cfg.internalIssuer, cfg.directoryClientID, cfg.directorySecret, a.http)
 	if err := a.migrate(ctx); err != nil {
@@ -310,6 +318,14 @@ func main() {
 		go func() {
 			log.Printf("PAT service private inference listening on %s", private.Addr)
 			log.Fatal(private.ListenAndServe())
+		}()
+	}
+
+	if cfg.credProxyAddr != "" {
+		cred := &http.Server{Addr: cfg.credProxyAddr, Handler: newCredMux(a), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+		go func() {
+			log.Printf("PAT service credential proxy listening on %s", cred.Addr)
+			log.Fatal(cred.ListenAndServe())
 		}()
 	}
 
@@ -353,6 +369,9 @@ func newMux(a *app) *http.ServeMux {
 	mux.HandleFunc("GET /mcp/", a.mcpProxy)
 	mux.HandleFunc("POST /mcp/", a.mcpProxy)
 	mux.HandleFunc("DELETE /mcp/", a.mcpProxy)
+	mux.HandleFunc("GET /api/connections", a.listConnections)
+	mux.HandleFunc("PUT /api/connections/{connector}", a.putConnection)
+	mux.HandleFunc("DELETE /api/connections/{connector}", a.deleteConnection)
 	return mux
 }
 
@@ -470,6 +489,11 @@ func loadConfig() (config, error) {
 			privateClients[c] = true
 		}
 	}
+	credProxyAddr := os.Getenv("CRED_PROXY_ADDR")
+	credGatewayURL := strings.TrimRight(os.Getenv("CRED_GATEWAY_URL"), "/")
+	if credGatewayURL == "" {
+		credGatewayURL = "http://cred-gateway.credentials.svc.cluster.local:8080"
+	}
 	var coverageSince *time.Time
 	if v := os.Getenv("INFERENCE_COVERAGE_SINCE"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
@@ -478,7 +502,7 @@ func loadConfig() (config, error) {
 		}
 		coverageSince = &t
 	}
-	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, agentsNamespace, agentTTLDays, mcpServers, mcpCallsPerMinute, origin, directoryClientID, directorySecret, topologyNamespace, prometheusURL, gatewayPrometheusURL, scrapeInterval, privateInferenceAddr, privateClients, coverageSince}, nil
+	return config{databaseURL, []byte(hash), []byte(cookie), issuer, internal, clientID, redirect, gatewayURL, gatewayClientID, gatewaySecret, strings.HasPrefix(issuer, "https://"), prefix, logClientShape, webui, valkeyAddr, qosSessionTTL, qosFingerprintMaxBody, qosFingerprintTimeout, qosWarmTTL, qosDemoteAfterSteps, qosCostAlpha, qosCostBeta, qosSpendWindow, qosSpendDemoteThreshold, qosUsageMaxBody, qosEventTimeout, pricingFile, qosMonthlyLimit, agentsNamespace, agentTTLDays, mcpServers, mcpCallsPerMinute, origin, directoryClientID, directorySecret, topologyNamespace, prometheusURL, gatewayPrometheusURL, scrapeInterval, privateInferenceAddr, privateClients, coverageSince, credProxyAddr, credGatewayURL}, nil
 }
 
 // readIntEnv reads an optional integer threshold, falling back to def when

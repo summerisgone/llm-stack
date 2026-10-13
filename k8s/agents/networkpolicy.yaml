@@ -1,7 +1,8 @@
 # Default deny in the agent namespace, then: Open WebUI -> broker -> agents
 # (Hermes, pi, opencode, dsh), the edge Envoy -> broker's dsh web proxy ->
-# dsh web (docs/adr/0020), agents -> pat-service only (inference, ADR 0014 section 8; GitLab is added
-# here when the repo-reader skill gets a real target). Enforcement depends on
+# dsh web (docs/adr/0020), agents -> pat-service only (inference, ADR 0014
+# section 8; git hosts through pat-service's credential proxy, ADR 0024
+# decision 3). Enforcement depends on
 # the cluster CNI; see docs/operations/agents.md.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -115,3 +116,5 @@ spec:
               app.kubernetes.io/name: pat-service
       ports:
         - port: 8080
+        # Credential proxy to cred-gateway (docs/adr/0024 decision 3).
+        - port: 8082

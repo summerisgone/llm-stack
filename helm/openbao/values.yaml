@@ -1,0 +1,22 @@
+# docs/adr/0024 decision 1. Opt-in: `make credentials-up`, which also creates
+# the static seal key Secret (openbao-seal) and runs scripts/openbao-bootstrap.
+
+# OPENBAO_IMAGE in versions.lock.env is the source of truth; keep in step.
+image: quay.io/openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+
+# Raft data. Losing it loses connections, not data: users reconnect.
+storage:
+  size: 1Gi
+  # Empty = cluster default.
+  className: ""
+
+# Namespace of pat-service (the connections writer).
+stackNamespace: airgap-ai-stack
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi

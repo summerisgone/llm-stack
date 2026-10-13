@@ -183,6 +183,12 @@ spec:
     - name: infer-private
       port: 8081
       targetPort: infer-private
+    # Agents-only credential proxy to cred-gateway (docs/adr/0024 decision
+    # 3). No route references it; the NetworkPolicy below opens it to the
+    # agents namespace only.
+    - name: cred-proxy
+      port: 8082
+      targetPort: cred-proxy
 ---
 # Ingress to pat-service: the public API and dashboard port stays open to
 # the edge and in-cluster clients (agents, Open WebUI automations, MCP); the
@@ -207,6 +213,13 @@ spec:
               app.kubernetes.io/name: openwebui
       ports:
         - port: 8081
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agents
+      ports:
+        - port: 8082
           protocol: TCP
     - from:
         - podSelector:
@@ -326,6 +339,8 @@ spec:
               containerPort: 9090
             - name: infer-private
               containerPort: 8081
+            - name: cred-proxy
+              containerPort: 8082
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -459,6 +474,17 @@ spec:
                   optional: true
             - name: MCP_CALLS_PER_MINUTE
               value: "30"
+            # Per-user third-party credentials (docs/adr/0024): the
+            # dashboard's Connections write to OpenBao (role pat-service,
+            # write-only), agents reach cred-gateway through :8082. Until
+            # `make credentials-up` runs, Connections answer 503 and the
+            # proxy 502.
+            - name: CRED_PROXY_ADDR
+              value: ":8082"
+            - name: CRED_GATEWAY_URL
+              value: http://cred-gateway.credentials.svc.cluster.local:8080
+            - name: BAO_ADDR
+              value: http://openbao.credentials.svc.cluster.local:8200
           volumeMounts:
             - name: pricing
               mountPath: /etc/pat-service

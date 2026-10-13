@@ -10,6 +10,28 @@ Verification run on 2026-10-14 with local prototypes (no cluster): results
 and the points still open are under "Verification"; decisions 3, 4, 8 and
 the stages were corrected from what it found.
 
+Stage 1 implemented on 2026-10-14 with these deviations, all aimed at the
+first use case (an agent edits this repository on GitHub and pushes a
+branch):
+
+- The first connector is GitHub, with a fine-grained PAT pasted on the
+  Connections panel (decision 2's fallback), not GitLab OAuth. The GitHub
+  App flow stays in stage 3.
+- Write is allowed in stage 1: cred-gateway refuses pushes that update
+  `DENY_PUSH_REFS` (`refs/heads/main`, `refs/heads/master`) instead of a
+  permission round trip (decision 7). Besides git smart HTTP it forwards a
+  small GitHub REST allowlist under `/cred/github/api/` (read a repo, its
+  branches, commits and pulls; create a pull request).
+- The `/cred/` listener is pat-service port 8082. Git routing is
+  `GIT_CONFIG_*` env set by the broker, not a file rendered by agent-sync:
+  agent `HOME` is an emptyDir.
+- The Filter also has an outlet that rewrites stored and browser copies of
+  replies. `ENABLE_VALVE_ENCRYPTION` (decision 9) is not changed yet.
+
+Deploy: `make credentials-up`, `make openwebui-secret-filter`, then
+`make helm-up` and `make agents-up` for the pat-service, collector and
+broker changes.
+
 Extends [ADR 0014](0014-hermes-curated-catalog-and-worker-slots.md) (agent
 pods, profiles, egress through pat-service) and
 [ADR 0021](0021-openwebui-pipe-and-acp-agent-integration.md) (permission
