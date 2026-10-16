@@ -127,6 +127,20 @@ Consequences:
   degrades to "no session", never to a failed request.
 - `patsvc_session_match_total{result}` shows how often requests matched.
 
+### Agent harness
+
+From the same buffered body pat-service guesses which agent harness sent the
+request and what kind of call it is
+([ADR 0025](../adr/0025-agent-harness-detection.md),
+`internal/harness/harness.go`): an ordered rule table over the first system
+message (first message when there is none), then tool names, then
+`User-Agent`. Harnesses: `hermes`, `opencode`, `qwen-code`, `pi`,
+`deepseek-harness`, `kilo`, else `unknown`; roles: `main`, `title`,
+`compaction`, `memory`, `classifier`, `router`, `subagent`, `unknown`. The
+result goes upstream as `X-Agent-Harness: <harness>/<role>` (client value
+stripped) and into `qos_events.agent_harness` / `agent_role`; the admin user
+page and the `/platform` session table show it. A new harness is one rule.
+
 ## Priority band labelling
 
 `internal/qos/session.go` `assignBand` picks one of three EPP bands per

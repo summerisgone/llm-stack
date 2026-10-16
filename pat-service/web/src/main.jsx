@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
-import { base, send, date } from './api.js'
+import { base, send, date, agentLabel } from './api.js'
 import { Icon, Topbar } from './components.jsx'
 import AdminApp from './admin/AdminApp.jsx'
 
@@ -72,9 +72,10 @@ function SessionsTable({ sessions, currency }) {
   if (sessions.length === 0) {
     return <div className="empty"><Icon>⌁</Icon><strong>No sessions yet</strong><span>Agent sessions show up here once you send some traffic.</span></div>
   }
-  return <div className="table-wrap"><table><thead><tr><th>Model</th><th>Key</th><th>Started</th><th>Duration</th><th>Steps</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>
+  return <div className="table-wrap"><table><thead><tr><th>Model</th><th>Agent</th><th>Key</th><th>Started</th><th>Duration</th><th>Steps</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>
     {sessions.map((s) => <tr key={s.session_id}>
       <td><strong>{s.model}</strong></td>
+      <td>{s.agent_harness ? agentLabel(s.agent_harness, s.agent_role) : <span className="muted">—</span>}</td>
       <td>{s.token_name || <span className="muted">—</span>}</td>
       <td>{date(s.started_at)}</td>
       <td>{formatDuration(s.started_at, s.ended_at)}</td>

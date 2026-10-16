@@ -128,6 +128,21 @@ ci = SHA256(c(i-1) | message[i])
   приводит к "нет сессии", но никогда не к упавшему запросу.
 - `patsvc_session_match_total{result}` показывает, как часто запросы совпадают.
 
+### Агентская обвязка
+
+По тому же телу запроса pat-service определяет, какая агентская обвязка его
+прислала и что это за вызов
+([ADR 0025](../adr/0025-agent-harness-detection.md),
+`internal/harness/harness.go`): упорядоченная таблица правил по первому
+system-сообщению (по первому сообщению, если system нет), затем по именам
+tools, затем по `User-Agent`. Обвязки: `hermes`, `opencode`, `qwen-code`,
+`pi`, `deepseek-harness`, `kilo`, иначе `unknown`; роли: `main`, `title`,
+`compaction`, `memory`, `classifier`, `router`, `subagent`, `unknown`.
+Результат уходит наверх как `X-Agent-Harness: <harness>/<role>` (значение
+клиента вырезается) и пишется в `qos_events.agent_harness` / `agent_role`;
+показывается на странице пользователя в админке и в таблице сессий
+`/platform`. Новая обвязка - одно правило.
+
 ## Выбор полосы приоритета
 
 `assignBand` в `internal/qos/session.go` выбирает для запроса одну из трёх

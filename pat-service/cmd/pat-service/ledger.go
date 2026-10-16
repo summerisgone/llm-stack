@@ -37,6 +37,9 @@ type requestRecord struct {
 	band      string
 	kind      string // "chat", "embeddings", or "" when not recorded
 
+	agentHarness string // internal/harness; "" for embeddings
+	agentRole    string
+
 	receivedAt    time.Time
 	dispatchedAt  time.Time
 	firstOutputAt time.Time
@@ -138,12 +141,12 @@ func (a *app) insertLedger(ctx context.Context, rec *requestRecord, outcome stri
 		(owner_issuer, owner_subject, owner_name, token_id, token_name, session_id, model, band,
 		 prompt_tokens, cached_tokens, completion_tokens, cost_amount,
 		 request_id, source, outcome, http_status, streaming, usage_quality,
-		 received_at, dispatched_at, first_output_at, last_output_at, finished_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+		 received_at, dispatched_at, first_output_at, last_output_at, finished_at, agent_harness, agent_role)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
 		a.cfg.issuer, rec.owner, rec.ownerName, rec.tokenID, rec.tokenName, sessionID, model, band,
 		prompt, cached, completion, a.pricing.cost(model, prompt, cached, completion),
 		rec.requestID, rec.source, outcome, status, rec.streaming, quality,
-		nullTime(rec.receivedAt), nullTime(rec.dispatchedAt), nullTime(rec.firstOutputAt), nullTime(rec.lastOutputAt), finishedAt)
+		nullTime(rec.receivedAt), nullTime(rec.dispatchedAt), nullTime(rec.firstOutputAt), nullTime(rec.lastOutputAt), finishedAt, rec.agentHarness, rec.agentRole)
 	if err != nil {
 		log.Printf("ledger insert: %v", err)
 	}

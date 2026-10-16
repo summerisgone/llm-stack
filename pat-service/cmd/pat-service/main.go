@@ -33,6 +33,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/airgap-ai-stack/pat-service/internal/harness"
 	"github.com/airgap-ai-stack/pat-service/internal/qos"
 )
 
@@ -855,7 +856,8 @@ func (a *app) forwardInference(w http.ResponseWriter, r *http.Request, receivedA
 		r.Body = a.logClientShape(r, owner)
 	}
 	var sessionResult qos.Result
-	r.Body, sessionResult = a.observeSession(r, owner)
+	var agent harness.Result
+	r.Body, sessionResult, agent = a.observeSession(r, owner)
 	bearer, err := a.gatewayBearer(r.Context())
 	if err != nil {
 		log.Printf("gateway credential: %v", err)
@@ -887,6 +889,9 @@ func (a *app) forwardInference(w http.ResponseWriter, r *http.Request, receivedA
 	if sessionResult.SessionID != "" {
 		req.Header.Set("X-Session-Key", sessionResult.SessionID)
 	}
+	if agent.Harness != "" {
+		req.Header.Set("X-Agent-Harness", agent.Header())
+	}
 	model := sessionResult.Model
 	if model == "" {
 		model = "unknown"
@@ -895,6 +900,7 @@ func (a *app) forwardInference(w http.ResponseWriter, r *http.Request, receivedA
 	rec := &requestRecord{
 		requestID: requestID, source: c.source, owner: owner, ownerName: ownerName, tokenID: c.tokenID, tokenName: c.tokenName,
 		sessionID: sessionResult.SessionID, model: model, band: string(sessionResult.Band), kind: ledgerKind(r.URL.Path),
+		agentHarness: agent.Harness, agentRole: agent.Role,
 		receivedAt: receivedAt, dispatchedAt: time.Now(),
 	}
 	resp, err := a.proxyHTTP.Do(req)
@@ -1065,18 +1071,21 @@ func (a *app) logClientShape(r *http.Request, owner string) io.ReadCloser {
 // returns a reader that reproduces the original body exactly, matching
 // logClientShape's approach so Content-Length (copied through from the
 // client's own header by copyRequestHeaders) stays correct either way.
-func (a *app) observeSession(r *http.Request, owner string) (io.ReadCloser, qos.Result) {
+// It also detects the request's agent harness (docs/adr/0025) from the same
+// buffered body; a body it cannot read gets no harness at all.
+func (a *app) observeSession(r *http.Request, owner string) (io.ReadCloser, qos.Result, harness.Result) {
 	degraded := qos.Result{Band: qos.BandNormal}
 	if !strings.Contains(r.URL.Path, "/chat/completions") {
-		return r.Body, degraded
+		return r.Body, degraded, harness.Result{}
 	}
 	head, err := io.ReadAll(io.LimitReader(r.Body, a.cfg.qosFingerprintMaxBody+1))
 	if err != nil {
-		return r.Body, degraded
+		return r.Body, degraded, harness.Result{}
 	}
 	if int64(len(head)) > a.cfg.qosFingerprintMaxBody {
-		return io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body)), degraded
+		return io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body)), degraded, harness.Result{}
 	}
+	agent := harness.Detect(head, r.Header.Get("User-Agent"))
 	// Usage panel needs a final usage chunk out of streamed chat
 	// completions (main draw of TASK-*-usage-panel.md); vLLM/SGLang only
 	// emit one when the request asks for it. Only touches the body when
@@ -1094,7 +1103,7 @@ func (a *app) observeSession(r *http.Request, owner string) (io.ReadCloser, qos.
 		// than teach Observe's early returns about band's zero value.
 		result.Band = qos.BandNormal
 	}
-	return restored, result
+	return restored, result, agent
 }
 
 func (a *app) gatewayBearer(ctx context.Context) (string, error) {
@@ -1316,7 +1325,7 @@ func openAIError(w http.ResponseWriter, status int, message string) {
 func copyRequestHeaders(dst, src http.Header) {
 	for k, values := range src {
 		key := http.CanonicalHeaderKey(k)
-		if key == "Authorization" || key == "Host" || key == "X-User-Id" || key == "X-User-Name" || key == "X-Pat-Token-Id" || key == "X-Llm-D-Inference-Fairness-Id" || key == "X-Llm-D-Inference-Objective" || key == "X-Session-Key" || key == "Agent-Session-Id" || isHopByHop(key) {
+		if key == "Authorization" || key == "Host" || key == "X-User-Id" || key == "X-User-Name" || key == "X-Pat-Token-Id" || key == "X-Llm-D-Inference-Fairness-Id" || key == "X-Llm-D-Inference-Objective" || key == "X-Session-Key" || key == "Agent-Session-Id" || key == "X-Agent-Harness" || isHopByHop(key) {
 			continue
 		}
 		for _, v := range values {

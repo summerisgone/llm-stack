@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { base, date } from '../api.js'
+import { base, date, agentLabel } from '../api.js'
 import { Icon } from '../components.jsx'
 import { getJSON, Loading, Failure, Stat, ColumnChart, Pager, compact, seconds, ranges, na, coverageText } from './common.jsx'
 
@@ -9,6 +9,7 @@ export default function UserDetail({ subject }) {
   const [range, setRange] = useState('7d')
   const [model, setModel] = useState('')
   const [source, setSource] = useState('')
+  const [harness, setHarness] = useState('')
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
 
@@ -20,8 +21,9 @@ export default function UserDetail({ subject }) {
     const p = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })
     if (model) p.set('model', model)
     if (source) p.set('source', source)
+    if (harness) p.set('harness', harness)
     return p.toString()
-  }, [subject, range, model, source])
+  }, [subject, range, model, source, harness])
   const userURL = `${base}/api/admin/users/${encodeURIComponent(subject)}`
 
   useEffect(() => {
@@ -45,6 +47,7 @@ export default function UserDetail({ subject }) {
         <select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Period">{ranges.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}</select>
         <select value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model"><option value="">All models</option>{data.models.map((m) => <option key={m}>{m}</option>)}</select>
         <select value={source} onChange={(e) => setSource(e.target.value)} aria-label="Source"><option value="">All sources</option>{data.sources.map((s) => <option key={s}>{s}</option>)}</select>
+        <select value={harness} onChange={(e) => setHarness(e.target.value)} aria-label="Agent"><option value="">All agents</option>{data.harnesses.map((h) => <option key={h}>{h}</option>)}</select>
       </div>
       <p className="muted coverage">
         {coverageText(data)} History from {data.history_from ? date(data.history_from) : 'no requests'};
@@ -96,8 +99,8 @@ function Sessions({ url, currency }) {
   return <div className="subsection">
     <div className="panel-heading"><h3>Sessions <span className="count">{data?.total ?? 0}</span></h3><Pager page={page} pages={pages} onChange={setPage} disabled={!data} /></div>
     {!data ? <Loading text="Loading sessions…" /> : data.sessions.length === 0 ? <p className="muted">No sessions in this period.</p> :
-      <div className="table-wrap"><table><thead><tr><th>Model</th><th>Key</th><th>Started</th><th>Ended</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>
-        {data.sessions.map((s) => <tr key={s.session_id}><td><strong>{s.model}</strong></td><td>{s.token_name || '—'}</td><td>{date(s.started_at)}</td><td>{date(s.ended_at)}</td>
+      <div className="table-wrap"><table><thead><tr><th>Model</th><th>Agent</th><th>Key</th><th>Started</th><th>Ended</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>
+        {data.sessions.map((s) => <tr key={s.session_id}><td><strong>{s.model}</strong></td><td>{agentLabel(s.agent_harness, s.agent_role)}</td><td>{s.token_name || '—'}</td><td>{date(s.started_at)}</td><td>{date(s.ended_at)}</td>
           <td>{s.steps}</td><td>{compact(s.prompt_tokens + s.completion_tokens)}</td><td>{s.cost_amount ? `${s.cost_amount.toFixed(2)} ${currency}` : '—'}</td></tr>)}
       </tbody></table></div>}
   </div>
@@ -115,9 +118,9 @@ function Requests({ url, currency }) {
   return <div className="subsection">
     <h3>Requests</h3>
     {!rows ? <Loading text="Loading requests…" /> : rows.length === 0 ? <p className="muted">No requests in this period.</p> : <>
-      <div className="table-wrap"><table><thead><tr><th>Finished</th><th>Model</th><th>Source</th><th>Outcome</th><th>Prompt / cached / output</th><th>TTFT</th><th>Duration</th><th>Cost</th></tr></thead><tbody>
+      <div className="table-wrap"><table><thead><tr><th>Finished</th><th>Model</th><th>Agent</th><th>Source</th><th>Outcome</th><th>Prompt / cached / output</th><th>TTFT</th><th>Duration</th><th>Cost</th></tr></thead><tbody>
         {rows.map((q) => <tr key={q.id}>
-          <td>{date(q.recorded_at)}</td><td><strong>{q.model}</strong><span className="muted">{q.token_name}</span></td><td>{q.source}{q.streaming ? ' · stream' : ''}</td>
+          <td>{date(q.recorded_at)}</td><td><strong>{q.model}</strong><span className="muted">{q.token_name}</span></td><td>{agentLabel(q.agent_harness, q.agent_role)}</td><td>{q.source}{q.streaming ? ' · stream' : ''}</td>
           <td><span className={`outcome outcome-${q.outcome === 'ok' ? 'succeeded' : 'failed'}`}>{q.outcome}{q.http_status ? ` ${q.http_status}` : ''}</span>{q.usage_quality !== 'actual' && <span className="muted">usage {q.usage_quality}</span>}</td>
           <td>{compact(q.prompt_tokens)} / {compact(q.cached_tokens)} / {compact(q.completion_tokens)}</td>
           <td>{seconds(q.ttft_seconds)}</td><td>{seconds(q.duration_seconds)}</td><td>{q.cost_amount ? `${q.cost_amount.toFixed(4)} ${currency}` : '—'}</td>

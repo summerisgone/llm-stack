@@ -158,6 +158,8 @@ type sessionUsage struct {
 	SessionID        string  `json:"session_id"`
 	Model            string  `json:"model"`
 	TokenName        string  `json:"token_name"`
+	AgentHarness     string  `json:"agent_harness"`
+	AgentRole        string  `json:"agent_role"`
 	StartedAt        string  `json:"started_at"`
 	EndedAt          string  `json:"ended_at"`
 	Steps            int64   `json:"steps"`
@@ -182,7 +184,7 @@ func (a *app) usageSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := a.db.Query(r.Context(), `
-		SELECT session_id, max(model), max(token_name), min(created_at), max(created_at), count(*) FILTER (WHERE usage_quality = 'actual'),
+		SELECT session_id, max(model), max(token_name), max(agent_harness), max(agent_role), min(created_at), max(created_at), count(*) FILTER (WHERE usage_quality = 'actual'),
 		       COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost_amount),0)
 		FROM qos_events
 		WHERE owner_subject=$1 AND session_id <> ''
@@ -196,7 +198,7 @@ func (a *app) usageSessions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var started, ended time.Time
 		var d sessionUsage
-		if err := rows.Scan(&d.SessionID, &d.Model, &d.TokenName, &started, &ended, &d.Steps, &d.PromptTokens, &d.CompletionTokens, &d.CostAmount); err != nil {
+		if err := rows.Scan(&d.SessionID, &d.Model, &d.TokenName, &d.AgentHarness, &d.AgentRole, &started, &ended, &d.Steps, &d.PromptTokens, &d.CompletionTokens, &d.CostAmount); err != nil {
 			http.Error(w, "database error", 500)
 			return
 		}

@@ -22,11 +22,12 @@ type statsFilter struct {
 	from, to time.Time
 	model    string
 	source   string
+	harness  string
 }
 
 func parseStatsFilter(r *http.Request, def time.Duration) (statsFilter, *apiErr) {
 	q := r.URL.Query()
-	f := statsFilter{to: time.Now().UTC(), model: q.Get("model"), source: q.Get("source")}
+	f := statsFilter{to: time.Now().UTC(), model: q.Get("model"), source: q.Get("source"), harness: q.Get("harness")}
 	f.from = f.to.Add(-def)
 	for name, dst := range map[string]*time.Time{"from": &f.from, "to": &f.to} {
 		if v := q.Get(name); v != "" {
@@ -60,6 +61,9 @@ func (f statsFilter) where(issuer, subject string) (string, []any) {
 	}
 	if f.source != "" {
 		add("source = ?", f.source)
+	}
+	if f.harness != "" {
+		add("agent_harness = ?", f.harness)
 	}
 	return strings.Join(conds, " AND "), args
 }
@@ -335,6 +339,11 @@ func (a *app) adminUserDetail(w http.ResponseWriter, r *http.Request) {
 		fail(err)
 		return
 	}
+	harnesses, err := a.distinctValues(ctx, "agent_harness", unfiltered+" AND agent_harness <> ''", unfilteredArgs)
+	if err != nil {
+		fail(err)
+		return
+	}
 	var historyFrom, timedFrom *time.Time
 	if err := a.db.QueryRow(ctx, `SELECT MIN(created_at), MIN(received_at) FROM qos_events WHERE owner_issuer = $1 AND owner_subject = $2`,
 		a.cfg.issuer, subject).Scan(&historyFrom, &timedFrom); err != nil {
@@ -342,7 +351,7 @@ func (a *app) adminUserDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp["totals"], resp["latency"], resp["usage_time"], resp["timeline"] = totals, latency, usage, timeline
-	resp["models"], resp["sources"], resp["history_from"], resp["timing_from"] = models, sources, historyFrom, timedFrom
+	resp["models"], resp["sources"], resp["harnesses"], resp["history_from"], resp["timing_from"] = models, sources, harnesses, historyFrom, timedFrom
 	writeJSON(w, 200, resp)
 }
 
@@ -353,6 +362,8 @@ type requestRow struct {
 	Source           string     `json:"source"`
 	TokenName        string     `json:"token_name"`
 	SessionID        string     `json:"session_id"`
+	AgentHarness     string     `json:"agent_harness"`
+	AgentRole        string     `json:"agent_role"`
 	Outcome          string     `json:"outcome"`
 	HTTPStatus       *int       `json:"http_status"`
 	Streaming        *bool      `json:"streaming"`
@@ -393,7 +404,7 @@ func (a *app) adminUserRequests(w http.ResponseWriter, r *http.Request) {
 	limit := clampIntQuery(r, "limit", 50, 1, 200)
 	args = append(args, limit+1)
 	rows, err := a.db.Query(r.Context(), `
-		SELECT id, created_at, model, source, token_name, session_id, outcome, http_status, streaming, usage_quality,
+		SELECT id, created_at, model, source, token_name, session_id, agent_harness, agent_role, outcome, http_status, streaming, usage_quality,
 		       prompt_tokens, cached_tokens, completion_tokens, cost_amount,
 		       EXTRACT(EPOCH FROM first_output_at - received_at)::float8, EXTRACT(EPOCH FROM finished_at - received_at)::float8, received_at
 		FROM qos_events WHERE `+where+` ORDER BY id DESC LIMIT $`+strconv.Itoa(len(args)), args...)
@@ -405,7 +416,7 @@ func (a *app) adminUserRequests(w http.ResponseWriter, r *http.Request) {
 	out := []requestRow{}
 	for rows.Next() {
 		var q requestRow
-		if err := rows.Scan(&q.ID, &q.FinishedAt, &q.Model, &q.Source, &q.TokenName, &q.SessionID, &q.Outcome, &q.HTTPStatus, &q.Streaming, &q.UsageQuality,
+		if err := rows.Scan(&q.ID, &q.FinishedAt, &q.Model, &q.Source, &q.TokenName, &q.SessionID, &q.AgentHarness, &q.AgentRole, &q.Outcome, &q.HTTPStatus, &q.Streaming, &q.UsageQuality,
 			&q.PromptTokens, &q.CachedTokens, &q.CompletionTokens, &q.CostAmount, &q.TTFTSeconds, &q.DurationSeconds, &q.ReceivedAt); err != nil {
 			writeAdminError(w, http.StatusInternalServerError, "internal", "database error")
 			return
@@ -441,7 +452,7 @@ func (a *app) adminUserSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	n := len(args)
 	rows, err := a.db.Query(r.Context(), `
-		SELECT session_id, max(model), max(token_name), min(COALESCE(received_at, created_at)), max(COALESCE(finished_at, created_at)), count(*),
+		SELECT session_id, max(model), max(token_name), max(agent_harness), max(agent_role), min(COALESCE(received_at, created_at)), max(COALESCE(finished_at, created_at)), count(*),
 		       COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost_amount),0)
 		FROM qos_events WHERE `+where+`
 		GROUP BY session_id ORDER BY max(created_at) DESC LIMIT $`+strconv.Itoa(n+1)+` OFFSET $`+strconv.Itoa(n+2), append(args, limit, offset)...)
@@ -454,7 +465,7 @@ func (a *app) adminUserSessions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var started, ended time.Time
 		var d sessionUsage
-		if err := rows.Scan(&d.SessionID, &d.Model, &d.TokenName, &started, &ended, &d.Steps, &d.PromptTokens, &d.CompletionTokens, &d.CostAmount); err != nil {
+		if err := rows.Scan(&d.SessionID, &d.Model, &d.TokenName, &d.AgentHarness, &d.AgentRole, &started, &ended, &d.Steps, &d.PromptTokens, &d.CompletionTokens, &d.CostAmount); err != nil {
 			writeAdminError(w, http.StatusInternalServerError, "internal", "database error")
 			return
 		}

@@ -97,6 +97,7 @@ func TestCopyRequestHeadersStripsLLMDFairnessControls(t *testing.T) {
 		"X-User-Name":                   {"spoofed-user"},
 		"X-Session-Key":                 {"spoofed-session"},
 		"Agent-Session-Id":              {"spoofed-agent-session"},
+		"X-Agent-Harness":               {"spoofed/main"},
 		"X-Request-Id":                  {"request-1"},
 	}
 	dst := make(http.Header)
@@ -117,6 +118,9 @@ func TestCopyRequestHeadersStripsLLMDFairnessControls(t *testing.T) {
 	}
 	if dst.Get("Agent-Session-Id") != "" {
 		t.Fatal("client supplied agent session id was forwarded")
+	}
+	if dst.Get("X-Agent-Harness") != "" {
+		t.Fatal("client supplied agent harness was forwarded")
 	}
 	if got := dst.Get("X-Request-Id"); got != "request-1" {
 		t.Fatalf("ordinary request header = %q, want request-1", got)

@@ -53,6 +53,7 @@ ai-gateway-private
 | Метаданные `user_subject` | `X-User-Id` (Keycloak `sub`) |
 | Метаданные `pat_token_id` | `X-Pat-Token-Id` (только PAT-трафик) |
 | Session | `X-Session-Key` или `agent-session-id` -> `session.id` |
+| Metadata `agent_harness` | `X-Agent-Harness` (`hermes/main`, `opencode/title`, ...; только PAT-трафик) |
 
 Отображение заголовков в атрибуты - одна строка в
 `config/ai-gateway/values.yaml` (`controller.spanRequestHeaderAttributes`),

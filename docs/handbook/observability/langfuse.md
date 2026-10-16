@@ -52,6 +52,7 @@ ai-gateway-private
 | Metadata `user_subject` | `X-User-Id` (Keycloak `sub`) |
 | Metadata `pat_token_id` | `X-Pat-Token-Id` (PAT traffic only) |
 | Session | `X-Session-Key` or `agent-session-id` -> `session.id` |
+| Metadata `agent_harness` | `X-Agent-Harness` (`hermes/main`, `opencode/title`, ...; PAT traffic only) |
 
 The header-to-attribute mapping is one line in `config/ai-gateway/values.yaml`
 (`controller.spanRequestHeaderAttributes`), applied by the `aieg` release

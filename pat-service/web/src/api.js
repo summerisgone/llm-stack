@@ -24,3 +24,7 @@ export function send(url, { method = 'POST', json, admin = false } = {}) {
 export function date(value) {
   return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Never'
 }
+
+// Detected agent harness of a session or request (pat-service internal/harness).
+export const agentLabel = (harness, role) =>
+  !harness ? '—' : role && role !== 'main' && role !== 'unknown' ? `${harness} · ${role}` : harness

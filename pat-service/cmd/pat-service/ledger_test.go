@@ -105,6 +105,7 @@ func TestRequestOutcome(t *testing.T) {
 
 type ledgerRow struct {
 	source, outcome, quality, model, session, band string
+	harness, role                                  string
 	status                                         *int
 	streaming                                      *bool
 	prompt, completion                             int64
@@ -139,16 +140,18 @@ func lastLedgerRow(t *testing.T, a *app) ledgerRow {
 	t.Helper()
 	var row ledgerRow
 	if err := a.db.QueryRow(context.Background(), `SELECT source, outcome, usage_quality, model, session_id, band, http_status, streaming,
-		prompt_tokens, completion_tokens, received_at, dispatched_at, first_output_at, last_output_at, finished_at
+		prompt_tokens, completion_tokens, received_at, dispatched_at, first_output_at, last_output_at, finished_at, agent_harness, agent_role
 		FROM qos_events ORDER BY id DESC LIMIT 1`).Scan(&row.source, &row.outcome, &row.quality, &row.model, &row.session, &row.band,
-		&row.status, &row.streaming, &row.prompt, &row.completion, &row.received, &row.dispatched, &row.first, &row.last, &row.finished); err != nil {
+		&row.status, &row.streaming, &row.prompt, &row.completion, &row.received, &row.dispatched, &row.first, &row.last, &row.finished, &row.harness, &row.role); err != nil {
 		t.Fatal(err)
 	}
 	return row
 }
 
 func TestProxyWritesLedgerForStreamingChat(t *testing.T) {
+	var forwardedHarness string
 	a, token := proxyTestApp(t, func(w http.ResponseWriter, r *http.Request) {
+		forwardedHarness = r.Header.Get("X-Agent-Harness")
 		w.Header().Set("Content-Type", "text/event-stream")
 		flush := w.(http.Flusher)
 		for _, ev := range []string{`{"choices":[{"delta":{"role":"assistant"}}]}`, `{"choices":[{"delta":{"content":"a"}}]}`, `{"choices":[{"delta":{"content":"b"}}]}`,
@@ -159,14 +162,19 @@ func TestProxyWritesLedgerForStreamingChat(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	})
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	a.cfg.qosFingerprintMaxBody = 1 << 20
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen","stream":true,"messages":[{"role":"system","content":"You are Hermes Agent, built by Nous Research."},{"role":"user","content":"hi"}]}`))
 	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("X-Agent-Harness", "spoofed/main")
 	rec := httptest.NewRecorder()
 	a.proxy(rec, r)
 	if rec.Code != 200 {
 		t.Fatalf("proxy: %d %s", rec.Code, rec.Body)
 	}
 	row := lastLedgerRow(t, a)
+	if forwardedHarness != "hermes/main" || row.harness != "hermes" || row.role != "main" {
+		t.Errorf("harness: forwarded %q, row %q/%q", forwardedHarness, row.harness, row.role)
+	}
 	if row.source != "agent" || row.outcome != "ok" || row.quality != "actual" || row.model != "qwen" || row.prompt != 10 || row.completion != 2 || *row.status != 200 || !*row.streaming {
 		t.Fatalf("row = %+v", row)
 	}
