@@ -11,19 +11,22 @@ export async function logout() {
 }
 
 // Topbar is shared by the personal dashboard and the admin console. The
-// Administration link only follows /api/session; the server authorizes.
+// Administration tab only follows /api/session; the server authorizes.
 export function Topbar({ capabilities, admin }) {
-  return <nav className="topbar">
-    <a className="brand" href={`${base}/`} aria-label="AI Stack PAT dashboard">
-      <span className="brand-mark"><span></span><span></span><span></span></span>
-      <span>AI Stack <em>{admin ? 'Administration' : 'Console'}</em></span>
-    </a>
-    <div className="topbar-actions">
-      {admin
-        ? <a className="openwebui-link" href={`${base}/`}>My tokens</a>
-        : capabilities.includes('admin') && <a className="openwebui-link" href={`${base}/admin`}>Administration</a>}
-      <a className="openwebui-link" href={webui}>Open WebUI <Icon>↗</Icon></a>
-      <button className="signout" onClick={logout}><Icon>↗</Icon> Sign out</button>
-    </div>
-  </nav>
+  return <>
+    <nav className="topbar">
+      <a className="brand" href={`${base}/`} aria-label="AI Stack PAT dashboard">
+        <span className="brand-mark"><span></span><span></span><span></span></span>
+        <span>AI Stack <em>{admin ? 'Administration' : 'Console'}</em></span>
+      </a>
+      <div className="topbar-actions">
+        <a className="openwebui-link" href={webui}>Open WebUI <Icon>↗</Icon></a>
+        <button className="signout" onClick={logout}>Sign out</button>
+      </div>
+    </nav>
+    <nav className="tabs">
+      <a href={`${base}/`} className={admin ? '' : 'active'}>My tokens</a>
+      {capabilities.includes('admin') && <a href={`${base}/admin`} className={admin ? 'active' : ''}>Administration</a>}
+    </nav>
+  </>
 }

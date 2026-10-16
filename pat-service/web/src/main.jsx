@@ -323,7 +323,7 @@ function App({ capabilities }) {
     <section className="hero">
       <div>
         <p className="eyebrow">DEVELOPER ACCESS</p>
-        <h1>Personal access<br /><span>tokens.</span></h1>
+        <h1>Personal access tokens</h1>
         <p className="lede">Create scoped credentials for the OpenAI-compatible API. Your secret is displayed only once; we retain only its cryptographic hash.</p>
       </div>
       <aside className="endpoint-card">
