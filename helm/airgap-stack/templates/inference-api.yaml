@@ -1,0 +1,279 @@
+# Hosted and remote inference APIs, routed by model name
+# (docs/adr/0025-api-inference-providers.md). Driven entirely by
+# .Values.inference.api: one Backend + AIServiceBackend (+ key Secret and
+# BackendSecurityPolicy) per enabled provider, one exact-match rule per
+# model on AIGatewayRoute inference-api-<n>. These routes never carry a
+# catch-all and never point at the EPP pool, so llmd.yaml's routing and
+# llm-d's queue are untouched; precedence over `llmd`'s match-less catch-all
+# is the same Gateway API rule embeddings.yaml relies on (more header
+# matches win).
+{{- $api := .Values.inference.api }}
+{{- $ns := .Values.namespace }}
+{{- $env := .Values.runtimeEnvironment }}
+{{- $inf := .Values.inference }}
+
+{{- /* Model names served in-cluster: an API model must not shadow one. */}}
+{{- $local := list $inf.modelName $inf.defaultModel.modelName }}
+{{- range $k := list "llamacpp" "externalApi" "ninfer" "strata" "embeddings" }}
+{{- $b := get $inf $k }}
+{{- if $b.enabled }}{{ $local = append $local $b.modelName }}{{ end }}
+{{- end }}
+
+{{- $enabled := dict }}
+{{- range $name, $p := $api.providers }}
+{{- if $p.enabled }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,40}[a-z0-9])?$" $name) }}
+{{- fail (printf "inference.api.providers.%s: name must be a lowercase DNS label" $name) }}
+{{- end }}
+{{- if has $p.schema (list "Anthropic" "AWSAnthropic") }}
+{{- fail (printf "inference.api.providers.%s: schema %s serves only /anthropic/v1/messages, which pat-service does not expose; use schema OpenAI against the provider's OpenAI-compatible endpoint" $name $p.schema) }}
+{{- end }}
+{{- $_ := set $enabled $name $p }}
+{{- end }}
+{{- end }}
+
+{{- /* Models with at least one target on an enabled provider. */}}
+{{- $models := list }}
+{{- $seen := dict }}
+{{- range $m := $api.models }}
+{{- if has $m.name $local }}
+{{- fail (printf "inference.api.models: %q is already served in-cluster" $m.name) }}
+{{- end }}
+{{- if hasKey $seen $m.name }}
+{{- fail (printf "inference.api.models: %q is listed twice" $m.name) }}
+{{- end }}
+{{- $_ := set $seen $m.name true }}
+{{- $targets := list }}
+{{- range $t := $m.targets }}
+{{- if not (hasKey $api.providers $t.provider) }}
+{{- fail (printf "inference.api.models %q: unknown provider %q" $m.name $t.provider) }}
+{{- end }}
+{{- if hasKey $enabled $t.provider }}{{ $targets = append $targets $t }}{{ end }}
+{{- end }}
+{{- if $targets }}{{ $models = append $models (dict "name" $m.name "targets" $targets) }}{{ end }}
+{{- end }}
+
+{{- range $name, $p := $enabled }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: api-{{ $name }}
+  namespace: {{ $ns }}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: {{ $p.host | required (printf "inference.api.providers.%s.host is required" $name) }}
+        port: {{ $p.port }}
+  {{- if $p.tls }}
+  tls:
+    sni: {{ $p.host }}
+    wellKnownCACertificates: System
+  {{- end }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: api-{{ $name }}
+  namespace: {{ $ns }}
+spec:
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: api-{{ $name }}
+  schema:
+    name: {{ $p.schema }}
+    {{- with $p.prefix }}
+    prefix: {{ . }}
+    {{- end }}
+    {{- with $p.version }}
+    version: {{ . | quote }}
+    {{- end }}
+  # Identity never leaves the cluster. Authorization (pat-service's own
+  # Keycloak token) is removed too unless APIKey overwrites it below.
+  headerMutation:
+    remove:
+      {{- range $api.privateHeaders }}
+      - {{ . }}
+      {{- end }}
+      {{- if ne $p.auth "APIKey" }}
+      - Authorization
+      {{- end }}
+{{- if and $p.auth (ne $p.auth "none") }}
+{{- $field := get (dict "APIKey" "apiKey" "AnthropicAPIKey" "anthropicAPIKey" "AzureAPIKey" "azureAPIKey") $p.auth | required (printf "inference.api.providers.%s.auth: unsupported %q" $name $p.auth) }}
+{{- $key := get $env ($p.apiKeyEnv | required (printf "inference.api.providers.%s.apiKeyEnv is required with auth %s" $name $p.auth)) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-{{ $name }}-key
+  namespace: {{ $ns }}
+type: Opaque
+stringData:
+  apiKey: {{ $key | required (printf "inference.api.providers.%s: %s is empty in .env" $name $p.apiKeyEnv) | quote }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: api-{{ $name }}
+  namespace: {{ $ns }}
+spec:
+  type: {{ $p.auth }}
+  {{ $field }}:
+    secretRef:
+      name: api-{{ $name }}-key
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: api-{{ $name }}
+{{- end }}
+{{- end }}
+
+{{- if $models }}
+{{- /* 15 rules per AIGatewayRoute, one reserved for the controller. */}}
+{{- $chunks := chunk 14 $models }}
+{{- range $i, $chunk := $chunks }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: inference-api-{{ $i }}
+  namespace: {{ $ns }}
+spec:
+  hostnames: []
+  parentRefs:
+    - name: ai-gateway-private
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      sectionName: private
+  {{- if $api.tokensPerUserPerHour }}
+  llmRequestCosts:
+    - metadataKey: llm_total_token
+      type: TotalToken
+  {{- end }}
+  rules:
+    {{- range $j, $m := $chunk }}
+    - name: model-{{ $j }}
+      matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: {{ $m.name | quote }}
+      modelsOwnedBy: {{ (index $m.targets 0).provider }}
+      timeouts:
+        request: {{ $api.timeouts.request }}
+      streamIdleTimeout: {{ $api.timeouts.streamIdle }}
+      backendRefs:
+        {{- range $t := $m.targets }}
+        - name: api-{{ $t.provider }}
+          modelNameOverride: {{ default $m.name $t.model | quote }}
+          {{- if hasKey $t "priority" }}
+          priority: {{ $t.priority }}
+          {{- end }}
+          {{- if hasKey $t "weight" }}
+          weight: {{ $t.weight }}
+          {{- end }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: inference-api-jwt
+  namespace: {{ $ns }}
+spec:
+  targetRefs:
+    {{- range $i, $_ := $chunks }}
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: inference-api-{{ $i }}
+    {{- end }}
+  jwt:
+    providers:
+      - name: keycloak
+        issuer: {{ $.Values.oidc.externalIssuer }}
+        remoteJWKS:
+          uri: http://keycloak.{{ $ns }}.svc.cluster.local:8080/sso/realms/ai-stack/protocol/openid-connect/certs
+  # Same rule as llmd-jwt: only pat-service's client-credentials token, so
+  # every API call is accounted and quota-checked there first (ADR 0022 s5).
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: pat-service-only
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: azp
+                values: [pat-gateway]
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: inference-api
+  namespace: {{ $ns }}
+spec:
+  targetRefs:
+    {{- range $i, $_ := $chunks }}
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: inference-api-{{ $i }}
+    {{- end }}
+  # Same ext-proc body buffer as llmd-per-user-limit (llmd.yaml); retries
+  # also replay from it.
+  requestBuffer:
+    limit: 4Mi
+  rateLimit:
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: X-User-Id
+                  type: Distinct
+          limit:
+            requests: {{ $api.perUserRateLimitPerMinute }}
+            unit: Minute
+          xRateLimitHeaders: DraftVersion03
+        {{- if $api.tokensPerUserPerHour }}
+        # Checked at request time (cost 0), charged from the response's
+        # total tokens (llmRequestCosts on the routes above).
+        - clientSelectors:
+            - headers:
+                - name: X-User-Id
+                  type: Distinct
+          limit:
+            requests: {{ $api.tokensPerUserPerHour }}
+            unit: Hour
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_total_token
+        {{- end }}
+  retry:
+    numRetries: {{ $api.retry.numRetries }}
+    numAttemptsPerPriority: {{ $api.retry.numAttemptsPerPriority }}
+    retryOn:
+      triggers: [connect-failure, reset, retriable-status-codes]
+      httpStatusCodes: {{ toJson $api.retry.httpStatusCodes }}
+    perRetry:
+      backOff:
+        baseInterval: {{ $api.retry.backOff.baseInterval }}
+        maxInterval: {{ $api.retry.backOff.maxInterval }}
+  healthCheck:
+    passive:
+      consecutive5XxErrors: {{ $api.passiveHealth.consecutive5XxErrors }}
+      interval: {{ $api.passiveHealth.interval }}
+      baseEjectionTime: {{ $api.passiveHealth.baseEjectionTime }}
+      maxEjectionPercent: 100
+  {{- with $api.circuitBreaker }}
+  circuitBreaker:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

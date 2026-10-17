@@ -143,6 +143,117 @@ inference:
     perUserRateLimitPerMinute: 120
     # Must match helm/embeddings-inference values.yaml inference.maxClientBatchSize.
     maxClientBatchSize: 32
+  # Hosted and remote inference APIs, routed by model name
+  # (templates/inference-api.yaml, docs/adr/0025-api-inference-providers.md).
+  # A provider is one upstream API (Backend + AIServiceBackend + key); a
+  # model is a public model name with one or more provider targets. Models
+  # get their own AIGatewayRoute(s) `inference-api-<n>`, never rules inside
+  # `llmd`, so none of this touches the EPP pool or its catch-all. EPP does
+  # not apply to these: there are no pods to score and no /metrics to read;
+  # the knobs below (retry, priority fallback, passive health, concurrency
+  # cap, token budget) are what stands in for it.
+  api:
+    # Requests to these routes, per user per minute -- the same storm guard
+    # as perUserRateLimitPerMinute on `llmd`, separate counter.
+    perUserRateLimitPerMinute: 60
+    # Per-user token budget across all API models, total tokens per hour,
+    # counted by the gateway from each response's usage. 0 disables it.
+    tokensPerUserPerHour: 0
+    timeouts:
+      request: 10m
+      streamIdle: 5m
+    # Retried before response headers only (a started stream is never
+    # retried). numAttemptsPerPriority: 1 sends each retry to the next
+    # priority, so a model with a priority-1 target fails over on the first
+    # retry instead of hammering the provider that just refused.
+    retry:
+      numRetries: 2
+      numAttemptsPerPriority: 1
+      httpStatusCodes: [429, 500, 502, 503, 504]
+      backOff:
+        baseInterval: 1s
+        maxInterval: 10s
+    # Outlier detection: a provider failing consecutive5XxErrors times in a
+    # row is ejected for baseEjectionTime, shifting its traffic to the next
+    # priority without waiting for a per-request retry.
+    passiveHealth:
+      consecutive5XxErrors: 3
+      interval: 10s
+      baseEjectionTime: 30s
+    # Optional per-provider concurrency cap with an Envoy-side queue
+    # (circuitBreaker). Empty keeps Envoy's defaults (1024/1024).
+    circuitBreaker: {}
+    #   maxParallelRequests: 32
+    #   maxPendingRequests: 64
+    # Identity headers pat-service sets for the in-cluster engines, EPP and
+    # Langfuse, plus the ones Open WebUI forwards (ENABLE_FORWARD_USER_INFO_HEADERS,
+    # v0.12.0 defaults for the names k8s/base does not override) that
+    # pat-service passes through. All are removed before a request leaves
+    # for a provider. Exact names only: headerMutation has no prefix match.
+    privateHeaders:
+      - X-User-Id
+      - X-User-Name
+      - X-Pat-Token-Id
+      - X-Session-Key
+      - Agent-Session-Id
+      - X-Llm-D-Inference-Fairness-Id
+      - X-Llm-D-Inference-Objective
+      - X-OpenWebUI-User-Email
+      - X-OpenWebUI-User-Role
+      - X-OpenWebUI-Auth-Type
+      - X-OpenWebUI-User-Jwt
+      - X-OpenWebUI-Chat-Id
+      - X-OpenWebUI-Message-Id
+    # name -> provider. name is a DNS label; objects are api-<name>.
+    #   schema:  OpenAI | AzureOpenAI | AWSBedrock | GCPVertexAI |
+    #            GCPAnthropic | Cohere (AIServiceBackend schema.name).
+    #            Anthropic/AWSAnthropic serve only /anthropic/v1/messages,
+    #            which pat-service does not expose; use Anthropic's
+    #            OpenAI-compatible endpoint (schema OpenAI) instead.
+    #   prefix / version: schema.prefix / schema.version.
+    #   host / port / tls: upstream endpoint; tls verifies against the
+    #            system CAs with SNI = host.
+    #   auth:    none | APIKey (Authorization: Bearer) | AnthropicAPIKey
+    #            (x-api-key) | AzureAPIKey (api-key).
+    #   apiKeyEnv: the .env key holding the secret (runtimeEnvironment).
+    # Examples (OpenAI-compatible prefixes from the Envoy AI Gateway
+    # provider table):
+    #   anthropic: {schema: OpenAI, prefix: /v1, host: api.anthropic.com, port: 443, tls: true, auth: APIKey, apiKeyEnv: ANTHROPIC_API_KEY}
+    #   gemini:    {schema: OpenAI, prefix: /v1beta/openai, host: generativelanguage.googleapis.com, port: 443, tls: true, auth: APIKey, apiKeyEnv: GEMINI_API_KEY}
+    #   azure:     {schema: AzureOpenAI, version: 2025-01-01-preview, host: <resource>.openai.azure.com, port: 443, tls: true, auth: AzureAPIKey, apiKeyEnv: AZURE_OPENAI_API_KEY}
+    #   site-b:    {schema: OpenAI, prefix: /v1, host: llm.site-b.internal, port: 443, tls: true, auth: APIKey, apiKeyEnv: SITE_B_PAT}
+    providers:
+      openai:
+        enabled: false
+        schema: OpenAI
+        prefix: /v1
+        host: api.openai.com
+        port: 443
+        tls: true
+        auth: APIKey
+        apiKeyEnv: OPENAI_API_KEY
+    # Public model names. Each target: provider, model (the provider's own
+    # name, default: the public name), optional priority (0 first, higher =
+    # fallback) and weight (split within one priority, e.g. two accounts).
+    # All targets of one name must serve the same model: `model` differs
+    # only where providers name it differently. Failover never swaps in a
+    # different model (ADR 0025 decision 2); a client picks another model
+    # by asking for another name.
+    # Targets on a disabled provider are dropped; a model with none left is
+    # not routed. A name already served in-cluster is a render error.
+    # Price every model in pat-service-pricing (k8s/base/applications.yaml),
+    # or it is costed at "_default".
+    #   - name: gpt-5-mini
+    #     targets:
+    #       - provider: openai
+    #   - name: claude-sonnet
+    #     targets:
+    #       - provider: anthropic
+    #         model: claude-sonnet-4-5
+    #       - provider: site-b
+    #         model: claude-sonnet
+    #         priority: 1
+    models: []
 
 # --- Routing / ingress -------------------------------------------------------
 # Browser-facing traffic uses one canonical origin and path routing. Cluster

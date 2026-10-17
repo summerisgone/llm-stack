@@ -144,6 +144,40 @@ curl -s $STACK_BASE_URL/v1/chat/completions -H "Authorization: Bearer sk-…" \
   -d '{"model":"qwen-3.8-27b","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'
 ```
 
+## Hosted and remote APIs
+
+OpenAI, Anthropic's OpenAI-compatible endpoint, Gemini, Azure OpenAI or
+another site's `/v1` are not `inference.<name>` blocks: they are entries in
+`inference.api` ([ADR 0025](../adr/0025-api-inference-providers.md)). In
+`helm/airgap-stack/values.yaml`, enable a provider under
+`inference.api.providers`, list its models under `inference.api.models`,
+and put the key named by `apiKeyEnv` in `.env`:
+
+```yaml
+inference:
+  api:
+    providers:
+      openai:
+        enabled: true
+    models:
+      - name: gpt-5-mini
+        targets:
+          - provider: openai
+```
+
+In the same change, add the model id to Open WebUI's `OPENAI_API_CONFIGS`
+`model_ids` (see above) and its price to `pat-service-pricing`
+(`k8s/base/applications.yaml`). Then `make helm-up` and check:
+
+```sh
+kubectl -n airgap-ai-stack get aigatewayroute   # inference-api-0 present
+curl -s $STACK_BASE_URL/v1/models -H "Authorization: Bearer sk-…" | grep gpt-5-mini
+```
+
+These models never go through EPP. A second target with `priority: 1` is
+the failover; retries, outlier ejection, the optional concurrency cap and
+the per-user token budget are under `inference.api` in `values.yaml`.
+
 ## Reachability from the cluster
 
 In-cluster engines are addressed over Service DNS: vLLM at
